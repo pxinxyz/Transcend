@@ -29,6 +29,24 @@ Transcend makes it trivial.
 
 ---
 
+## "But tools already have --json flags"
+
+Some do. Most don't. And even when they do, JSON format is not the same as a typed contract.
+
+`rg --json` outputs NDJSON with envelope messages, redundant path repetitions per match, nested stat objects, and begin/end wrappers that carry zero information for the agent. Multiply by 24,000 matches and you have megabytes of verbose, tool-specific JSON that the agent still has to parse, understand, and relay between tool calls through its context window.
+
+Three gaps that `--json` flags don't solve:
+
+**No normalisation.** Every tool has a different JSON schema. `rg --json` looks nothing like `fd --json` looks nothing like `gh api`. The agent still needs tool-specific parsing logic for every tool it touches. Transcend normalises all of them to a universal output contract — same shape, every tool.
+
+**No chaining without context window relay.** Even with JSON output, the agent reads results into its context, extracts file paths, then generates a new tool call with those paths. Every intermediate value — every file path, every match — passes through the LLM as tokens. Transcend chains skills in-process. The agent says "search then replace" once; the file list never enters the context window.
+
+**No cross-tool contract.** `rg` has `--json`. `grep` doesn't. `sd` doesn't. `bat` doesn't. An agent using raw tool JSON handles N different schemas and completely different fallback behaviour when a tool isn't installed. Transcend gives every tool the same contract, with declared fallbacks that normalise to the same schema regardless of which binary actually executed.
+
+The `--json` flag is raw material. Transcend is the architecture built on top of it.
+
+---
+
 ## What Transcend Does
 
 Transcend wraps CLI tools in **skill specifications** — typed contracts that define:
@@ -102,7 +120,7 @@ At scale, the standard approach doesn't degrade — it becomes **physically impo
 
 ## Skill Anatomy
 
-A Transcend skill is a `.skill.json` file. Here's the structure:
+A Transcend skill is a `.skill.json` file. The snippet below is a simplified overview — the actual specifications are significantly more detailed, with full validation rules, granular normalisation step definitions, explicit error typing, and Vanquish integration metadata.
 
 ```jsonc
 {
@@ -207,8 +225,6 @@ Transcend targets high-performance CLI utilities — primarily Rust and Go — a
 | **Environment** | mise, direnv, starship, tealdeer |
 | **Development** | hyperfine, ruff, uv, biome, typos, cargo-nextest |
 
-The `transcend-init` installer handles the full toolchain setup with an interactive TUI.
-
 ---
 
 ## How It's Different
@@ -264,47 +280,6 @@ Others compress a bad format. Transcend replaces the format.
 
 ---
 
-## Quick Start
-
-### Install the toolchain
-
-```bash
-# macOS / Linux / WSL
-curl -sSf https://raw.githubusercontent.com/pxinxyz/Transcend/main/Scripts/transcend-init.sh | bash
-
-# Windows (PowerShell)
-irm https://raw.githubusercontent.com/pxinxyz/Transcend/main/Scripts/transcend-init.ps1 | iex
-```
-
-### Use a skill
-
-Skills are self-contained `.skill.json` files. Point your agent framework at them.
-
-```bash
-# Browse available skills
-ls Skills/*.skill.json
-```
-
----
-
-
-## Status
-
-Transcend is in active development. The skill specification format is stable. The runtime (single warm process serving skills with in-process chaining) is the next milestone.
-
-**Current:**
-- Skill spec v1 — stable
-- `universal_search` and `find_replace` skills — implemented
-- Cross-platform toolchain installer — implemented
-- Benchmarks validated across 4 tokenizers and 2 frontier models
-
-**Next:**
-- Runtime implementation (Node.js, warm V8 process)
-- Additional skill implementations across all 9 tool categories
-- Agent framework integrations
-
----
-
 ## Vanquish Integration
 
 Transcend is designed to pair with [Vanquish](https://github.com/pxinxyz/Vanquish), a Rust-native Corrective RAG runtime. Together:
@@ -312,6 +287,12 @@ Transcend is designed to pair with [Vanquish](https://github.com/pxinxyz/Vanquis
 - **Vanquish** provides validated, semantic context
 - **Transcend** provides structured tool execution
 - **The LLM** acts purely as the reasoning engine
+
+---
+
+## Status
+
+Transcend is in active development. The skill specification format is stable.
 
 ---
 
