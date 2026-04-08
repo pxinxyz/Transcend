@@ -240,25 +240,25 @@ Others compress a bad format. Transcend replaces the format.
 └──────────────────┬──────────────────────────┘
                    │ skill invocation
 ┌──────────────────▼──────────────────────────┐
-│              Transcend Runtime               │
+│              Transcend Runtime              │
 │                                             │
 │  ┌─────────────┐  ┌─────────────────────┐   │
 │  │ Skill Spec  │  │ Normalisation       │   │
 │  │ (.skill.json│  │ Pipeline            │   │
 │  │  contract)  │→ │ raw output → typed  │   │
 │  └─────────────┘  │ JSON contract       │   │
-│                    └──────────┬──────────┘   │
+│                   └──────────┬──────────┘   │
 │  ┌─────────────┐             │              │
 │  │ Chaining    │◄────────────┘              │
 │  │ Engine      │ typed data flows between   │
-│  │             │ skills without touching     │
-│  │             │ the context window          │
+│  │             │ skills without touching    │
+│  │             │ the context window         │
 │  └─────────────┘                            │
 └──────────────────┬──────────────────────────┘
                    │ subprocess
 ┌──────────────────▼──────────────────────────┐
-│           CLI Tools (rg, fd, sd, bat...)     │
-│           Execute. Return raw output.        │
+│           CLI Tools (rg, fd, sd, bat...)    │
+│           Execute. Return raw output.       │
 └─────────────────────────────────────────────┘
 ```
 
