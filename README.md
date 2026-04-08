@@ -287,27 +287,6 @@ ls Skills/*.skill.json
 
 ---
 
-## Project Structure
-
-```
-Transcend/
-├── Skills/                     # Skill specifications
-│   ├── universal_search.skill.json
-│   ├── find_replace.skill.json
-│   └── Archive/                # Previous versions
-├── Scripts/                    # Toolchain installers
-│   ├── transcend-init.sh       # macOS/Linux/WSL
-│   └── transcend-init.ps1      # Windows
-├── Internal/                   # Design docs
-│   ├── Vision.md
-│   ├── Tools.md
-│   └── Example Skill.md
-└── Transcend Case Studies/     # Benchmark data
-    ├── Claude/                 # Claude Opus 4.6 benchmarks
-    └── Gemini/                 # Gemini 3.1 Pro benchmarks
-```
-
----
 
 ## Status
 
