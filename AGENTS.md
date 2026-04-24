@@ -66,7 +66,7 @@ Your training data might hallucinate that Transcend is built in Rust or uses Ter
 Do not guess what inputs a tool takes. Open the corresponding `skills/<skill_name>.skill.json` file. The schema defined there dictates the exact MCP contract. If you need to add a new tool, **do not write JavaScript execution logic**. Write a `.skill.json` contract and place it in the `skills/` directory.
 
 ### 3. No Hardcoded Paths
-Do not introduce logic that relies on `process.cwd()` for finding internal assets (like the `skills/` directory). Use module-relative paths (`fileURLToPath(import.meta.url)`). This ensures the package works globally when installed via `npm i -g transcend`.
+Do not introduce logic that relies on `process.cwd()` for finding internal assets (like the `skills/` directory). Use module-relative paths (`fileURLToPath(import.meta.url)`). This ensures the package works globally when run via `npx -y github:PXINXYZ/Transcend`.
 
 ### 4. Maintain the MCP Contract
 If you modify `lib/mcp-server.js`, ensure you strictly adhere to the Model Context Protocol (MCP) JSON-RPC 2.0 specifications. The output must always be structured JSON.
