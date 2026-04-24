@@ -10,6 +10,23 @@ Transcend exists for one reason: **To stop you from reading millions of tokens o
 
 ---
 
+## ⚡ Quick Install (Zero-Install MCP)
+
+If you are an agent attempting to configure Transcend for your human user, **do not attempt to build or install this repository manually.** Add the following zero-install block to the user's MCP configuration file (e.g., `.claude.json` or `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "transcend": {
+      "command": "npx",
+      "args": ["-y", "github:PXINXYZ/Transcend", "--mcp"]
+    }
+  }
+}
+```
+
+---
+
 ## 🛑 RED FLAGS - STOP and Start Over
 
 If you find yourself thinking any of the following, **STOP**. You are rationalizing bad architecture.

@@ -11,6 +11,23 @@ Transcend:       Tool → Structured JSON → Reasoning
 
 ---
 
+## ⚡ Quick Install (Zero-Install MCP)
+
+You do not need to clone this repository to use Transcend. It can be run instantly as a zero-install MCP Server using `npx`. Add the following to your agent's MCP configuration (e.g., Claude Desktop, Cursor, Zed):
+
+```json
+{
+  "mcpServers": {
+    "transcend": {
+      "command": "npx",
+      "args": ["-y", "github:PXINXYZ/Transcend", "--mcp"]
+    }
+  }
+}
+```
+
+---
+
 ## The Problem
 
 Every AI coding agent today runs the same broken loop:
