@@ -1,0 +1,549 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "universal_search",
+  "version": "1.2.0",
+  "stability": "stable",
+  "category": "search_navigation",
+  "description": "Performs ultra-fast recursive search across files and directories using ripgrep, returning strictly typed match structures ready for direct agent reasoning. No intermediate parsing required.",
+  "requires": {
+    "primary": {
+      "command": "rg",
+      "min_version": "13.0.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the universal_search.cjs wrapper script."
+      },
+      {
+        "type": "template_engine",
+        "name": "nunjucks",
+        "note": "Nunjucks template engine is required for argument rendering."
+      }
+    ],
+    "fallback": {
+      "command": "grep",
+      "note": "POSIX grep. Reduced output fidelity \u2014 no column offsets, no file statistics, no native JSON output."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "pattern": {
+      "type": "string",
+      "description": "The regex or literal string to search for.",
+      "required": true,
+      "validation": {
+        "min_length": 1,
+        "max_length": 1024
+      }
+    },
+    "path": {
+      "type": "string",
+      "description": "The directory or file path to search within.",
+      "default": ".",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "ignore_case": {
+      "type": "boolean",
+      "default": false,
+      "description": "Perform case-insensitive matching. Defaults to false (case-sensitive) to match code search semantics and align with find_replace."
+    },
+    "literal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Treat pattern as a fixed literal string rather than a regex. Overrides multiline."
+    },
+    "word_regexp": {
+      "type": "boolean",
+      "default": false,
+      "description": "Require matches to be on exact word boundaries (equivalent to \\b in regex). Prevents partial matches inside larger words."
+    },
+    "multiline": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable multiline matching with dotall semantics. Allows . to match newlines and ^ / $ to match line boundaries."
+    },
+    "hidden": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include hidden files and directories (those prefixed with a dot)."
+    },
+    "no_ignore": {
+      "type": "boolean",
+      "default": false,
+      "description": "Search all files, including those usually ignored (like in .gitignore, build/, dist/, etc)."
+    },
+    "follow_symlinks": {
+      "type": "boolean",
+      "default": false,
+      "description": "Follow symbolic links during traversal."
+    },
+    "context_before": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Number of surrounding lines to include before each match."
+    },
+    "context_after": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 5,
+      "description": "Number of surrounding lines to include after each match."
+    },
+    "max_matches_per_file": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Optional upper bound on matches returned per file. Prevents file saturation in minified files or large logs."
+    },
+    "max_matches": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard upper bound on total matches returned across all files. Enforced in the normalisation pipeline, not by rg (which only supports per-file limits). When reached, the result set is truncated and the truncated flag is set to true."
+    },
+    "ignore_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Glob patterns to exclude from traversal (e.g., '*.log', 'node_modules/', 'target/')."
+    },
+    "file_types": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Restrict search to rg-registered file types (e.g., 'rust', 'py', 'json', 'ts'). Run `rg --type-list` for all supported types."
+    },
+    "sort": {
+      "type": "string",
+      "enum": [
+        "none",
+        "path",
+        "modified",
+        "created"
+      ],
+      "default": "none",
+      "description": "Sort results by the given criterion. 'none' is fastest (rg's default parallel order). 'path' gives deterministic, reproducible output suitable for stable diffs and chaining."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_matches",
+        "files_searched",
+        "files_with_matches",
+        "truncated",
+        "matches"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_searched": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_with_matches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if max_matches was reached before traversal completed. Indicates the result set is incomplete."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if the grep fallback was invoked instead of rg."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds, sourced from rg summary stats."
+        },
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "line_number",
+              "match_text",
+              "line_text"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Absolute or relative path to the file containing the match."
+              },
+              "line_number": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "column_start": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-indexed byte offset where the match begins on the line. Byte offset, not character offset \u2014 for multibyte UTF-8 content, convert using the source encoding before string slicing."
+              },
+              "column_end": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Zero-indexed byte offset where the match ends on the line. Byte offset, not character offset \u2014 for multibyte UTF-8 content, convert using the source encoding before string slicing."
+              },
+              "match_text": {
+                "type": "string",
+                "description": "The exact substring that matched the pattern."
+              },
+              "line_text": {
+                "type": "string",
+                "description": "Full content of the matched line, MUST be trimmed of trailing newlines (\\n or \\r\\n) to preserve token density."
+              },
+              "context_before": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Lines immediately preceding the match, ordered oldest-first. MUST be completely omitted from the JSON payload if context_before is 0 to save tokens."
+              },
+              "context_after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Lines immediately following the match, ordered top-to-bottom. MUST be completely omitted from the JSON payload if context_after is 0 to save tokens."
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution (e.g., binary files skipped, ignored paths)."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_regex",
+            "permission_denied",
+            "path_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the failure, safe for agent reasoning."
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Process exit code. rg exits 1 if no matches found (not an error), 2 on actual errors."
+        },
+        "stderr": {
+          "type": "string",
+          "description": "Raw stderr output, if any."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if the grep fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "rg",
+    "args": [
+      "--json",
+      "{% if ignore_case %}--ignore-case{% else %}--case-sensitive{% endif %}",
+      "{% if literal %}--fixed-strings{% endif %}",
+      "{% if word_regexp %}--word-regexp{% endif %}",
+      "{% if multiline and not literal %}--multiline --multiline-dotall{% endif %}",
+      "{% if hidden %}--hidden{% endif %}",
+      "{% if no_ignore %}--no-ignore{% endif %}",
+      "{% if follow_symlinks %}--follow{% endif %}",
+      "{% if context_before > 0 %}--before-context={{ context_before }}{% endif %}",
+      "{% if context_after > 0 %}--after-context={{ context_after }}{% endif %}",
+      "{% if max_matches_per_file %}--max-count={{ max_matches_per_file }}{% endif %}",
+      "{% for p in ignore_patterns %}--glob=!{{ p }}{% endfor %}",
+      "{% for ft in file_types %}--type={{ ft }}{% endfor %}",
+      "{% if sort != 'none' %}--sort={{ sort }}{% endif %}",
+      "--",
+      "{{ pattern }}",
+      "{{ path }}"
+    ],
+    "note": "No --max-count flag for global limits: rg only supports per-file match limits (which we expose as max_matches_per_file), not global. Global truncation to max_matches is enforced in the normalisation pipeline's truncate_matches step. --color=never and --no-heading are omitted as they have no effect in --json mode.",
+    "exit_code_map": {
+      "0": "matches_found",
+      "1": "no_matches",
+      "2": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "ndjson",
+    "pipeline": [
+      {
+        "step": "filter_message_types",
+        "retain": [
+          "match",
+          "context",
+          "summary"
+        ],
+        "description": "Discard 'begin' and 'end' envelope messages. Retain only match data and the terminal summary."
+      },
+      {
+        "step": "extract_matches",
+        "from_type": "match",
+        "mapping": {
+          "file": "data.path.text",
+          "line_number": "data.line_number",
+          "column_start": "data.submatches[0].start",
+          "column_end": "data.submatches[0].end",
+          "match_text": "data.submatches[0].match.text",
+          "line_text": "data.lines.text | trim_trailing_newlines"
+        },
+        "transforms": {
+          "trim_trailing_newlines": "Strip trailing \\n and \\r\\n from line_text. rg includes the line terminator in data.lines.text; the output contract requires it trimmed to preserve token density."
+        },
+        "description": "Extract per-match fields from rg NDJSON match messages using rg's documented JSON schema. Applies trim transform to line_text."
+      },
+      {
+        "step": "attach_context",
+        "from_type": "context",
+        "description": "Associate preceding and following context messages with their adjacent match by line proximity."
+      },
+      {
+        "step": "extract_summary",
+        "from_type": "summary",
+        "mapping": {
+          "files_searched": "data.stats.searches",
+          "files_with_matches": "data.stats.searches_with_match",
+          "total_matches": "data.stats.matches",
+          "execution_ms": "data.elapsed_total.secs * 1000 + data.elapsed_total.nanos / 1000000"
+        },
+        "description": "Extract aggregate statistics from the terminal rg summary block."
+      },
+      {
+        "step": "handle_no_matches",
+        "condition": "exit_code == 1 OR matches array is empty",
+        "emit": {
+          "status": "ok",
+          "total_matches": 0,
+          "files_searched": "data.stats.searches (from summary if available, else 0)",
+          "files_with_matches": 0,
+          "truncated": false,
+          "matches": [],
+          "warnings": []
+        },
+        "description": "rg exit code 1 means no matches \u2014 this is not an error. Emit a valid success envelope with zero matches. Skip remaining pipeline steps."
+      },
+      {
+        "step": "truncate_matches",
+        "condition": "len(matches) > inputs.max_matches",
+        "action": "slice matches array to inputs.max_matches entries",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce global match limit. rg has no global cap (--max-count is per-file), so truncation is applied here in the pipeline after all matches are collected."
+      },
+      {
+        "step": "detect_truncation",
+        "condition": "truncated not already set AND total_matches > len(matches)",
+        "set": {
+          "truncated": true
+        },
+        "description": "Secondary truncation detection for edge cases where rg's own limits or timeouts caused incomplete results."
+      },
+      {
+        "step": "parse_stderr_errors",
+        "condition": "exit_code == 2",
+        "mapping": {
+          "error_type": {
+            "regex_unrecognized_escape": {
+              "regex": "^.*unrecognized escape sequence.*$",
+              "yields": "invalid_regex"
+            },
+            "regex_permission_denied": {
+              "regex": "^.*Permission denied.*$",
+              "yields": "permission_denied"
+            },
+            "regex_path_not_found": {
+              "regex": "^.*No such file or directory.*$",
+              "yields": "path_not_found"
+            },
+            "default": "unknown"
+          }
+        },
+        "description": "rg exits with 2 for all errors. This step parses the raw stderr string to populate the specific error_type enum for agent reasoning."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge all extracted fields into the success output envelope and strip rg-internal fields. Set truncated to false if not previously set."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "grep",
+      "args": [
+        "-rn",
+        "{% if ignore_case %}-i{% endif %}",
+        "{% if literal %}-F{% endif %}",
+        "{% if word_regexp %}-w{% endif %}",
+        "{% if context_before > 0 %}-B{{ context_before }}{% endif %}",
+        "{% if context_after > 0 %}-A{{ context_after }}{% endif %}",
+        "--",
+        "{{ pattern }}",
+        "{{ path }}"
+      ],
+      "normalization": "grep_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "column_start and column_end will be null",
+        "match_text isolation is unavailable (will return the entire line or null)",
+        "files_searched count unavailable",
+        "execution_ms unavailable",
+        "truncated detection unavailable"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "file_path",
+        "line_number",
+        "column_range",
+        "match_text"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/search_result/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "file",
+          "line_number"
+        ],
+        "description": "Pass match location directly to view the surrounding file content."
+      },
+      {
+        "skill": "structural_search",
+        "via": [
+          "file"
+        ],
+        "description": "Feed matched file paths into ast-grep for AST-level structural analysis."
+      },
+      {
+        "skill": "find_replace",
+        "via": [
+          "file",
+          "match_text"
+        ],
+        "description": "Pass match location and text to sd for targeted in-place replacement."
+      },
+      {
+        "skill": "file_read",
+        "via": [
+          "file"
+        ],
+        "description": "Read full file contents for matched paths using bat or cat."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_list",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a directory path from fd or eza to scope the search."
+      },
+      {
+        "skill": "file_find",
+        "via": [
+          "path"
+        ],
+        "description": "Receive specific file paths from fd for targeted search."
+      }
+    ]
+  },
+  "vanquish": {
+    "ingestible": true,
+    "index_tier": "hot",
+    "semantic_fields": [
+      "match_text",
+      "line_text",
+      "file"
+    ],
+    "passthrough": true,
+    "note": "Match output is directly ingestible by Vanquish. Semantic fields carry sufficient signal for embedding without additional transformation."
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "search",
+      "file-system",
+      "discovery",
+      "grep",
+      "regex"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(matches)",
+      "token_pressure": "low"
+    }
+  }
+}

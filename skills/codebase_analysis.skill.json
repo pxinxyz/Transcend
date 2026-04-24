@@ -1,0 +1,653 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "codebase_analysis",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development",
+  "description": "Performs comprehensive static analysis of a codebase using scc, returning strictly typed metrics \u2014 language distribution, complexity profiles, COCOMO estimates, and per-file breakdowns. Agents reason over structural health, not raw directory listings.",
+  "requires": {
+    "primary": {
+      "command": "scc",
+      "min_version": "3.0.0",
+      "note": "Boyter's scc (Sloc Cloc and Code). Go-native. Provides complexity, COCOMO, and JSON output."
+    },
+    "fallback": {
+      "command": "tokei",
+      "min_version": "12.0.0",
+      "note": "Rust-native line counter. Reduced fidelity \u2014 no complexity, no COCOMO, no per-file granularity in normalization. Language totals only."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "description": "Root directory to analyse.",
+      "default": ".",
+      "validation": {
+        "must_exist": true,
+        "must_be_directory": true
+      }
+    },
+    "granularity": {
+      "type": "string",
+      "enum": [
+        "summary",
+        "per_language",
+        "per_file"
+      ],
+      "default": "per_language",
+      "description": "Output depth. 'summary' returns totals only. 'per_language' returns language breakdowns. 'per_file' returns file-level detail nested under each language. Token cost scales with granularity."
+    },
+    "exclude_dirs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Directory names to exclude from traversal (e.g., 'node_modules', 'target', 'dist'). Passed to scc --exclude-dir."
+    },
+    "exclude_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Regex patterns for file exclusion. Passed to scc --not-match. Use for fine-grained file filtering beyond directory exclusion."
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Restrict analysis to specific languages (e.g., 'Go', 'Rust', 'Python', 'TypeScript'). Passed to scc --include-lang. Empty array analyses all detected languages."
+    },
+    "sort_by": {
+      "type": "string",
+      "enum": [
+        "files",
+        "lines",
+        "code",
+        "comments",
+        "blanks",
+        "complexity",
+        "name"
+      ],
+      "default": "code",
+      "description": "Sort language breakdowns by the given metric. 'code' is the default to surface primary implementation volume."
+    },
+    "complexity": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable cyclomatic complexity estimation. scc calculates this by default; set false to disable for faster execution on massive codebases."
+    },
+    "cocomo": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include COCOMO 81 cost estimation (effort in person-months, team size, schedule months, cost). Adds ~5% token overhead."
+    },
+    "cocomo_project_type": {
+      "type": "string",
+      "enum": [
+        "organic",
+        "semi-detached",
+        "embedded"
+      ],
+      "default": "organic",
+      "description": "COCOMO project type. 'organic' for small teams/good experience, 'semi-detached' for mixed, 'embedded' for tight constraints."
+    },
+    "min_code_lines": {
+      "type": "integer",
+      "default": 1,
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Minimum lines of code for a file to be included in counts. Filters out trivial files (e.g., 1-line __init__.py markers)."
+    },
+    "max_files_per_language": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard cap on per-file entries returned per language when granularity is 'per_file'. Enforced in normalisation to prevent token saturation in large monorepos."
+    },
+    "include_binary": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include binary files in file counts. Does not attempt to count lines in binaries."
+    },
+    "no_ignore": {
+      "type": "boolean",
+      "default": false,
+      "description": "Bypass .gitignore, .ignore, and ignore patterns. Analyse the full directory tree."
+    },
+    "follow_symlinks": {
+      "type": "boolean",
+      "default": false,
+      "description": "Follow symbolic links during directory traversal."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_files",
+        "total_lines",
+        "code_lines",
+        "comment_lines",
+        "blank_lines",
+        "estimated_languages",
+        "truncated",
+        "languages"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total files analysed across all languages."
+        },
+        "total_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of code + comment + blank lines across all files."
+        },
+        "code_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Executable/source lines of code."
+        },
+        "comment_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Comment and documentation lines."
+        },
+        "blank_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Empty lines."
+        },
+        "complexity_score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Aggregate cyclomatic complexity across all files. Null if complexity was disabled or fallback was used."
+        },
+        "estimated_languages": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of distinct programming languages detected."
+        },
+        "cocomo": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "Null if cocomo was disabled, unsupported by fallback, or no code was found.",
+          "properties": {
+            "effort_months": {
+              "type": "number",
+              "description": "Estimated development effort in person-months."
+            },
+            "schedule_months": {
+              "type": "number",
+              "description": "Estimated calendar months to completion."
+            },
+            "people_required": {
+              "type": "number",
+              "description": "Estimated team size."
+            },
+            "cost_usd": {
+              "type": "integer",
+              "description": "Estimated cost in USD at default salary multiplier."
+            },
+            "project_type": {
+              "type": "string",
+              "enum": [
+                "organic",
+                "semi-detached",
+                "embedded"
+              ]
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if per-file detail was capped by max_files_per_language before traversal completed."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if tokei fallback was invoked instead of scc."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "languages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "files",
+              "lines",
+              "code",
+              "comments",
+              "blanks"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Language name as detected by scc (e.g., 'Go', 'Python', 'TypeScript')."
+              },
+              "files": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "lines": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "code": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "comments": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "blanks": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "complexity": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "description": "Per-language cyclomatic complexity. Null if disabled or unavailable."
+              },
+              "code_percentage": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100,
+                "description": "Percentage of total codebase code lines attributed to this language."
+              },
+              "files_detail": {
+                "type": "array",
+                "description": "Omitted entirely from JSON payload if granularity is not 'per_file', to preserve token density.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "path",
+                    "lines",
+                    "code",
+                    "comments",
+                    "blanks"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "Relative or absolute file path."
+                    },
+                    "lines": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "code": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "comments": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "blanks": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "complexity": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories (e.g., binary files encountered, symlink loops avoided, inaccurate language detection)."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "permission_denied",
+            "path_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if tokei fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 60000,
+    "command": "scc",
+    "args": [
+      "--format=json",
+      "--sort={{ sort_by }}",
+      "{% if granularity == 'per_file' %}--by-file{% endif %}",
+      "{% if not complexity %}--no-complexity{% endif %}",
+      "{% if cocomo %}--cocomo{% endif %}",
+      "{% if cocomo %}--cocomo-project-type={{ cocomo_project_type }}{% endif %}",
+      "{% if min_code_lines > 0 %}--min={{ min_code_lines }}{% endif %}",
+      "{% if include_binary %}--binary{% endif %}",
+      "{% if no_ignore %}--no-ignore{% endif %}",
+      "{% if follow_symlinks %}--follow-symlinks{% endif %}",
+      "{% for dir in exclude_dirs %}--exclude-dir={{ dir }}{% endfor %}",
+      "{% for pat in exclude_patterns %}--not-match={{ pat }}{% endfor %}",
+      "{% for lang in languages %}--include-lang={{ lang }}{% endfor %}",
+      "{{ path }}"
+    ],
+    "note": "scc --format json emits a JSON array of language objects. --by-file nests a Files array inside each language. --cocomo adds COCOMO fields per language. scc exits 0 on success (including empty results) and non-zero on actual errors.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse scc JSON array output. Each element is a language block with Name, Bytes, Code, Comment, Blank, Complexity, Count, and optionally Files and Cocomo fields."
+      },
+      {
+        "step": "handle_empty",
+        "condition": "parsed array is empty OR path contains no recognised files",
+        "emit": {
+          "status": "ok",
+          "total_files": 0,
+          "total_lines": 0,
+          "code_lines": 0,
+          "comment_lines": 0,
+          "blank_lines": 0,
+          "complexity_score": null,
+          "estimated_languages": 0,
+          "cocomo": null,
+          "truncated": false,
+          "languages": [],
+          "warnings": [
+            "No recognised source files found in path."
+          ]
+        },
+        "description": "Empty codebase is not an error. Emit valid zeroed envelope. Skip remaining pipeline steps."
+      },
+      {
+        "step": "extract_languages",
+        "mapping": {
+          "name": "Name",
+          "files": "Count",
+          "lines": "sum(Code, Comment, Blank)",
+          "code": "Code",
+          "comments": "Comment",
+          "blanks": "Blank",
+          "complexity": "Complexity",
+          "files_detail": "Files | null_if_not_per_file"
+        },
+        "transforms": {
+          "null_if_not_per_file": "If granularity != 'per_file', set files_detail to null so the field is stripped during assembly. If granularity == 'per_file' but Files array is null (scc anomaly), emit empty array."
+        },
+        "description": "Map each scc language object to the transcend output schema. Compute lines as the sum of code, comment, and blank."
+      },
+      {
+        "step": "normalize_paths",
+        "condition": "granularity == 'per_file'",
+        "action": "Iterate all languages.files_detail. Convert all 'path' strings to strictly normalized POSIX relative paths (e.g., stripping redundant './' prefixes).",
+        "description": "Ensures path formatting is identical to downstream tools (like rg or sd) so chaining operations do not fail on path mismatches."
+      },
+      {
+        "step": "compute_totals",
+        "aggregates": {
+          "total_files": "sum(language.files)",
+          "total_lines": "sum(language.lines)",
+          "code_lines": "sum(language.code)",
+          "comment_lines": "sum(language.comments)",
+          "blank_lines": "sum(language.blanks)",
+          "complexity_score": "sum(language.complexity) | null_if_any_null",
+          "estimated_languages": "count(language objects)"
+        },
+        "description": "Roll up per-language metrics into top-level totals. complexity_score is null if any language lacks complexity (fallback or disabled)."
+      },
+      {
+        "step": "compute_percentages",
+        "action": "For each language, code_percentage = (language.code / code_lines) * 100. Round to 1 decimal place. If code_lines is 0, set 0.0.",
+        "description": "Provide relative language dominance for agent reasoning about tech-stack composition."
+      },
+      {
+        "step": "extract_cocomo",
+        "condition": "cocomo input was true AND scc output contains Cocomo fields",
+        "mapping": {
+          "effort_months": "Cocomo.Effort | sum across languages",
+          "schedule_months": "Cocomo.Months | max across languages (scc reports per-language; take longest schedule)",
+          "people_required": "Cocomo.People | max across languages",
+          "cost_usd": "Cocomo.Cost | sum across languages",
+          "project_type": "inputs.cocomo_project_type"
+        },
+        "description": "Aggregate COCOMO estimates across all languages. scc emits per-language COCOMO; we surface project-level totals. If fields are absent, cocomo is set to null."
+      },
+      {
+        "step": "truncate_files",
+        "condition": "granularity == 'per_file' AND any language.files_detail.length > inputs.max_files_per_language",
+        "action": "For each language, slice files_detail to max_files_per_language entries. Sort order is preserved from scc (deterministic if sort_by is not 'none').",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce per-language file cap to prevent token saturation in monorepos with thousands of files per language."
+      },
+      {
+        "step": "detect_truncation",
+        "condition": "truncated not already set AND granularity == 'per_file'",
+        "set": {
+          "truncated": false
+        },
+        "description": "Explicitly set truncated to false when no capping occurred."
+      },
+      {
+        "step": "strip_null_fields",
+        "action": "Remove files_detail key entirely from any language object where it is null. Remove complexity key from any language where it is null. Remove top-level cocomo key if null. Remove complexity_score if null.",
+        "description": "Token-density optimisation: omit null-valued fields rather than emitting null placeholders."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge all computed fields into the final success envelope. Set used_fallback to false. Set execution_ms from runtime timer."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 1000
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "tokei",
+      "args": [
+        "{{ path }}",
+        "--output=json",
+        "{% if sort_by == 'code' %}--sort=code{% elif sort_by == 'comments' %}--sort=comments{% elif sort_by == 'blanks' %}--sort=blanks{% elif sort_by == 'lines' %}--sort=lines{% endif %}"
+      ],
+      "normalization": "tokei_json_to_transcend_schema",
+      "output_gaps": [
+        "complexity is unavailable on all fields (set to null and stripped)",
+        "cocomo is unavailable (set to null and stripped)",
+        "per-file granularity is unavailable; languages array contains totals only",
+        "exclude_dirs, exclude_patterns, languages inputs have no effect on tokei CLI; tokei analyses all files it recognises",
+        "include_binary, no_ignore, follow_symlinks inputs have no effect",
+        "min_code_lines has no effect; tokei counts all files",
+        "code_percentage is computed from tokei totals but may differ from scc due to different language detection heuristics"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "language_stats",
+        "file_metrics",
+        "complexity_profile"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/codebase_analysis/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "universal_search",
+        "via": [
+          "path",
+          "languages.name"
+        ],
+        "description": "Scope search to specific languages by passing language names as file_types, or search within the analysed path."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "languages.files_detail.path",
+          "languages.files_detail.lines"
+        ],
+        "description": "View high-complexity or high-line-count files identified during analysis."
+      },
+      {
+        "skill": "structural_search",
+        "via": [
+          "languages.files_detail.path"
+        ],
+        "description": "Run AST-level queries against files flagged by analysis (e.g., largest files, highest complexity)."
+      },
+      {
+        "skill": "find_replace",
+        "via": [
+          "languages.files_detail.path"
+        ],
+        "description": "Target refactoring operations against specific file sets identified by language or size metrics."
+      },
+      {
+        "skill": "file_read",
+        "via": [
+          "languages.files_detail.path"
+        ],
+        "description": "Read full file contents of files surfaced in the per-file breakdown."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_list",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a directory path from fd or eza to scope analysis."
+      },
+      {
+        "skill": "file_find",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a specific path or subset from fd for targeted analysis."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "path"
+        ],
+        "description": "Analyse a codebase after initial discovery via search (e.g., find all services, then analyse their directories)."
+      }
+    ]
+  },
+  "vanquish": {
+    "ingestible": true,
+    "index_tier": "warm",
+    "semantic_fields": [
+      "languages.name",
+      "languages.files_detail.path"
+    ],
+    "passthrough": false,
+    "note": "Language names and file paths carry structural signal for Vanquish embedding. Numeric metrics (lines, complexity) are not semantically embeddable and should be stored as metadata only."
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "analysis",
+      "metrics",
+      "complexity",
+      "cocomo",
+      "sloc",
+      "codebase-health",
+      "static-analysis"
+    ],
+    "performance": {
+      "typical_execution_ms": 200,
+      "worst_case_execution_ms": 60000,
+      "output_scale": "O(languages + files)",
+      "token_pressure": "medium",
+      "note": "Token pressure scales linearly with granularity. 'summary' produces ~50 tokens. 'per_language' produces ~20 tokens per language. 'per_file' produces ~15 tokens per file. Use max_files_per_language aggressively in monorepos."
+    }
+  }
+}

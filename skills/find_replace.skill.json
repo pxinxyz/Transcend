@@ -1,0 +1,503 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "find_replace",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "text_data_processing",
+  "description": "Performs targeted find-and-replace across a file set using sd, returning a structured change manifest with per-file replacement counts, match locations, and dry-run previews. Agents orchestrate refactoring, not regex surgery.",
+  "requires": {
+    "primary": {
+      "command": "sd",
+      "min_version": "1.0.0",
+      "note": "Rust-native find-and-replace. Supports regex and literal mode. Silent on success; all structured output is produced by the wrapper."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the find_replace.cjs wrapper script that drives sd, counts replacements by diffing, and emits structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "sed",
+      "note": "POSIX sed. Reduced fidelity \u2014 no per-replacement locations, no dry-run preview, no replacement count, no binary safety checks."
+    },
+    "permissions": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  },
+  "inputs": {
+    "pattern": {
+      "type": "string",
+      "required": true,
+      "description": "Regex or literal string to find.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 4096
+      }
+    },
+    "replacement": {
+      "type": "string",
+      "required": true,
+      "description": "Replacement string. Supports sd capture groups ($1, $2, etc) when not in literal mode.",
+      "validation": {
+        "max_length": 4096
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "required": true,
+      "description": "Target file paths. Typically fed from universal_search chaining. Each path must exist.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 10000,
+        "items_must_exist": true
+      }
+    },
+    "literal": {
+      "type": "boolean",
+      "default": false,
+      "description": "Treat pattern as fixed literal string. Disables regex capture groups in replacement."
+    },
+    "ignore_case": {
+      "type": "boolean",
+      "default": false,
+      "description": "Case-insensitive matching."
+    },
+    "word_regexp": {
+      "type": "boolean",
+      "default": false,
+      "description": "Match only whole words."
+    },
+    "multiline": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable multiline matching (dotall semantics)."
+    },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "Preview changes without writing to disk. Returns a change manifest showing what would be modified, with before/after snippets."
+    },
+    "max_replacements_per_file": {
+      "type": "integer",
+      "default": null,
+      "minimum": 1,
+      "description": "Maximum replacements per file. Null means unlimited. Enforced by wrapper counting, not sd natively."
+    },
+    "max_files": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard cap on files processed. If files array exceeds this, the result is truncated and the truncated flag is set."
+    },
+    "create_backup": {
+      "type": "boolean",
+      "default": false,
+      "description": "Create .bak backups before modifying files. Ignored in dry_run mode."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_files_processed",
+        "total_replacements",
+        "files_modified",
+        "truncated",
+        "changes"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_files_processed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of files the wrapper attempted to process."
+        },
+        "total_replacements": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "files_modified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of files with at least one replacement."
+        },
+        "files_unchanged": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Count of files with zero matches."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if files array exceeded max_files and some files were skipped."
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "Echo of input dry_run flag for downstream awareness."
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "execution_ms": {
+          "type": "integer"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "replacements_count",
+              "modified"
+            ],
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "replacements_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "modified": {
+                "type": "boolean",
+                "description": "True if at least one replacement occurred in this file."
+              },
+              "replacements": {
+                "type": "array",
+                "description": "Omitted entirely if replacements_count is 0 to preserve token density. Also omitted if per-replacement detail would exceed token budget.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "line_number",
+                    "column_start",
+                    "column_end",
+                    "original_text",
+                    "replaced_text"
+                  ],
+                  "properties": {
+                    "line_number": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "column_start": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Zero-indexed byte offset where the match begins."
+                    },
+                    "column_end": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Zero-indexed byte offset where the match ends."
+                    },
+                    "original_text": {
+                      "type": "string",
+                      "description": "The exact matched substring before replacement."
+                    },
+                    "replaced_text": {
+                      "type": "string",
+                      "description": "The substring after replacement."
+                    }
+                  }
+                }
+              },
+              "preview": {
+                "type": "array",
+                "description": "Only present in dry_run mode. Shows before/after line snippets for each replacement.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "line_number": {
+                      "type": "integer"
+                    },
+                    "context_before": {
+                      "type": "string",
+                      "description": "One line of context before the replacement. Omitted if at file start."
+                    },
+                    "original_line": {
+                      "type": "string"
+                    },
+                    "replaced_line": {
+                      "type": "string"
+                    },
+                    "context_after": {
+                      "type": "string",
+                      "description": "One line of context after the replacement. Omitted if at file end."
+                    }
+                  }
+                }
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Non-fatal error for this file (e.g., permission denied, binary file skipped, encoding issue). Null if successful."
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories (e.g., binary files skipped, files with encoding issues)."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_regex",
+            "permission_denied",
+            "path_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if sed fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "node",
+    "args": [
+      "find_replace.cjs",
+      "--pattern={{ pattern }}",
+      "--replacement={{ replacement }}",
+      "{% if literal %}--literal{% endif %}",
+      "{% if ignore_case %}--ignore-case{% endif %}",
+      "{% if word_regexp %}--word-regexp{% endif %}",
+      "{% if multiline %}--multiline{% endif %}",
+      "{% if dry_run %}--dry-run{% endif %}",
+      "{% if max_replacements_per_file %}--max-replacements-per-file={{ max_replacements_per_file }}{% endif %}",
+      "{% if max_files %}--max-files={{ max_files }}{% endif %}",
+      "{% if create_backup %}--create-backup{% endif %}"
+    ],
+    "note": "To avoid OS ARG_MAX limits (e.g., Windows 8191 char limit), the 'files' array MUST NOT be passed via CLI arguments. The Transcend runtime must pipe the JSON stringified 'files' array into the wrapper script via stdin. The wrapper script iterates files, applies sd per file, counts replacements by comparing file content before and after, and emits structured JSON. sd is silent on success; all output is constructed by the wrapper.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse wrapper JSON output. The wrapper already produces the transcend schema; normalization handles edge cases and truncation."
+      },
+      {
+        "step": "validate_schema",
+        "description": "Ensure all required fields are present and types match. Reject malformed wrapper output with error_type 'unknown'."
+      },
+      {
+        "step": "truncate_changes",
+        "condition": "len(changes) > inputs.max_files",
+        "action": "Slice changes array to max_files entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce file-level cap if wrapper did not respect max_files input."
+      },
+      {
+        "step": "strip_empty_replacements",
+        "action": "Remove 'replacements' key from any change object where replacements_count is 0. Remove 'preview' key when not in dry_run mode.",
+        "description": "Token-density: omit empty arrays and irrelevant fields rather than emitting null placeholders."
+      },
+      {
+        "step": "compute_totals",
+        "aggregates": {
+          "total_files_processed": "count(changes)",
+          "total_replacements": "sum(change.replacements_count)",
+          "files_modified": "count where change.modified == true",
+          "files_unchanged": "count where change.modified == false"
+        },
+        "description": "Roll up per-file metrics into top-level totals for agent reasoning."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge all computed fields into final success envelope. Set used_fallback to false. Set execution_ms from runtime timer."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "sed",
+      "args": [
+        "{% if ignore_case %}I{% endif %}",
+        "s/{{ pattern }}/{{ replacement }}/g",
+        "{% for file in files %}{{ file }}{% endfor %}"
+      ],
+      "normalization": "sed_silent_to_transcend_schema",
+      "output_gaps": [
+        "replacements_count is unavailable (set to 0, modified inferred from sed exit code 0)",
+        "per-replacement locations unavailable",
+        "dry_run preview unavailable",
+        "max_replacements_per_file has no effect",
+        "word_regexp has no effect",
+        "multiline has no effect",
+        "files_unchanged count unavailable",
+        "per-file error granularity unavailable",
+        "literal mode has no sed equivalent; pattern is always treated as regex",
+        "create_backup has no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "change_manifest",
+        "file_path"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/find_replace/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "changes.file",
+          "changes.replacements.line_number"
+        ],
+        "description": "View modified files at replacement locations to verify changes."
+      },
+      {
+        "skill": "git_diff",
+        "via": [
+          "changes.file"
+        ],
+        "description": "Review actual diff of modified files for agent validation before commit."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "changes.file"
+        ],
+        "description": "Re-search modified files to confirm all instances were replaced."
+      },
+      {
+        "skill": "file_read",
+        "via": [
+          "changes.file"
+        ],
+        "description": "Read full modified files for post-replacement context."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "universal_search",
+        "via": [
+          "files",
+          "pattern"
+        ],
+        "description": "Receive file paths and match text from search for targeted replacement."
+      },
+      {
+        "skill": "codebase_analysis",
+        "via": [
+          "languages.files_detail.path"
+        ],
+        "description": "Target specific files identified by language or complexity metrics."
+      },
+      {
+        "skill": "directory_list",
+        "via": [
+          "path"
+        ],
+        "description": "Receive directory paths to scope replacement."
+      },
+      {
+        "skill": "file_find",
+        "via": [
+          "path"
+        ],
+        "description": "Receive specific file paths from fd for targeted replacement."
+      }
+    ]
+  },
+  "vanquish": {
+    "ingestible": true,
+    "index_tier": "hot",
+    "semantic_fields": [
+      "changes.file",
+      "changes.replacements.original_text",
+      "changes.replacements.replaced_text"
+    ],
+    "passthrough": false,
+    "note": "Replacement operations are high-signal events. Original and replaced text carry semantic meaning for embedding and change tracking."
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "refactor",
+      "replace",
+      "sed",
+      "regex",
+      "text-manipulation",
+      "batch-edit"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(files * replacements)",
+      "token_pressure": "medium",
+      "note": "Token pressure scales with number of files and replacements per file. Use max_files and max_replacements_per_file aggressively. dry_run mode doubles execution time (requires read-before-write diff)."
+    }
+  }
+}

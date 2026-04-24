@@ -1,0 +1,44 @@
+{
+  "name": "transcend",
+  "version": "1.2.0",
+  "description": "The agent-native CLI skill framework — Nunjucks runtime for typed skill execution",
+  "main": "lib/index.js",
+  "type": "module",
+  "bin": {
+    "transcend": "./bin/transcend.js"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "lint": "eslint lib/ bin/",
+    "start": "node bin/transcend.js",
+    "mcp": "node lib/mcp-server.js"
+  },
+  "keywords": [
+    "transcend",
+    "skill-framework",
+    "cli",
+    "agent",
+    "nunjucks",
+    "typed-contracts"
+  ],
+  "author": "pxin",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pxinxyz/Transcend.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pxinxyz/Transcend/issues"
+  },
+  "homepage": "https://github.com/pxinxyz/Transcend#readme",
+  "dependencies": {
+    "nunjucks": "^3.2.4",
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
