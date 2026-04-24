@@ -40,7 +40,7 @@ Every AI coding agent today runs the same broken loop:
 
 This works on toy projects. On real codebases, it **physically cannot work**.
 
-A single `grep` for "FastAPI" across the FastAPI repository returns ~24,000 matches. The standard agent workflow (search + read matched files) produces **6.5-7.2 million tokens** depending on tokenizer. No model on Earth has a context window that large. The task is impossible.
+A single `grep` across a large repository can return tens of thousands of matches. The standard agent workflow (search + read matched files) produces **millions of tokens** depending on the tokenizer. No model on Earth has a context window that large. The task is impossible.
 
 Transcend makes it trivial.
 
@@ -182,18 +182,11 @@ Transcend targets high-performance CLI utilities — primarily Rust and Go — a
 
 ## Benchmarks
 
-### Token Reduction — FastAPI (2,944 files, 409,037 lines)
+From internal testing, I, and the agents I utilize, have measured drastic token reduction and speedup, while retaining full performance.
 
-Measured with **4 real tokenizers** from 4 vendors. Not heuristics.
+At scale, the standard approach doesn't degrade — it becomes **physically impossible**. Massive context dumps exceed production model limits. Transcend bypasses this bottleneck entirely.
 
-| Tokenizer | Transcend | Standard Agent | Reduction | Ratio |
-|-----------|-----------|----------------|-----------|-------|
-| o200k_base (GPT) | 112,691 | 10,222,088 | **98.9%** | 91x |
-| Gemma 3 (Google) | 140,344 | 11,430,610 | **98.8%** | 81x |
-| Llama 4 Scout (Meta) | 111,914 | 9,735,463 | **98.9%** | 87x |
-| Qwen 3.5 (Alibaba) | 128,950 | 10,943,987 | **98.8%** | 85x |
-
-At scale, the standard approach doesn't degrade — it becomes **physically impossible**. 814K context tokens exceeds every production model. Transcend bypasses this bottleneck entirely.
+*You can run tests and comparisons yourself on your codebase, and ask your favorite agent to compare it.*
 
 ---
 
