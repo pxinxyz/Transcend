@@ -78,7 +78,7 @@ You can drop this block into almost any standard MCP config (like Claude Desktop
   "mcpServers": {
     "transcend": {
       "command": "npx",
-      "args": ["@pxinxyz/transcend", "--mcp"]
+      "args": ["-y", "github:PXINXYZ/Transcend", "--mcp"]
     }
   }
 }
