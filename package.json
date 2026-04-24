@@ -1,7 +1,7 @@
 {
-  "name": "transcend",
+  "name": "@pxinxyz/transcend",
   "version": "1.2.0",
-  "description": "The agent-native CLI skill framework — Nunjucks runtime for typed skill execution",
+  "description": "Structured skill definitions for the modern CLI toolchain. Typed contracts, JSON outputs, and composable primitives for autonomous AI agents.",
   "main": "lib/index.js",
   "type": "module",
   "bin": {

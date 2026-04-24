@@ -78,7 +78,7 @@ You can drop this block into almost any standard MCP config (like Claude Desktop
   "mcpServers": {
     "transcend": {
       "command": "npx",
-      "args": ["transcend", "--mcp"]
+      "args": ["@pxinxyz/transcend", "--mcp"]
     }
   }
 }
@@ -88,7 +88,7 @@ You can drop this block into almost any standard MCP config (like Claude Desktop
 
 *   **Claude Code (CLI):** Add the server block to your global `~/.claude.json` or project-local `.claude.json`. Run `/mcp tools` in the CLI to verify.
 *   **Claude Desktop (GUI):** Add the server block to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows).
-*   **Cursor (IDE):** Open **Cursor Settings -> Features -> MCP Servers**. Add New MCP Server (`stdio`), set Command to `npx transcend --mcp`.
+*   **Cursor (IDE):** Open **Cursor Settings -> Features -> MCP Servers**. Add New MCP Server (`stdio`), set Command to `npx @pxinxyz/transcend --mcp`.
 *   **Zed (IDE):** Add to `~/.config/zed/settings.json` under `context_servers`.
 
 ---
