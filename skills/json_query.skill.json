@@ -1,0 +1,275 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "json_query",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "text_data_processing",
+  "description": "Executes jq filter expressions against JSON input, returning structured result arrays with optional truncation, compact output, and raw string extraction. Supports stdin input for agent-safe data pipelining.",
+  "requires": {
+    "primary": {
+      "command": "jq",
+      "min_version": "1.6.0",
+      "note": "Lightweight JSON processor. Supports complex filter expressions, array/object traversal, and string interpolation."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the normalization pipeline that parses jq output into structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "python3",
+      "note": "Python json module. Reduced fidelity — jq filter expressions are unavailable; fallback returns input JSON unmodified."
+    },
+    "permissions": []
+  },
+  "inputs": {
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "jq filter expression.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 4096
+      }
+    },
+    "input": {
+      "type": "string",
+      "default": "",
+      "description": "JSON string to feed via stdin. If omitted or empty, jq reads from stdin (agent must provide via runtime)."
+    },
+    "compact": {
+      "type": "boolean",
+      "default": false,
+      "description": "Output compact JSON (one result per line, NDJSON). Recommended for objects and arrays to ensure reliable pipeline parsing."
+    },
+    "raw_output": {
+      "type": "boolean",
+      "default": false,
+      "description": "Output raw strings instead of JSON-encoded values."
+    },
+    "slurp": {
+      "type": "boolean",
+      "default": false,
+      "description": "Read all input values into an array before applying the filter."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard upper bound on total results returned. Enforced in the normalisation pipeline."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_results",
+        "truncated",
+        "results"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_results": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of result values returned."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if max_results was reached before all results were returned."
+        },
+        "results": {
+          "type": "array",
+          "items": {},
+          "description": "Array of JSON values produced by the jq query."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was invoked instead of jq."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "invalid_query",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "jq",
+    "args": [
+      "{% if compact %}-c{% endif %}",
+      "{% if raw_output %}-r{% endif %}",
+      "{% if slurp %}-s{% endif %}",
+      "{{ query }}"
+    ],
+    "note": "JSON input is fed to jq via stdin when the 'input' field is provided. The Transcend runtime pipes the input string directly into jq's stdin stream.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "invalid_query",
+      "2": "error",
+      "3": "invalid_json",
+      "4": "invalid_query",
+      "5": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "ndjson",
+    "pipeline": [
+      {
+        "step": "parse_jq_output",
+        "description": "Parse jq output into a flat array of result objects. Handles both compact NDJSON and pretty-printed JSON output."
+      },
+      {
+        "step": "truncate_results",
+        "condition": "len(results) > inputs.max_results",
+        "action": "Slice results array to max_results entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce global result limit to preserve token budget."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final success envelope with results array and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "python3",
+      "args": [
+        "-c",
+        "\"import json,sys; data=json.load(sys.stdin); print(json.dumps(data))\""
+      ],
+      "normalization": "python_json_to_transcend_schema",
+      "output_gaps": [
+        "jq filter expressions are unavailable; fallback returns input JSON unmodified",
+        "raw_output has no effect",
+        "compact has no effect",
+        "slurp has no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "json_value",
+        "json_array"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/json_query/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_read",
+        "via": [
+          "results"
+        ],
+        "description": "Pass extracted file paths or content identifiers to file_read."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "universal_search",
+        "via": [
+          "input"
+        ],
+        "description": "Pipe search results as JSON input for structured extraction."
+      },
+      {
+        "skill": "codebase_analysis",
+        "via": [
+          "input"
+        ],
+        "description": "Feed codebase metrics as JSON input for filtering and aggregation."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "json",
+      "jq",
+      "query",
+      "filter",
+      "data-processing"
+    ],
+    "performance": {
+      "typical_execution_ms": 20,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(results)",
+      "token_pressure": "medium"
+    }
+  }
+}
