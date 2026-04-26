@@ -1,0 +1,338 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_cherry_pick",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Cherry-pick commits with conflict detection and in-progress state tracking. Supports picking individual or ranged commits, resolving conflicts via continue/skip/abort/quit, and strategy options.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      },
+      {
+        "type": "template_engine",
+        "name": "nunjucks",
+        "note": "Nunjucks template engine is required for argument rendering."
+      }
+    ],
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Git repository.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "action": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "pick",
+        "continue",
+        "abort",
+        "quit",
+        "skip"
+      ],
+      "description": "Cherry-pick action to perform."
+    },
+    "commits": {
+      "type": "string",
+      "description": "Space-separated commit hashes or refs to cherry-pick (pick action only)."
+    },
+    "strategy": {
+      "type": "string",
+      "description": "Merge strategy to use (e.g. ort, recursive, resolve)."
+    },
+    "no_commit": {
+      "type": "boolean",
+      "default": false,
+      "description": "Apply changes without creating a commit."
+    },
+    "signoff": {
+      "type": "boolean",
+      "default": false,
+      "description": "Add Signed-off-by line to the commit message."
+    },
+    "mainline": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Parent number for cherry-picking merges."
+    },
+    "edit": {
+      "type": "boolean",
+      "default": true,
+      "description": "Let the user edit the commit message."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "action",
+        "picked",
+        "conflicts",
+        "has_conflicts",
+        "in_progress",
+        "total_picked",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "pick",
+            "continue",
+            "abort",
+            "quit",
+            "skip"
+          ]
+        },
+        "picked": {
+          "type": "array",
+          "description": "Successfully cherry-picked commits.",
+          "items": {
+            "type": "object",
+            "required": [
+              "commit",
+              "short_commit",
+              "subject"
+            ],
+            "properties": {
+              "commit": {
+                "type": "string",
+                "description": "Full commit hash."
+              },
+              "short_commit": {
+                "type": "string",
+                "description": "Short 7-char commit hash."
+              },
+              "subject": {
+                "type": "string",
+                "description": "Commit subject line."
+              }
+            }
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "description": "Files with unresolved conflicts.",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "type"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "Path to the conflicted file."
+              },
+              "type": {
+                "type": "string",
+                "description": "Conflict type (e.g. content, add/add, modify/delete)."
+              }
+            }
+          }
+        },
+        "has_conflicts": {
+          "type": "boolean",
+          "description": "True if conflicts were detected."
+        },
+        "in_progress": {
+          "type": "boolean",
+          "description": "True if a cherry-pick sequence is in progress."
+        },
+        "total_picked": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of commits successfully picked."
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "conflict",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "cherry-pick",
+      "{% if action == 'continue' %}--continue{% elif action == 'abort' %}--abort{% elif action == 'quit' %}--quit{% elif action == 'skip' %}--skip{% endif %}",
+      "{% if action == 'pick' and strategy %}--strategy={{ strategy }}{% endif %}",
+      "{% if action == 'pick' and no_commit %}--no-commit{% endif %}",
+      "{% if action == 'pick' and signoff %}--signoff{% endif %}",
+      "{% if action == 'pick' and mainline %}--mainline={{ mainline }}{% endif %}",
+      "{% if action == 'pick' and not edit %}--no-edit{% elif action == 'pick' and edit %}--edit{% endif %}",
+      "{% if action == 'pick' and commits %}{{ commits }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_cherry_pick",
+        "description": "Parse stdout for successful picks, stderr for conflicts, and detect in-progress state from .git/sequencer."
+      },
+      {
+        "step": "git_cherry_pick_short",
+        "description": "Fallback parser for cherry-pick output when primary parser yields no results."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final envelope with picked commits, conflicts, in-progress flag, and action metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "cherry-pick",
+        "{% if action == 'continue' %}--continue{% elif action == 'abort' %}--abort{% elif action == 'quit' %}--quit{% elif action == 'skip' %}--skip{% endif %}",
+        "{% if action == 'pick' and commits %}{{ commits }}{% endif %}"
+      ],
+      "normalization": "git_cherry_pick_short",
+      "output_gaps": [
+        "conflict details may be unavailable",
+        "in-progress state may be inaccurate"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "commit_hash"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_cherry_pick/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_status",
+        "via": [
+          "path"
+        ],
+        "description": "Check working tree status after cherry-pick."
+      },
+      {
+        "skill": "git_diff",
+        "via": [
+          "path"
+        ],
+        "description": "Review changes introduced by cherry-pick."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_log",
+        "via": [
+          "commits"
+        ],
+        "description": "Select commits to cherry-pick from git log output."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "cherry-pick",
+      "version-control"
+    ],
+    "performance": {
+      "typical_execution_ms": 200,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(commits)",
+      "token_pressure": "low"
+    }
+  }
+}
