@@ -1,0 +1,278 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "yaml_query",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "text_data_processing",
+  "description": "Executes yq filter expressions against YAML, XML, or TOML input, returning structured JSON results with optional truncation and format conversion. Supports stdin input for agent-safe data pipelining.",
+  "requires": {
+    "primary": {
+      "command": "yq",
+      "min_version": "4.0.0",
+      "note": "Portable YAML/XML/TOML/JSON processor. Supports complex filter expressions and format conversion."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the normalization pipeline that parses yq output into structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "python3",
+      "note": "Python with PyYAML. Reduced fidelity — yq filter expressions are unavailable; fallback parses YAML and returns as JSON unmodified."
+    },
+    "permissions": []
+  },
+  "inputs": {
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "yq filter expression.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 4096
+      }
+    },
+    "input": {
+      "type": "string",
+      "default": "",
+      "description": "Data string to feed via stdin. If omitted or empty, yq reads from stdin (agent must provide via runtime)."
+    },
+    "input_format": {
+      "type": "string",
+      "enum": [
+        "yaml",
+        "xml",
+        "toml",
+        "json"
+      ],
+      "default": "yaml",
+      "description": "Input data format."
+    },
+    "output_format": {
+      "type": "string",
+      "enum": [
+        "json",
+        "yaml",
+        "xml",
+        "toml"
+      ],
+      "default": "json",
+      "description": "Output data format. JSON is recommended for reliable pipeline parsing."
+    },
+    "no_colors": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable colored output."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard upper bound on total results returned."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_results",
+        "truncated",
+        "results"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_results": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of result values returned."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if max_results was reached before all results were returned."
+        },
+        "results": {
+          "type": "array",
+          "items": {},
+          "description": "Array of JSON values produced by the yq query."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was invoked instead of yq."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "invalid_query",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "yq",
+    "args": [
+      "{% if input_format %}-p{{ input_format }}{% endif %}",
+      "{% if output_format %}-o{{ output_format }}{% endif %}",
+      "{% if no_colors %}--no-colors{% endif %}",
+      "{{ query }}"
+    ],
+    "note": "Data input is fed to yq via stdin when the 'input' field is provided. The Transcend runtime pipes the input string directly into yq's stdin stream.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "invalid_query",
+      "2": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "ndjson",
+    "pipeline": [
+      {
+        "step": "parse_yq_output",
+        "description": "Parse yq JSON output into a flat array of result objects. Handles scalars, arrays, and objects."
+      },
+      {
+        "step": "truncate_results",
+        "condition": "len(results) > inputs.max_results",
+        "action": "Slice results array to max_results entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce global result limit to preserve token budget."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final success envelope with results array and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "python3",
+      "args": [
+        "-c",
+        "\"import sys, yaml, json; data = yaml.safe_load(sys.stdin); print(json.dumps(data))\""
+      ],
+      "normalization": "python_json_to_transcend_schema",
+      "output_gaps": [
+        "yq filter expressions are unavailable; fallback returns parsed YAML as JSON unmodified",
+        "input_format has no effect; fallback only supports YAML",
+        "output_format has no effect; fallback always outputs JSON",
+        "no_colors has no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "yaml_value",
+        "yaml_array"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/yaml_query/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "json_query",
+        "via": [
+          "results"
+        ],
+        "description": "Pipe yq results as JSON input for further filtering."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "file_read",
+        "via": [
+          "input"
+        ],
+        "description": "Read YAML/XML/TOML file contents and pipe into yaml_query."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "yaml",
+      "yq",
+      "xml",
+      "toml",
+      "query",
+      "data-processing"
+    ],
+    "performance": {
+      "typical_execution_ms": 20,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(results)",
+      "token_pressure": "medium"
+    }
+  }
+}

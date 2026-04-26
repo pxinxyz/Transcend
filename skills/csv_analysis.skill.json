@@ -1,0 +1,272 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "csv_analysis",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "text_data_processing",
+  "description": "Performs CSV/TSV analysis using qsv, returning structured JSON results for statistics, frequency tables, schema inference, slicing, selecting, sorting, deduplication, counting, and header extraction.",
+  "requires": {
+    "primary": {
+      "command": "qsv",
+      "min_version": "16.0.0",
+      "note": "Rust-native CSV data-wrangling toolkit. Provides fast statistics, frequency analysis, schema inference, and data manipulation."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the normalization pipeline that parses qsv JSON output into structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "python3",
+      "note": "Python csv module. Reduced fidelity — only basic row parsing is available; no statistics, frequency, or schema inference."
+    },
+    "permissions": []
+  },
+  "inputs": {
+    "input": {
+      "type": "string",
+      "default": "",
+      "description": "CSV/TSV data to feed via stdin. If omitted or empty, qsv reads from stdin (agent must provide via runtime)."
+    },
+    "operation": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "stats",
+        "frequency",
+        "schema",
+        "slice",
+        "select",
+        "sort",
+        "dedup",
+        "count",
+        "headers"
+      ],
+      "description": "Analysis operation to perform."
+    },
+    "delimiter": {
+      "type": "string",
+      "default": ",",
+      "description": "Field delimiter character."
+    },
+    "columns": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated column names or indices for select/sort operations."
+    },
+    "query": {
+      "type": "string",
+      "default": "",
+      "description": "Additional query string for operations that support it."
+    },
+    "limit": {
+      "type": "integer",
+      "default": null,
+      "minimum": 1,
+      "description": "Maximum number of rows/results to return."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_results",
+        "truncated",
+        "results"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_results": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of result values returned."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if limit was reached before all results were returned."
+        },
+        "results": {
+          "type": "array",
+          "items": {},
+          "description": "Array of JSON values produced by the qsv operation."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was invoked instead of qsv."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if python3 fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "qsv",
+    "args": [
+      "{{ operation }}",
+      "{% if delimiter %}-d \"{{ delimiter }}\"{% endif %}",
+      "{% if limit %}-l {{ limit }}{% endif %}",
+      "{% if columns %}-s {{ columns }}{% endif %}",
+      "{% if query %}{{ query }}{% endif %}",
+      "{% if operation in ['count','frequency','slice'] %}--json{% elif operation == 'schema' %}--stdout{% endif %}",
+      "-"
+    ],
+    "note": "CSV/TSV input is fed to qsv via stdin when the 'input' field is provided. The Transcend runtime pipes the input string directly into qsv's stdin stream. JSON output is used for operations that support it.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse qsv JSON output into structured results."
+      },
+      {
+        "step": "truncate_results",
+        "condition": "len(results) > inputs.limit",
+        "action": "Slice results array to limit entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce global result limit to preserve token budget."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final success envelope with results array and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "python3",
+      "args": [
+        "-c",
+        "\"import sys, csv, json; r = csv.reader(sys.stdin, delimiter='{{ delimiter }}'); rows = list(r); print(json.dumps(rows))\""
+      ],
+      "normalization": "python_json_to_transcend_schema",
+      "output_gaps": [
+        "statistics are unavailable",
+        "frequency tables are unavailable",
+        "schema inference is unavailable",
+        "slice, select, sort, dedup, count, and headers operations return raw rows only"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "csv_data",
+        "tabular_array"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/csv_analysis/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "json_query",
+        "via": [
+          "results"
+        ],
+        "description": "Pipe CSV analysis results as JSON for further querying."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "file_read",
+        "via": [
+          "input"
+        ],
+        "description": "Read CSV/TSV file contents and pipe into csv_analysis."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "csv",
+      "tsv",
+      "qsv",
+      "analysis",
+      "data-processing"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(results)",
+      "token_pressure": "medium"
+    }
+  }
+}

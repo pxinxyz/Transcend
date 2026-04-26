@@ -1,0 +1,278 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "column_extract",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "text_data_processing",
+  "description": "Extracts specific columns from tabular text input using choose, returning structured column arrays with optional truncation. Supports custom delimiters, regex field splitting, and output delimiter control.",
+  "requires": {
+    "primary": {
+      "command": "choose",
+      "min_version": "1.0.0",
+      "note": "Rust-native column extraction tool. Supports 0-based indexing, custom delimiters, and regex field splitting."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the normalization pipeline that parses choose output into structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "cut",
+      "note": "POSIX cut. Reduced fidelity — only supports single-character delimiters, no regex field splitting, 1-based indexing."
+    },
+    "permissions": []
+  },
+  "inputs": {
+    "input": {
+      "type": "string",
+      "default": "",
+      "description": "Tabular text to feed via stdin. If omitted or empty, choose reads from stdin (agent must provide via runtime)."
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "integer"
+      },
+      "required": true,
+      "description": "Column indices to extract. 1-based for cut compatibility; choose adapter subtracts 1 internally.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 100
+      }
+    },
+    "delimiter": {
+      "type": "string",
+      "default": "\t",
+      "description": "Field delimiter character. Default is tab."
+    },
+    "regex": {
+      "type": "boolean",
+      "default": false,
+      "description": "Use regex for field splitting (choose only)."
+    },
+    "output_delimiter": {
+      "type": "string",
+      "default": "\t",
+      "description": "Delimiter for output columns."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Hard upper bound on total results returned."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_results",
+        "truncated",
+        "results"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_results": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of rows returned."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if max_results was reached before all results were returned."
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "columns"
+            ],
+            "properties": {
+              "columns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Extracted column values for this row."
+              }
+            }
+          },
+          "description": "Array of row objects, each containing extracted columns."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if cut fallback was invoked instead of choose."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if cut fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "choose",
+    "args": [
+      "{% if delimiter %}-f \"{{ delimiter }}\"{% endif %}",
+      "{% if output_delimiter %}-o \"{{ output_delimiter }}\"{% endif %}",
+      "{% if regex %}-r{% endif %}",
+      "{% for col in columns %}{{ col - 1 }} {% endfor %}"
+    ],
+    "note": "Tabular input is fed to choose via stdin when the 'input' field is provided. The Transcend runtime pipes the input string directly into choose's stdin stream.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_choose_output",
+        "description": "Parse choose tabular output into structured column arrays. Handles custom output delimiters."
+      },
+      {
+        "step": "truncate_results",
+        "condition": "len(results) > inputs.max_results",
+        "action": "Slice results array to max_results entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce global result limit to preserve token budget."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final success envelope with results array and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "cut",
+      "args": [
+        "{% if delimiter %}-d \"{{ delimiter }}\"{% endif %}",
+        "-f {{ columns | join(',') }}"
+      ],
+      "normalization": "cut_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "regex field splitting is unavailable",
+        "output_delimiter has no effect; cut uses input delimiter",
+        "only single-character delimiters are supported"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "column_array"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/column_extract/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "csv_analysis",
+        "via": [
+          "results"
+        ],
+        "description": "Pipe extracted columns into CSV analysis."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "file_read",
+        "via": [
+          "input"
+        ],
+        "description": "Read tabular file contents and pipe into column_extract."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "choose",
+      "cut",
+      "columns",
+      "tabular",
+      "data-processing"
+    ],
+    "performance": {
+      "typical_execution_ms": 10,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(results)",
+      "token_pressure": "low"
+    }
+  }
+}
