@@ -90,7 +90,7 @@ Examples:
 
 const COMMANDS = ['list', 'show', 'validate', 'test'];
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
 
   // No args → help
@@ -448,4 +448,7 @@ function prettyPrint(result) {
   }
 }
 
-main();
+main().catch(err => {
+  console.error('Fatal error:', err.message);
+  process.exit(1);
+});
