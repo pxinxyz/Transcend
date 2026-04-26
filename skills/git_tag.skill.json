@@ -1,0 +1,336 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_tag",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Manages and lists Git tags with rich metadata. Supports listing tags with annotations, creating annotated and lightweight tags, deleting tags, showing tag details, and verifying tag existence. Distinguishes annotated tags from lightweight tags and parses structured metadata.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      },
+      {
+        "type": "template_engine",
+        "name": "nunjucks",
+        "note": "Nunjucks template engine is required for argument rendering."
+      }
+    ],
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Git repository or a subdirectory within it.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "action": {
+      "type": "string",
+      "enum": ["list", "create", "delete", "show", "verify"],
+      "default": "list",
+      "description": "Tag action to perform. 'list' returns tag metadata. 'create', 'delete', 'show', and 'verify' operate on a specific tag."
+    },
+    "tag_name": {
+      "type": "string",
+      "description": "Name of the tag to create, delete, show, verify, or filter by in list."
+    },
+    "message": {
+      "type": "string",
+      "description": "Annotation message for the new tag (create action with annotate=true)."
+    },
+    "object": {
+      "type": "string",
+      "description": "Commit hash, branch, or tag that the new tag points to. Defaults to HEAD."
+    },
+    "annotate": {
+      "type": "boolean",
+      "default": false,
+      "description": "Create an annotated tag. Adds -a flag."
+    },
+    "force": {
+      "type": "boolean",
+      "default": false,
+      "description": "Force overwrite an existing tag. Adds -f flag."
+    },
+    "sort": {
+      "type": "string",
+      "description": "Sort order for list action (e.g., refname, version:refname, creatordate). Adds --sort flag."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Maximum number of tags to return. Enforced in the normalization pipeline."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "tags",
+        "total_tags",
+        "truncated",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "tags": {
+          "type": "array",
+          "description": "Array of tag objects with rich metadata.",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Tag name."
+              },
+              "annotation": {
+                "type": "string",
+                "description": "First line of the tag annotation or message."
+              },
+              "object": {
+                "type": "string",
+                "description": "Commit hash the tag points to."
+              },
+              "tagger": {
+                "type": "string",
+                "description": "Name and email of the tagger (annotated tags only)."
+              },
+              "date": {
+                "type": "string",
+                "description": "Tag creation date (annotated tags only)."
+              },
+              "message": {
+                "type": "string",
+                "description": "Full annotation message (annotated tags only)."
+              },
+              "annotated": {
+                "type": "boolean",
+                "description": "True if this is an annotated tag."
+              }
+            }
+          }
+        },
+        "total_tags": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of tags in the tags array."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if the result was truncated due to max_results."
+        },
+        "created": {
+          "type": "string",
+          "description": "Name of the tag created. Present only for create action."
+        },
+        "deleted": {
+          "type": "string",
+          "description": "Name of the tag deleted. Present only for delete action."
+        },
+        "verified": {
+          "type": "boolean",
+          "description": "True if the tag exists. Present only for verify action."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "tag_not_found",
+            "tag_already_exists",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the failure."
+        },
+        "exit_code": {
+          "type": ["integer", "null"]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 15000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "{% if action == 'show' %}show{% else %}tag{% endif %}",
+      "{% if action == 'list' %}-n1{% endif %}",
+      "{% if action == 'list' and sort %}--sort={{ sort }}{% endif %}",
+      "{% if action == 'list' and tag_name %}-l {{ tag_name }}{% endif %}",
+      "{% if action == 'create' and annotate %}-a{% endif %}",
+      "{% if action == 'create' and message %}-m \"{{ message }}\"{% endif %}",
+      "{% if action == 'create' and force %}-f{% endif %}",
+      "{% if action == 'delete' %}-d{% endif %}",
+      "{% if action == 'verify' %}-l{% endif %}",
+      "{% if action in ['show','verify','delete'] and tag_name %}{{ tag_name }}{% endif %}",
+      "{% if action == 'create' %}{{ tag_name }}{% endif %}",
+      "{% if action == 'create' and object %}{{ object }}{% endif %}",
+      "{% if action == 'show' %}--quiet{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error",
+      "128": "fatal_git_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_tag",
+        "description": "Parse git tag -n1 output into structured tag objects, or git show --quiet output for annotated tag metadata, or git tag -l output for verify action."
+      },
+      {
+        "step": "git_tag_short",
+        "description": "Fallback parser for plain git tag output when the primary parser yields no results."
+      },
+      {
+        "step": "truncate_tags",
+        "description": "Enforce max_results cap on the tags array. Sets truncated flag if tags are capped."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final envelope with tags array, total_tags, and action-specific fields (created, deleted, verified)."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "tag"
+      ],
+      "normalization": "git_tag_short",
+      "output_gaps": [
+        "annotation messages unavailable",
+        "annotated tag metadata unavailable"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "tag_name",
+        "commit_hash"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_tag/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_log",
+        "via": [
+          "tag_name"
+        ],
+        "description": "Pass tag names to git_log for commit history at a tag."
+      },
+      {
+        "skill": "git_diff",
+        "via": [
+          "tag_name"
+        ],
+        "description": "Pass tag names to git_diff for tag comparison and range diffs."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_status",
+        "via": [
+          "path"
+        ],
+        "description": "Check working tree status before creating tags."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "version-control",
+      "tag",
+      "release"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 15000,
+      "output_scale": "O(tags)",
+      "token_pressure": "low"
+    }
+  }
+}
