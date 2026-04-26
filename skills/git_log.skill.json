@@ -1,0 +1,354 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_log",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Retrieves structured git commit history with rich metadata, optional diff statistics, and changed-file listings. Parses git log output into a typed commits array ready for agent reasoning and downstream chaining.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      },
+      {
+        "type": "template_engine",
+        "name": "nunjucks",
+        "note": "Nunjucks template engine is required for argument rendering."
+      }
+    ],
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "description": "Directory or file path to restrict the log to. Passed after the '--' separator to git log.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "max_commits": {
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Maximum number of commits to return. Enforced via git's -n flag."
+    },
+    "author": {
+      "type": "string",
+      "description": "Filter commits by author name or email pattern."
+    },
+    "since": {
+      "type": "string",
+      "description": "Only show commits more recent than the specified date (e.g., '2024-01-01', '1 week ago')."
+    },
+    "until": {
+      "type": "string",
+      "description": "Only show commits older than the specified date."
+    },
+    "file": {
+      "type": "string",
+      "description": "Specific file path to restrict history to. Passed after '--' separator."
+    },
+    "branch": {
+      "type": "string",
+      "description": "Branch name, tag, or revision range to log (e.g., 'main', 'v1.0..HEAD'). Defaults to HEAD."
+    },
+    "grep": {
+      "type": "string",
+      "description": "Filter commits whose message matches the given pattern."
+    },
+    "include_stats": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include per-commit diff statistics (files changed, insertions, deletions). Adds --stat flag."
+    },
+    "include_files": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include the list of files changed per commit. Adds --name-only flag."
+    },
+    "format": {
+      "type": "string",
+      "enum": ["structured", "oneline"],
+      "default": "structured",
+      "description": "Output format. 'structured' returns rich typed commits. 'oneline' returns abbreviated single-line commits."
+    },
+    "all_branches": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include commits from all branches, not just the current one. Adds --all flag."
+    },
+    "no_merges": {
+      "type": "boolean",
+      "default": false,
+      "description": "Exclude merge commits from the results. Adds --no-merges flag."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "total_commits",
+        "commits",
+        "truncated",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "total_commits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of commits returned in the commits array."
+        },
+        "commits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "hash",
+              "short_hash",
+              "subject",
+              "body",
+              "author",
+              "committer",
+              "date",
+              "date_relative"
+            ],
+            "properties": {
+              "hash": {
+                "type": "string",
+                "description": "Full 40-character SHA-1 commit hash."
+              },
+              "short_hash": {
+                "type": "string",
+                "description": "Abbreviated commit hash."
+              },
+              "subject": {
+                "type": "string",
+                "description": "First line of the commit message (subject)."
+              },
+              "body": {
+                "type": "string",
+                "description": "Remaining lines of the commit message after the subject. Empty string if no body."
+              },
+              "author": {
+                "type": "string",
+                "description": "Name of the author who wrote the commit."
+              },
+              "committer": {
+                "type": "string",
+                "description": "Name of the committer who applied the commit."
+              },
+              "date": {
+                "type": "string",
+                "description": "Author date in strict ISO 8601 format."
+              },
+              "date_relative": {
+                "type": "string",
+                "description": "Human-readable relative date (e.g., '2 days ago')."
+              },
+              "stats": {
+                "type": "object",
+                "description": "Present only when include_stats is true.",
+                "properties": {
+                  "files": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "insertions": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "deletions": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "files_changed": {
+                "type": "array",
+                "description": "Present only when include_files is true.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if the result was truncated due to max_commits or internal limits."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the failure."
+        },
+        "exit_code": {
+          "type": ["integer", "null"]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "git",
+    "args": [
+      "log",
+      "{% if format == 'oneline' %}--oneline{% else %}--pretty=format:>>>COMMIT_START<<<%n%H%n%h%n%s%n%b%n>>>META<<<%n%an%n%cn%n%aI%n%ar%n>>>COMMIT_END<<<{% endif %}",
+      "{% if max_commits %}-n {{ max_commits }}{% endif %}",
+      "{% if author %}--author={{ author }}{% endif %}",
+      "{% if since %}--since={{ since }}{% endif %}",
+      "{% if until %}--until={{ until }}{% endif %}",
+      "{% if grep %}--grep={{ grep }}{% endif %}",
+      "{% if no_merges %}--no-merges{% endif %}",
+      "{% if all_branches %}--all{% endif %}",
+      "{% if include_stats %}--stat{% endif %}",
+      "{% if include_files %}--name-only{% endif %}",
+      "{% if branch %}{{ branch }}{% endif %}",
+      "{% if path or file %}--{% endif %}",
+      "{% if file %}{{ file }}{% endif %}",
+      "{% if path %}{{ path }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "128": "fatal_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_log",
+        "description": "Parse git log plaintext output into structured commit objects using a block-based approach. Works backwards from fixed metadata fields to extract variable-length commit bodies."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge all extracted commits into the success output envelope."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "commit_hash",
+        "file_path",
+        "author_name"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_commit/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "files_changed"
+        ],
+        "description": "Pass changed file paths to view surrounding content at a specific commit."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "files_changed"
+        ],
+        "description": "Search within files that were modified in the retrieved commits."
+      },
+      {
+        "skill": "find_replace",
+        "via": [
+          "files_changed"
+        ],
+        "description": "Perform targeted replacements on files changed in recent commits."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_list",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a repository path to scope the git log query."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "version-control",
+      "history",
+      "commits",
+      "diff"
+    ],
+    "performance": {
+      "typical_execution_ms": 100,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(commits)",
+      "token_pressure": "medium"
+    }
+  }
+}
