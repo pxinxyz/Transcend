@@ -5,12 +5,15 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 import { TranscendRuntime, createRuntime } from '../lib/TranscendRuntime.js';
 import { SkillLoader } from '../lib/SkillLoader.js';
 import { NunjucksEngine } from '../lib/NunjucksEngine.js';
 
-const TEST_DIR = new URL('.', import.meta.url).pathname;
-const SKILLS_DIR = TEST_DIR.replace('/test/', '/skills/');
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const SKILLS_DIR = join(__dirname, '..', 'skills');
 
 describe('TranscendRuntime', () => {
   it('creates runtime with default options', () => {
