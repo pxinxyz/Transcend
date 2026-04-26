@@ -1,0 +1,346 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_blame",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Retrieves per-line commit annotations for a file using git blame --porcelain. Outputs structured line-by-line metadata including commit hash, author, date, summary, and line text with commit caching for consecutive lines. Falls back to --line-porcelain for maximum compatibility.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0",
+      "note": "Git porcelain blame format with commit caching for consecutive lines from the same commit."
+    },
+    "fallback": {
+      "command": "git",
+      "note": "git blame --line-porcelain. Slightly higher token pressure because metadata is repeated for every line, but identical schema output."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Repository root path. Passed as -C to git blame."
+    },
+    "file": {
+      "type": "string",
+      "required": true,
+      "description": "File path to blame, relative to the repository root."
+    },
+    "line_start": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Start line number. Passed as -L start,end."
+    },
+    "line_end": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "End line number. Requires line_start to be effective."
+    },
+    "since": {
+      "type": "string",
+      "description": "Ignore revisions older than this date. Passed as --since."
+    },
+    "ignore_revs_file": {
+      "type": "string",
+      "description": "Path to a file listing revisions to ignore. Passed as --ignore-revs-file."
+    },
+    "show_email": {
+      "type": "boolean",
+      "default": false,
+      "description": "Return author email instead of author name."
+    },
+    "max_lines": {
+      "type": "integer",
+      "default": 500,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum number of blame lines to return. Enforced in the normalization pipeline."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "file",
+        "total_lines",
+        "lines",
+        "truncated",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "file": {
+          "type": "string",
+          "description": "The file path that was blamed."
+        },
+        "total_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of lines in the output lines array."
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "line_number",
+              "commit_hash",
+              "short_commit",
+              "author",
+              "date",
+              "date_relative",
+              "summary",
+              "line_text"
+            ],
+            "properties": {
+              "line_number": {
+                "type": "integer",
+                "description": "Line number in the blamed file."
+              },
+              "commit_hash": {
+                "type": "string",
+                "description": "Full 40-character SHA-1 commit hash."
+              },
+              "short_commit": {
+                "type": "string",
+                "description": "Abbreviated 7-character commit hash."
+              },
+              "author": {
+                "type": "string",
+                "description": "Author name (or email when show_email is true)."
+              },
+              "date": {
+                "type": "string",
+                "description": "Author date in strict ISO 8601 format."
+              },
+              "date_relative": {
+                "type": "string",
+                "description": "Human-readable relative date (e.g., '2 days ago')."
+              },
+              "summary": {
+                "type": "string",
+                "description": "First line of the commit message (subject)."
+              },
+              "line_text": {
+                "type": "string",
+                "description": "The actual line content from the file."
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if the result was capped by max_lines."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if --line-porcelain fallback was used."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "path_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the failure."
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "git",
+    "args": [
+      "{% if path %}-C{% endif %}",
+      "{% if path %}{{ path }}{% endif %}",
+      "blame",
+      "--porcelain",
+      "{% if line_start and line_end %}-L {{ line_start }},{{ line_end }}{% elif line_start %}-L {{ line_start }}{% endif %}",
+      "{% if since %}--since={{ since }}{% endif %}",
+      "{% if ignore_revs_file %}--ignore-revs-file={{ ignore_revs_file }}{% endif %}",
+      "{{ file }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "128": "fatal_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_blame",
+        "description": "Parse git blame --porcelain output into structured line annotations. Uses commit metadata caching for consecutive lines from the same commit. Handles both --porcelain and --line-porcelain output."
+      },
+      {
+        "step": "truncate_blame_lines",
+        "description": "Enforce max_lines cap. Sets truncated flag if output is capped."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge parsed blame lines into the success envelope with file path, total_lines, and truncation flag."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "nonzero_exit",
+      "command": "git",
+      "args": [
+        "{% if path %}-C{% endif %}",
+        "{% if path %}{{ path }}{% endif %}",
+        "blame",
+        "--line-porcelain",
+        "{% if line_start and line_end %}-L {{ line_start }},{{ line_end }}{% elif line_start %}-L {{ line_start }}{% endif %}",
+        "{% if since %}--since={{ since }}{% endif %}",
+        "{% if ignore_revs_file %}--ignore-revs-file={{ ignore_revs_file }}{% endif %}",
+        "{{ file }}"
+      ],
+      "normalization": "git_blame_line_porcelain",
+      "output_gaps": [
+        "token pressure is higher because commit metadata is repeated for every line instead of cached across consecutive lines"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "commit_hash",
+        "file_path",
+        "author_name",
+        "line_range"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_blame/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_log",
+        "via": [
+          "commit_hash"
+        ],
+        "description": "Pass commit hashes to git_log to retrieve full commit details."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "file",
+          "line_number"
+        ],
+        "description": "View the blamed file at specific line numbers."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "file"
+        ],
+        "description": "Search within the blamed file for additional context."
+      },
+      {
+        "skill": "find_replace",
+        "via": [
+          "file"
+        ],
+        "description": "Perform replacements on the blamed file."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_status",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a repository path and file from git_status to scope the blame."
+      },
+      {
+        "skill": "git_diff",
+        "via": [
+          "file"
+        ],
+        "description": "Blame files that appeared in a diff to understand recent changes."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "blame",
+      "version-control",
+      "annotations",
+      "line-history"
+    ],
+    "performance": {
+      "typical_execution_ms": 200,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(lines)",
+      "token_pressure": "medium"
+    }
+  }
+}
