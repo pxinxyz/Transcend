@@ -1,0 +1,347 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "file_find",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "search_navigation",
+  "description": "Blazing fast filesystem discovery by name, type, and size using fd. Returns structured file listings ready for downstream chaining into find_replace, codebase_analysis, and universal_search.",
+  "requires": {
+    "primary": {
+      "command": "fd",
+      "min_version": "8.0.0",
+      "note": "Rust-native find alternative with intuitive syntax, regex support, and .gitignore awareness."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "find",
+      "note": "POSIX find. Reduced fidelity — no .gitignore awareness, no regex name matching (glob only), no size/changed filters, slower performance."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "pattern": {
+      "type": "string",
+      "required": true,
+      "description": "Regex or literal pattern to match filenames.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 1024
+      }
+    },
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Root directory to search.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "file",
+        "directory",
+        "symlink",
+        "any"
+      ],
+      "default": "any",
+      "description": "Filter by file type."
+    },
+    "extension": {
+      "type": "string",
+      "description": "File extension filter (e.g., 'ts', 'js')."
+    },
+    "max_depth": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Maximum search depth."
+    },
+    "hidden": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include hidden files and directories."
+    },
+    "no_ignore": {
+      "type": "boolean",
+      "default": false,
+      "description": "Respect no .gitignore — search all files including ignored ones."
+    },
+    "follow_symlinks": {
+      "type": "boolean",
+      "default": false,
+      "description": "Follow symbolic links during traversal."
+    },
+    "size": {
+      "type": "string",
+      "description": "Size filter (e.g., '+1k', '-100M')."
+    },
+    "changed_within": {
+      "type": "string",
+      "description": "Modified within duration (e.g., '1h', '7d')."
+    },
+    "changed_before": {
+      "type": "string",
+      "description": "Modified before duration (e.g., '1h', '7d')."
+    },
+    "exclude": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Glob patterns to exclude."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 1000,
+      "minimum": 1,
+      "description": "Cap results. Enforced in the normalization pipeline."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "files",
+        "total_files",
+        "truncated"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "name",
+              "type"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "file",
+                  "directory",
+                  "symlink"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "description": "File size in bytes. Only available when primary command supports it."
+              },
+              "modified": {
+                "type": "string",
+                "description": "ISO 8601 modification timestamp. Only available when primary command supports it."
+              }
+            }
+          }
+        },
+        "total_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "fd",
+    "args": [
+      "{% if type == 'file' %}-t f{% elif type == 'directory' %}-t d{% elif type == 'symlink' %}-t l{% endif %}",
+      "{% if extension %}-e {{ extension }}{% endif %}",
+      "{% if max_depth %}-d {{ max_depth }}{% endif %}",
+      "{% if hidden %}-H{% endif %}",
+      "{% if no_ignore %}-I{% endif %}",
+      "{% if follow_symlinks %}-L{% endif %}",
+      "{% if size %}--size {{ size }}{% endif %}",
+      "{% if changed_within %}--changed-within {{ changed_within }}{% endif %}",
+      "{% if changed_before %}--changed-before {{ changed_before }}{% endif %}",
+      "{% for ex in exclude %}--exclude {{ ex }}{% endfor %}",
+      "{{ pattern }}",
+      "{{ path }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "no_matches"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_fd_output",
+        "description": "Parse fd output (one path per line) into structured file records with path, name, and inferred type."
+      },
+      {
+        "step": "truncate_results",
+        "description": "Enforce max_results cap in the pipeline."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build file_find envelope with files array, total_files, and truncated flag."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "find",
+      "args": [
+        "{{ path }}",
+        "{% if type == 'file' %}-type f{% elif type == 'directory' %}-type d{% elif type == 'symlink' %}-type l{% endif %}",
+        "{% if max_depth %}-maxdepth {{ max_depth }}{% endif %}",
+        "-name",
+        "\"*{{ pattern }}*\""
+      ],
+      "normalization": "find_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no size or modified timestamps",
+        "no .gitignore awareness",
+        "pattern treated as glob substring instead of regex",
+        "no extension, size, changed_within, changed_before, or exclude filters",
+        "hidden, no_ignore, and follow_symlinks options have no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "file_path",
+        "directory_path"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/file_find/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "find_replace",
+        "via": [
+          "files.path"
+        ],
+        "description": "Pass discovered file paths to find_replace for targeted replacement."
+      },
+      {
+        "skill": "codebase_analysis",
+        "via": [
+          "files.path"
+        ],
+        "description": "Pass discovered file paths to codebase_analysis for language metrics."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "files.path"
+        ],
+        "description": "Pass discovered file paths to universal_search for content search."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_jump",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a directory path from zoxide/find to scope file discovery."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "fd",
+      "find",
+      "filesystem",
+      "discovery",
+      "search"
+    ],
+    "performance": {
+      "typical_execution_ms": 20,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(files)",
+      "token_pressure": "low"
+    }
+  }
+}
