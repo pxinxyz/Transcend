@@ -1,0 +1,386 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_status",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Returns a structured view of the working tree status: staged changes, modified files, untracked files, branch position relative to upstream, and conflict markers. No raw porcelain parsing required by the agent.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0",
+      "note": "Git porcelain v1 format with --branch extension. Provides dual-status tracking (index vs worktree), rename detection, and submodule awareness."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0",
+        "note": "Required to execute the normalization pipeline that parses porcelain output into structured JSON."
+      }
+    ],
+    "fallback": {
+      "command": "git",
+      "note": "git status --short. Reduced fidelity — no branch ahead/behind counts, no upstream name, no rename tracking, no submodule detail."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "description": "Path to the Git repository or a subdirectory within it.",
+      "default": ".",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "untracked_files": {
+      "type": "string",
+      "enum": [
+        "all",
+        "normal",
+        "no"
+      ],
+      "default": "normal",
+      "description": "Control display of untracked files. 'all' shows individual files in untracked directories. 'normal' shows directories only. 'no' suppresses untracked files entirely."
+    },
+    "ignored": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include ignored files in the output. Useful for auditing .gitignore coverage."
+    },
+    "branch": {
+      "type": "boolean",
+      "default": true,
+      "description": "Include branch name, upstream, and ahead/behind counts in the output."
+    },
+    "renames": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable rename detection. When false, renamed files appear as a deletion + addition pair."
+    },
+    "submodules": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include submodule status in the output. When false, submodule changes are suppressed."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "is_clean",
+        "files",
+        "summary"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "is_clean": {
+          "type": "boolean",
+          "description": "True when there are no changes in the index or worktree, no untracked files, and no conflicts."
+        },
+        "branch": {
+          "type": "object",
+          "description": "Omitted entirely when branch input is false to preserve token density.",
+          "required": [
+            "name",
+            "detached"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Current branch name or short commit SHA when detached."
+            },
+            "upstream": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Tracked upstream branch (e.g. origin/main). Null if no upstream is set."
+            },
+            "ahead": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of commits ahead of upstream."
+            },
+            "behind": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of commits behind upstream."
+            },
+            "detached": {
+              "type": "boolean",
+              "description": "True when HEAD is not on a named branch."
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "description": "Per-file change entries with dual-status tracking.",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "index_status",
+              "worktree_status"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Relative path from repository root."
+              },
+              "original_path": {
+                "type": "string",
+                "description": "For renames, the source path. Omitted when not a rename."
+              },
+              "index_status": {
+                "type": "string",
+                "description": "Single-character status in the index (staged). ' ' = unmodified, M = modified, A = added, D = deleted, R = renamed, C = copied, U = updated but unmerged.",
+                "pattern": "^[ MADRCU.]$"
+              },
+              "worktree_status": {
+                "type": "string",
+                "description": "Single-character status in the worktree. Same codes as index_status, plus ? = untracked, ! = ignored.",
+                "pattern": "^[ MADRCU?!.]$"
+              }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "staged",
+            "modified",
+            "untracked",
+            "conflicted",
+            "ignored"
+          ],
+          "properties": {
+            "staged": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Files with a non-space index_status."
+            },
+            "modified": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Files with a non-space worktree_status that is not ?, !, or U."
+            },
+            "untracked": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Files with worktree_status '?' (present only when untracked_files is not 'no')."
+            },
+            "conflicted": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Files with index_status or worktree_status 'U'."
+            },
+            "ignored": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Files with worktree_status '!' (present only when ignored is true)."
+            }
+          }
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories (e.g. large working tree, submodule errors)."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "permission_denied",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the failure."
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 15000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "status",
+      "--porcelain",
+      "{% if branch %}--branch{% else %}--no-branch{% endif %}",
+      "{% if untracked_files == 'all' %}--untracked-files=all{% elif untracked_files == 'no' %}--untracked-files=no{% endif %}",
+      "{% if ignored %}--ignored{% endif %}",
+      "{% if not renames %}--no-renames{% endif %}",
+      "{% if submodules %}--ignore-submodules=none{% else %}--ignore-submodules=all{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "128": "fatal_git_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_status",
+        "description": "Parse porcelain v1 output into structured file entries and branch metadata. Extract XY status codes, path, original path for renames, and branch lines."
+      },
+      {
+        "step": "compute_summary",
+        "description": "Roll up counts: staged, modified, untracked, conflicted, ignored. Set is_clean when all counts are zero and no files array entries exist."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge parsed files, branch object, summary roll-ups, and is_clean flag into the success envelope. Omit branch object when branch input is false."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "status",
+        "--short"
+      ],
+      "normalization": "git_short_to_transcend_schema",
+      "output_gaps": [
+        "branch name may be absent or incomplete",
+        "upstream name unavailable",
+        "ahead/behind counts unavailable",
+        "dual-status tracking simplified (no index vs worktree separation)",
+        "rename detection unavailable (renames shown as delete/add)",
+        "submodule status unavailable",
+        "ignored files list may be incomplete"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "file_path",
+        "git_status"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_status/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_diff",
+        "via": [
+          "path"
+        ],
+        "description": "Pass modified or staged file paths to git_diff for detailed patch review."
+      },
+      {
+        "skill": "find_replace",
+        "via": [
+          "path"
+        ],
+        "description": "Feed worktree-modified file paths into find_replace for bulk refactoring."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "path"
+        ],
+        "description": "View the content of changed files to understand context before committing."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "path"
+        ],
+        "description": "Search within the set of changed files for specific patterns or TODOs."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_list",
+        "via": [
+          "path"
+        ],
+        "description": "Receive a repository path from directory_list to scope the status check."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "version-control",
+      "status",
+      "working-tree",
+      "diff"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 15000,
+      "output_scale": "O(files)",
+      "token_pressure": "low"
+    }
+  }
+}
