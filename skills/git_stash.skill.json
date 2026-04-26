@@ -1,0 +1,391 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_stash",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Manages git stashes with structured list, push, apply, pop, drop, show, clear, and branch actions. Returns typed stash metadata including per-file statistics via numstat parsing.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Git repository.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "action": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "list",
+        "push",
+        "apply",
+        "pop",
+        "drop",
+        "show",
+        "clear",
+        "branch"
+      ],
+      "description": "Stash action to perform."
+    },
+    "message": {
+      "type": "string",
+      "description": "Message for the new stash (push action only)."
+    },
+    "include_untracked": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include untracked files in the stash (push action only)."
+    },
+    "keep_index": {
+      "type": "boolean",
+      "default": false,
+      "description": "Keep changes in the index after stashing (push action only)."
+    },
+    "stash_index": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "description": "Index of the stash to target (apply, pop, drop, show, branch)."
+    },
+    "branch_name": {
+      "type": "string",
+      "description": "Name of the branch to create from a stash (branch action only)."
+    },
+    "max_results": {
+      "type": "integer",
+      "default": 50,
+      "minimum": 1,
+      "maximum": 1000,
+      "description": "Maximum number of stashes to return (list action only)."
+    },
+    "quiet": {
+      "type": "boolean",
+      "default": false,
+      "description": "Suppress non-error output for mutating actions."
+    },
+    "include_patch": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show full patch diff instead of numstat for show action."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "action",
+        "total_stashes",
+        "stashes",
+        "truncated",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "list",
+            "push",
+            "apply",
+            "pop",
+            "drop",
+            "show",
+            "clear",
+            "branch"
+          ]
+        },
+        "total_stashes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of stash entries returned in the stashes array."
+        },
+        "stashes": {
+          "type": "array",
+          "description": "Stash entries. For list action includes metadata; for show action includes per-file stats.",
+          "items": {
+            "type": "object",
+            "required": [
+              "index"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "description": "Stash reflog index (e.g. 0 for stash@{0})."
+              },
+              "message": {
+                "type": "string",
+                "description": "Stash message. May be empty for show action."
+              },
+              "hash": {
+                "type": "string",
+                "description": "Commit hash of the stash. May be empty for fallback parsing."
+              },
+              "date": {
+                "type": "string",
+                "description": "ISO 8601 committer date. May be empty for fallback parsing."
+              },
+              "date_relative": {
+                "type": "string",
+                "description": "Human-readable relative date. May be empty for fallback parsing."
+              },
+              "files": {
+                "type": "array",
+                "description": "Per-file statistics from numstat. Present for show action when include_patch is false.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "path",
+                    "additions",
+                    "deletions"
+                  ],
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "additions": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "deletions": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if the result was truncated due to max_results."
+        },
+        "created": {
+          "type": "boolean",
+          "description": "Present for push action when a stash was created."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "Present for apply/pop actions when stash was applied."
+        },
+        "dropped": {
+          "type": "boolean",
+          "description": "Present for pop/drop actions when stash was removed."
+        },
+        "cleared": {
+          "type": "boolean",
+          "description": "Present for clear action when all stashes were removed."
+        },
+        "branched": {
+          "type": "boolean",
+          "description": "Present for branch action when a branch was created."
+        },
+        "branch_name": {
+          "type": "string",
+          "description": "Present for branch action with the created branch name."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 15000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "stash",
+      "{% if action == 'list' %}list{% elif action == 'push' %}push{% elif action == 'apply' %}apply{% elif action == 'pop' %}pop{% elif action == 'drop' %}drop{% elif action == 'show' %}show{% elif action == 'clear' %}clear{% elif action == 'branch' %}branch{% endif %}",
+      "{% if action == 'list' %}--pretty=format:>>>STASH_START<<<%n%gd%n%H%n%s%n%ci%n%ar%n>>>STASH_END<<<{% endif %}",
+      "{% if action == 'push' and message %}-m {{ message }}{% endif %}",
+      "{% if action == 'push' and include_untracked %}-u{% endif %}",
+      "{% if action == 'push' and keep_index %}-k{% endif %}",
+      "{% if action == 'push' and quiet %}-q{% endif %}",
+      "{% if action == 'show' and not include_patch %}--numstat{% endif %}",
+      "{% if action == 'show' and include_patch %}-p{% endif %}",
+      "{% if action in ['apply','pop','drop','show'] %}{% set stash_ref = 'stash@{' ~ stash_index ~ '}' %}{{ stash_ref }}{% endif %}",
+      "{% if action == 'branch' and branch_name %}{{ branch_name }}{% endif %}",
+      "{% if action == 'branch' and stash_index is not none %}{% set stash_ref = 'stash@{' ~ stash_index ~ '}' %}{{ stash_ref }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "128": "fatal_git_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_stash",
+        "description": "Parse git stash list structured output or show numstat lines into typed stash objects. Includes fallback parsing for plaintext stash@{N}: message format."
+      },
+      {
+        "step": "truncate_stashes",
+        "description": "Enforce max_results cap on the stashes array."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge parsed stashes, action metadata, and action-specific flags into the success envelope."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "stash",
+        "{% if action == 'list' %}list{% elif action == 'push' %}push{% elif action == 'apply' %}apply{% elif action == 'pop' %}pop{% elif action == 'drop' %}drop{% elif action == 'show' %}show{% elif action == 'clear' %}clear{% elif action == 'branch' %}branch{% endif %}",
+        "{% if action == 'push' and message %}-m {{ message }}{% endif %}",
+        "{% if action == 'push' and include_untracked %}-u{% endif %}",
+        "{% if action == 'push' and keep_index %}-k{% endif %}",
+        "{% if action in ['apply','pop','drop','show'] %}{% set stash_ref = 'stash@{' ~ stash_index ~ '}' %}{{ stash_ref }}{% endif %}",
+        "{% if action == 'branch' and branch_name %}{{ branch_name }}{% endif %}",
+        "{% if action == 'branch' and stash_index is not none %}{% set stash_ref = 'stash@{' ~ stash_index ~ '}' %}{{ stash_ref }}{% endif %}"
+      ],
+      "normalization": "git_stash_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "stash list lacks structured format; dates and hashes may be unavailable",
+        "numstat parsing unavailable for show action in fallback mode"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "git_stash"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_stash/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_diff",
+        "via": [
+          "stashes.files.path"
+        ],
+        "description": "Diff files referenced in a stash entry."
+      },
+      {
+        "skill": "git_status",
+        "via": [
+          "path"
+        ],
+        "description": "Check working tree status after applying or popping a stash."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_status",
+        "via": [
+          "path"
+        ],
+        "description": "Check for uncommitted changes before stashing."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "stash",
+      "version-control"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 15000,
+      "output_scale": "O(stashes)",
+      "token_pressure": "low"
+    }
+  }
+}
