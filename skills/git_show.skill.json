@@ -1,0 +1,484 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_show",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Displays structured information about Git objects — commits, trees, blobs, and tags. Auto-detects object type from output structure. Supports rich metadata extraction, diff inclusion, and statistics.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      },
+      {
+        "type": "template_engine",
+        "name": "nunjucks",
+        "note": "Nunjucks template engine is required for argument rendering."
+      }
+    ],
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Git repository or a subdirectory within it.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "object": {
+      "type": "string",
+      "description": "Git object to show — commit hash, tree hash, blob hash, or tag name. Defaults to HEAD if omitted."
+    },
+    "type": {
+      "type": "string",
+      "enum": ["commit", "tree", "blob", "tag"],
+      "description": "Expected object type. When omitted, the type is auto-detected from the output structure."
+    },
+    "include_diff": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include the full patch diff for commits. Adds --patch flag."
+    },
+    "include_stats": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include per-file diff statistics (additions, deletions, files changed). Adds --numstat flag."
+    },
+    "max_files": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum number of files to include in diff output or tree entries. Enforced in the normalization pipeline."
+    },
+    "max_lines_per_file": {
+      "type": "integer",
+      "default": 500,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum lines per file diff or blob lines to include. Enforced in the normalization pipeline."
+    },
+    "format": {
+      "type": "string",
+      "enum": ["structured", "oneline"],
+      "default": "structured",
+      "description": "Output format. 'structured' returns rich typed output. 'oneline' returns abbreviated single-line output."
+    },
+    "show_email": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show author/committer email instead of name for commits. Handled in normalization."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "type"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["commit", "tree", "blob", "tag"],
+          "description": "Detected or provided object type."
+        },
+        "hash": {
+          "type": "string",
+          "description": "Full hash (commit/blob) or object hash (tag). Present for commits and tags."
+        },
+        "short_hash": {
+          "type": "string",
+          "description": "Abbreviated hash. Present for commits."
+        },
+        "author": {
+          "type": "string",
+          "description": "Author name or email (commit only)."
+        },
+        "committer": {
+          "type": "string",
+          "description": "Committer name or email (commit only)."
+        },
+        "date": {
+          "type": "string",
+          "description": "Author date in ISO format (commit only)."
+        },
+        "date_relative": {
+          "type": "string",
+          "description": "Human-readable relative date (commit only)."
+        },
+        "committer_date": {
+          "type": "string",
+          "description": "Committer date in ISO format (commit only)."
+        },
+        "subject": {
+          "type": "string",
+          "description": "Subject line (commit only)."
+        },
+        "body": {
+          "type": "string",
+          "description": "Commit message body (commit only)."
+        },
+        "stats": {
+          "type": "object",
+          "description": "Diff statistics (commit only, when include_stats is true).",
+          "properties": {
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "insertions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deletions": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        },
+        "diffs": {
+          "type": "array",
+          "description": "Per-file diff hunks (commit only, when include_diff is true).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "change_type": {
+                "type": "string",
+                "enum": ["added", "modified", "deleted", "renamed"]
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "header": {
+                      "type": "string"
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": ["context", "addition", "deletion"]
+                          },
+                          "content": {
+                            "type": "string"
+                          },
+                          "old_line_number": {
+                            "type": ["integer", "null"]
+                          },
+                          "new_line_number": {
+                            "type": ["integer", "null"]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "entries": {
+          "type": "array",
+          "description": "Tree entries (tree only).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": ["blob", "tree"]
+              },
+              "hash": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "total_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of tree entries (tree only)."
+        },
+        "content": {
+          "type": "string",
+          "description": "Raw content (blob only)."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Content size in bytes (blob only)."
+        },
+        "lines": {
+          "type": "array",
+          "description": "Content split into lines (blob only).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string",
+          "description": "Tag name (tag only)."
+        },
+        "object": {
+          "type": "string",
+          "description": "Object the tag points to (tag only)."
+        },
+        "tagger": {
+          "type": "string",
+          "description": "Tagger name and email (tag only)."
+        },
+        "message": {
+          "type": "string",
+          "description": "Full tag message (tag only)."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if output was capped by max_files or max_lines_per_file."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "object_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": ["integer", "null"]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "show",
+      "{% if format == 'oneline' %}--oneline{% else %}--pretty=format:>>>COMMIT_START<<<%n%H%n%h%n%s%n%b%n>>>META<<<%n%an%n%ae%n%cn%n%ce%n%aI%n%ar%n%cI%n>>>COMMIT_END<<<{% endif %}",
+      "{% if include_diff %}--patch{% elif include_stats %}--numstat{% else %}--no-patch{% endif %}",
+      "{% if object %}{{ object }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "128": "fatal_git_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_show",
+        "description": "Parse git show output into structured objects. Auto-detects type from output structure (commit markers, tree entries, tag prefix, or raw blob content)."
+      },
+      {
+        "step": "git_show_short",
+        "description": "Fallback parser for --oneline output when the primary parser yields no structured result."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final envelope with type-specific fields (commit metadata, tree entries, blob content, tag metadata)."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "show",
+        "--oneline",
+        "{% if object %}{{ object }}{% endif %}"
+      ],
+      "normalization": "git_show_short",
+      "output_gaps": [
+        "Full commit metadata unavailable (author, committer, date, body)",
+        "Diff output unavailable in oneline mode",
+        "Stats output unavailable in oneline mode",
+        "Tree and blob object details unavailable in oneline mode"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "commit_hash",
+        "file_path",
+        "tag_name"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_object/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_diff",
+        "via": [
+          "hash"
+        ],
+        "description": "Pass commit hash to git_diff for range diffs."
+      },
+      {
+        "skill": "git_log",
+        "via": [
+          "hash"
+        ],
+        "description": "Pass commit hash to git_log for history at that commit."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "diffs.file",
+          "entries.path"
+        ],
+        "description": "View files referenced in diffs or tree entries."
+      },
+      {
+        "skill": "git_blame",
+        "via": [
+          "diffs.file"
+        ],
+        "description": "Blame files that were changed in the commit."
+      },
+      {
+        "skill": "git_branch",
+        "via": [
+          "hash"
+        ],
+        "description": "Use commit hash for branch operations."
+      },
+      {
+        "skill": "git_tag",
+        "via": [
+          "name",
+          "hash"
+        ],
+        "description": "Pass tag name or commit hash to git_tag."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_log",
+        "via": [
+          "hash"
+        ],
+        "description": "Show details of a commit discovered via git_log."
+      },
+      {
+        "skill": "git_diff",
+        "via": [
+          "hash"
+        ],
+        "description": "Show a commit referenced in a diff range."
+      },
+      {
+        "skill": "git_branch",
+        "via": [
+          "branch_name"
+        ],
+        "description": "Show the HEAD commit of a branch."
+      },
+      {
+        "skill": "git_tag",
+        "via": [
+          "tag_name"
+        ],
+        "description": "Show an annotated tag discovered via git_tag."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "version-control",
+      "show",
+      "commit",
+      "tree",
+      "blob",
+      "tag"
+    ],
+    "performance": {
+      "typical_execution_ms": 100,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(files * lines)",
+      "token_pressure": "medium"
+    }
+  }
+}
