@@ -1,0 +1,475 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_diff",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development",
+  "description": "Generates structured, token-efficient diff output from Git repositories using delta (with git diff fallback). Supports working tree, staged, commit range, branch, and single-file modes. Output includes per-file change types, hunks with @@ headers, and classified lines with old/new line numbers ready for agent reasoning.",
+  "requires": {
+    "primary": {
+      "command": "delta",
+      "min_version": "0.16.0",
+      "note": "Rust-native syntax-highlighting diff pager. Provides side-by-side view, colourised unified diff, and themeable output. Passes unrecognised flags to git diff."
+    },
+    "fallback": {
+      "command": "git",
+      "note": "POSIX git diff. Reduced fidelity \u2014 no side-by-side layout, no syntax highlighting, basic colour only. Raw unified diff output."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "mode": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "working_tree",
+        "staged",
+        "commit_range",
+        "branch",
+        "file"
+      ],
+      "description": "Diff mode. 'working_tree' shows unstaged changes. 'staged' shows index changes. 'commit_range' diff two commits (source..target). 'branch' diff since merge-base (source...target). 'file' diff a specific path."
+    },
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Repository root or path filter. Defaults to current directory. Ignored in 'file' mode when target is provided."
+    },
+    "target": {
+      "type": "string",
+      "description": "Target commit, branch, or file path depending on mode. Required by commit_range, branch, and file modes."
+    },
+    "source": {
+      "type": "string",
+      "description": "Source commit or branch for commit_range and branch modes."
+    },
+    "side_by_side": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable side-by-side layout. Delta only; no effect on git fallback."
+    },
+    "color": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable colourised output. Normalisation pipeline strips ANSI codes if needed."
+    },
+    "ignore_whitespace": {
+      "type": "boolean",
+      "default": false,
+      "description": "Ignore all whitespace when comparing lines. Maps to -w."
+    },
+    "ignore_space_change": {
+      "type": "boolean",
+      "default": false,
+      "description": "Ignore changes in amount of whitespace. Maps to -b."
+    },
+    "stat_only": {
+      "type": "boolean",
+      "default": false,
+      "description": "Show only diffstat (file change summary) instead of full hunks."
+    },
+    "max_files": {
+      "type": "integer",
+      "default": 100,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum number of files to include in output. Enforced in the normalisation pipeline."
+    },
+    "max_lines_per_file": {
+      "type": "integer",
+      "default": 500,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Maximum lines per file diff to include in output. Enforced in the normalisation pipeline."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "mode",
+        "total_files",
+        "total_hunks",
+        "total_additions",
+        "total_deletions",
+        "truncated",
+        "diffs"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "working_tree",
+            "staged",
+            "commit_range",
+            "branch",
+            "file"
+          ]
+        },
+        "total_files": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of files with changes in the diff."
+        },
+        "total_hunks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total hunks across all files."
+        },
+        "total_additions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total lines added across all files."
+        },
+        "total_deletions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total lines deleted across all files."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True if output was capped by max_files or max_lines_per_file."
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if git diff fallback was invoked instead of delta."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "diffs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "file",
+              "change_type",
+              "hunks"
+            ],
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "File path relative to repository root."
+              },
+              "old_file": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Original file path for renames. Null for non-renames."
+              },
+              "change_type": {
+                "type": "string",
+                "enum": [
+                  "added",
+                  "modified",
+                  "deleted",
+                  "renamed"
+                ]
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "header",
+                    "lines"
+                  ],
+                  "properties": {
+                    "header": {
+                      "type": "string",
+                      "description": "The @@ hunk header, e.g. '@@ -10,5 +10,7 @@'."
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "type",
+                          "content"
+                        ],
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "context",
+                              "addition",
+                              "deletion"
+                            ]
+                          },
+                          "old_line_number": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Line number in the old file. Null for additions."
+                          },
+                          "new_line_number": {
+                            "type": [
+                              "integer",
+                              "null"
+                            ],
+                            "description": "Line number in the new file. Null for deletions."
+                          },
+                          "content": {
+                            "type": "string",
+                            "description": "Line content without leading +/- prefix."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories (e.g., binary files skipped, submodule changes omitted)."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "not_a_git_repo",
+            "permission_denied",
+            "path_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean",
+          "description": "True if git fallback was attempted and also failed."
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "delta",
+    "args": [
+      "{% if side_by_side %}--side-by-side{% endif %}",
+      "{% if color %}--color=always{% else %}--no-color{% endif %}",
+      "{% if ignore_whitespace %}-w{% endif %}",
+      "{% if ignore_space_change %}-b{% endif %}",
+      "{% if stat_only %}--stat{% endif %}",
+      "{% if mode == 'staged' %}--staged{% endif %}",
+      "{% if mode == 'commit_range' and source and target %}{{ source }}..{{ target }}{% elif mode == 'commit_range' and target %}{{ target }}{% endif %}",
+      "{% if mode == 'branch' and source and target %}{{ source }}...{{ target }}{% endif %}",
+      "{% if mode == 'file' and target %}--{{ target }}{% elif path != '.' %}--{{ path }}{% endif %}"
+    ],
+    "note": "Delta passes unrecognised flags (such as --stat and -w) to git diff. The -- separator ensures paths are not interpreted as revision names. For file mode, target is the file path.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "text",
+    "pipeline": [
+      {
+        "step": "parse_git_diff",
+        "description": "Parse unified diff text into structured per-file hunks. Extract file paths, change types, @@ headers, and classify each line as context/addition/deletion with old/new line numbers."
+      },
+      {
+        "step": "truncate_diff_files",
+        "condition": "len(diffs) > inputs.max_files",
+        "action": "Slice diffs array to max_files entries.",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce file-level cap to prevent token saturation in large commits."
+      },
+      {
+        "step": "truncate_diff_lines",
+        "condition": "any file hunks exceed inputs.max_lines_per_file",
+        "action": "For each file, cap total lines across all hunks to max_lines_per_file. Prefer keeping the beginning of the diff (earlier hunks).",
+        "set": {
+          "truncated": true
+        },
+        "description": "Enforce per-file line cap. Sets truncated flag if any file is capped."
+      },
+      {
+        "step": "compute_diff_totals",
+        "aggregates": {
+          "total_files": "count(diffs)",
+          "total_hunks": "sum(file.hunks.length)",
+          "total_additions": "count lines where type == 'addition'",
+          "total_deletions": "count lines where type == 'deletion'"
+        },
+        "description": "Roll up per-file metrics into top-level totals for agent reasoning."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Merge all computed fields into the final success envelope. Set mode from inputs.mode. Set used_fallback to false. Set execution_ms from runtime timer."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT",
+        "EAGAIN"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "diff",
+        "{% if color %}--color=always{% else %}--no-color{% endif %}",
+        "{% if ignore_whitespace %}-w{% endif %}",
+        "{% if ignore_space_change %}-b{% endif %}",
+        "{% if stat_only %}--stat{% endif %}",
+        "{% if mode == 'staged' %}--cached{% endif %}",
+        "{% if mode == 'commit_range' and source and target %}{{ source }}..{{ target }}{% elif mode == 'commit_range' and target %}{{ target }}{% endif %}",
+        "{% if mode == 'branch' and source and target %}{{ source }}...{{ target }}{% endif %}",
+        "{% if mode == 'file' and target %}--{{ target }}{% elif path != '.' %}--{{ path }}{% endif %}"
+      ],
+      "normalization": "git_diff_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "side_by_side layout is unavailable (git diff has no side-by-side mode)",
+        "syntax highlighting is unavailable; only basic ANSI colour codes are emitted",
+        "hunk headers are plain text; delta-enhanced headers (line numbers, blame info) are absent",
+        "file rename detection heuristics may differ between git diff and delta",
+        "stat_only produces plain text stat blocks instead of delta-rendered tables"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "diff_manifest",
+        "file_path",
+        "line_range"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/git_diff/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "find_replace",
+        "via": [
+          "diffs.file",
+          "diffs.hunks.lines.content"
+        ],
+        "description": "Pass modified file paths and context lines to sd for targeted replacement."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "diffs.file",
+          "diffs.hunks.lines.new_line_number"
+        ],
+        "description": "View modified files at specific line numbers identified in the diff."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "diffs.file"
+        ],
+        "description": "Search within files that appear in the diff for additional context."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "find_replace",
+        "via": [
+          "changes.file"
+        ],
+        "description": "Review the diff of files modified by find_replace before committing."
+      },
+      {
+        "skill": "file_view",
+        "via": [
+          "file"
+        ],
+        "description": "Generate a diff for a file previously viewed."
+      },
+      {
+        "skill": "universal_search",
+        "via": [
+          "file"
+        ],
+        "description": "Diff files discovered via search to review recent changes."
+      }
+    ]
+  },
+  "vanquish": {
+    "ingestible": true,
+    "index_tier": "hot",
+    "semantic_fields": [
+      "diffs.file",
+      "diffs.hunks.lines.content"
+    ],
+    "passthrough": true,
+    "note": "Diff content carries high-signal semantic information about code changes. File paths and line content are directly embeddable."
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "git",
+      "diff",
+      "delta",
+      "version-control",
+      "code-review",
+      "changes"
+    ],
+    "performance": {
+      "typical_execution_ms": 100,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(files * lines)",
+      "token_pressure": "high",
+      "note": "Token pressure scales with number of changed files and lines. Use max_files and max_lines_per_file aggressively. stat_only mode reduces pressure to O(files)."
+    }
+  }
+}
