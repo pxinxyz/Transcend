@@ -1,0 +1,297 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "git_config",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Reads and writes Git configuration at repository, global, or system level. Supports listing all config entries with origin and scope metadata, getting single or multi-values, setting new values, and unsetting keys. Structured output eliminates raw key=value parsing for agents.",
+  "requires": {
+    "primary": {
+      "command": "git",
+      "min_version": "2.30.0"
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "permissions": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Git repository or a subdirectory within it.",
+      "validation": {
+        "must_exist": true
+      }
+    },
+    "action": {
+      "type": "string",
+      "enum": ["get", "set", "unset", "list", "get_all"],
+      "default": "list",
+      "description": "Config action to perform. 'list' enumerates all entries. 'get' returns a single value. 'get_all' returns all values for a multi-valued key. 'set' writes a value. 'unset' removes a key."
+    },
+    "key": {
+      "type": "string",
+      "description": "Configuration key to read or write (e.g. 'user.name', 'core.editor'). Required for get, get_all, set, and unset actions."
+    },
+    "value": {
+      "type": "string",
+      "description": "Value to write when action is 'set'."
+    },
+    "scope": {
+      "type": "string",
+      "enum": ["local", "global", "system"],
+      "description": "Restrict operation to local (.git/config), global (~/.gitconfig), or system (/etc/gitconfig) scope."
+    },
+    "show_origin": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include the origin file path for each config entry. Adds --show-origin flag."
+    },
+    "show_scope": {
+      "type": "boolean",
+      "default": false,
+      "description": "Include the scope (local/global/system) for each config entry. Adds --show-scope flag."
+    },
+    "file": {
+      "type": "string",
+      "description": "Read from or write to a specific config file instead of the standard Git config files."
+    },
+    "includes": {
+      "type": "boolean",
+      "default": false,
+      "description": "Respect include directives when reading config. Adds --includes flag."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "action",
+        "entries",
+        "total_entries",
+        "warnings"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["get", "set", "unset", "list", "get_all"]
+        },
+        "entries": {
+          "type": "array",
+          "description": "Array of config entries. Populated for list, get, and get_all actions.",
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "value"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Config key name."
+              },
+              "value": {
+                "type": "string",
+                "description": "Config value."
+              },
+              "scope": {
+                "type": "string",
+                "description": "Config scope (local, global, system). Present when show_scope is true."
+              },
+              "origin": {
+                "type": "string",
+                "description": "Path to the config file containing this entry. Present when show_origin is true."
+              }
+            }
+          }
+        },
+        "total_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of entries in the entries array."
+        },
+        "value": {
+          "type": "string",
+          "description": "Single value returned by the 'get' action."
+        },
+        "values": {
+          "type": "array",
+          "description": "Array of values returned by the 'get_all' action.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "set": {
+          "type": "boolean",
+          "description": "True when the 'set' action succeeded."
+        },
+        "unset": {
+          "type": "boolean",
+          "description": "True when the 'unset' action succeeded."
+        },
+        "key": {
+          "type": "string",
+          "description": "The key that was modified by set or unset actions."
+        },
+        "execution_ms": {
+          "type": "integer",
+          "description": "Wall-clock execution time in milliseconds."
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-fatal advisories emitted during execution."
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "not_a_git_repo",
+            "invalid_argument",
+            "key_not_found",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": ["integer", "null"]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 15000,
+    "command": "git",
+    "args": [
+      "-C",
+      "{{ path }}",
+      "config",
+      "{% if scope == 'local' %}--local{% elif scope == 'global' %}--global{% elif scope == 'system' %}--system{% endif %}",
+      "{% if file %}--file {{ file }}{% endif %}",
+      "{% if includes %}--includes{% endif %}",
+      "{% if show_origin %}--show-origin{% endif %}",
+      "{% if show_scope %}--show-scope{% endif %}",
+      "{% if action == 'list' %}--list{% endif %}",
+      "{% if action == 'get_all' %}--get-all{% endif %}",
+      "{% if action == 'unset' %}--unset{% endif %}",
+      "{% if action in ['get','get_all','set','unset'] and key %}{{ key }}{% endif %}",
+      "{% if action == 'set' and value %}{{ value }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error",
+      "2": "fatal_git_error",
+      "128": "fatal_git_error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_git_config",
+        "description": "Parse git config output into structured entries. Handles list (scope:origin\\tkey\\tvalue), get (single value), get_all (multi-value), and set/unset confirmations."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build final envelope with entries array, total_entries, and action-specific fields (value, values, set, unset)."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_errors": ["ETIMEDOUT"],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "git",
+      "args": [
+        "-C",
+        "{{ path }}",
+        "config",
+        "{% if action == 'list' %}--list{% elif action == 'get_all' %}--get-all{% elif action == 'unset' %}--unset{% endif %}",
+        "{% if action in ['get','get_all','set','unset'] and key %}{{ key }}{% endif %}",
+        "{% if action == 'set' and value %}{{ value }}{% endif %}"
+      ],
+      "normalization": "git_config_short",
+      "output_gaps": [
+        "scope and origin information unavailable",
+        "structured entries array reduced to basic key-value pairs"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": ["git_config"],
+      "schema_ref": "https://transcend.tools/schema/types/git_config/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "git_status",
+        "via": ["path"],
+        "description": "Check working tree status after modifying config."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "directory_list",
+        "via": ["path"],
+        "description": "Receive a repository path from directory_list."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": ["linux", "macos", "windows", "wsl"],
+    "tags": ["git", "version-control", "config"],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 15000,
+      "output_scale": "O(entries)",
+      "token_pressure": "low"
+    }
+  }
+}
