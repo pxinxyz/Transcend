@@ -162,21 +162,21 @@ Every field is a contract. The agent knows what goes in, what comes out, what ca
 
 ---
 
-## Supported Tools
+## Supported Skills
 
-Transcend targets high-performance CLI utilities — primarily Rust and Go — across 9 categories:
+Transcend currently ships **29 typed skills** powered by high-performance CLI utilities — primarily Rust and Go — across 9 categories. Every skill has a strict JSON contract, Nunjucks execution templates, normalization pipelines, and comprehensive tests (**285 tests** across 85 suites).
 
-| Category | Tools |
-|----------|-------|
-| **Search & Navigation** | ripgrep, fd, fzf, zoxide, broot, yazi, eza, ast-grep |
-| **Text & Data Processing** | jq/jaq, yq, sd, choose, qsv/xsv, tokei, pandoc |
-| **File Viewing** | bat, helix, hexyl, glow |
-| **Git & Version Control** | gitui, lazygit, delta, difftastic, gh |
-| **System Monitoring** | procs, bottom, bandwhich, dive |
-| **File Management** | rip, rnr, ouch, dust, just, watchexec, zellij |
-| **Network** | xh, dog, atac |
-| **Environment** | mise, direnv, starship, tealdeer |
-| **Development** | hyperfine, ruff, uv, biome, typos, cargo-nextest |
+| Category | Skills | Primary Tools |
+|----------|--------|---------------|
+| **Search & Navigation** | `universal_search`, `file_find`, `structural_search`, `directory_jump` | ripgrep, fd, ast-grep, zoxide |
+| **Text & Data Processing** | `json_query`, `yaml_query`, `column_extract`, `csv_analysis`, `find_replace` | jq/jaq, yq, choose, qsv/xsv, sd |
+| **File Viewing** | `file_view` | bat |
+| **Git & Version Control** | `git_status`, `git_diff`, `git_log`, `git_blame`, `git_branch`, `git_stash`, `git_tag`, `git_remote`, `git_config`, `git_show`, `git_cherry_pick`, `git_merge`, `semantic_diff`, `github_api` | git, delta, difftastic, gh |
+| **System Monitoring** | `process_list` | procs |
+| **File Management** | `find_replace` | sd |
+| **Network** | `github_api` | gh |
+| **Environment** | `directory_jump` | zoxide |
+| **Development** | `benchmark_execution`, `python_lint_fix`, `js_lint_fix`, `rust_test`, `codebase_analysis` | hyperfine, ruff, biome, cargo-nextest, scc |
 
 ---
 
