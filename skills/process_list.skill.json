@@ -1,0 +1,239 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "process_list",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "system_administration",
+  "description": "Lists running processes using procs, returning structured process information with optional tree view, sorting, and keyword filtering.",
+  "requires": {
+    "primary": {
+      "command": "procs",
+      "min_version": "0.14.0",
+      "note": "Rust-native process viewer with JSON output and tree support."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "ps",
+      "note": "POSIX ps. Reduced fidelity — limited columns, no tree view, no JSON output."
+    },
+    "permissions": [
+      "process.read"
+    ]
+  },
+  "inputs": {
+    "keyword": {
+      "type": "string",
+      "default": "",
+      "description": "Filter processes by keyword."
+    },
+    "tree": {
+      "type": "boolean",
+      "default": false,
+      "description": "Display processes as a tree."
+    },
+    "sort": {
+      "type": "string",
+      "default": "",
+      "description": "Column to sort by (e.g., cpu, mem)."
+    },
+    "watch": {
+      "type": "boolean",
+      "default": false,
+      "description": "Watch mode. Disabled by default for agent consumption."
+    },
+    "tree_depth": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 1,
+      "maximum": 20,
+      "description": "Maximum tree depth when tree view is enabled."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "processes",
+        "total"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "processes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pid": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "cpu": {
+                "type": "number"
+              },
+              "memory": {
+                "type": "number"
+              },
+              "user": {
+                "type": "string"
+              },
+              "time": {
+                "type": "string"
+              },
+              "command": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "total": {
+          "type": "integer"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "procs",
+    "args": [
+      "{% if keyword %}{{ keyword }}{% endif %}",
+      "{% if tree %}--tree{% endif %}",
+      "{% if sort %}--sorta {{ sort }}{% endif %}",
+      "{% if watch %}--watch{% endif %}",
+      "{% if tree %}--tree-depth {{ tree_depth }}{% endif %}",
+      "--json"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse procs JSON output into structured process arrays."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build process list envelope with processes array and total count."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "ps",
+      "args": [
+        "aux"
+      ],
+      "normalization": "ps_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no JSON output; manual parsing required",
+        "tree view unavailable",
+        "sorting and tree_depth have no effect",
+        "keyword filtering is approximate"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "process_list"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/process_list/v1.json"
+    },
+    "compatible_downstream": [],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "procs",
+      "ps",
+      "process",
+      "system",
+      "monitoring"
+    ],
+    "performance": {
+      "typical_execution_ms": 200,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(processes)",
+      "token_pressure": "medium"
+    }
+  }
+}

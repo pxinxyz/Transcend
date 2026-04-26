@@ -1,0 +1,251 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "python_lint_fix",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development_tooling",
+  "description": "Lints and formats Python code using Ruff, returning structured diagnostics with fix counts and rule selection.",
+  "requires": {
+    "primary": {
+      "command": "ruff",
+      "min_version": "0.1.0",
+      "note": "Extremely fast Python linter and formatter written in Rust."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "flake8",
+      "note": "Python style guide enforcement. Reduced fidelity — no automatic fixing; slower; different output format."
+    },
+    "permissions": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "description": "Path to file or directory to lint/format.",
+      "validation": {
+        "min_length": 1
+      }
+    },
+    "action": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "check",
+        "format",
+        "lint"
+      ],
+      "description": "Operation to perform: check, format, or lint."
+    },
+    "fix": {
+      "type": "boolean",
+      "default": false,
+      "description": "Apply automatic fixes."
+    },
+    "select": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated list of rule codes to enable."
+    },
+    "ignore": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated list of rule codes to ignore."
+    },
+    "config": {
+      "type": "string",
+      "default": "",
+      "description": "Path to ruff.toml or pyproject.toml config."
+    },
+    "output_format": {
+      "type": "string",
+      "default": "json",
+      "enum": [
+        "json",
+        "text",
+        "junit"
+      ],
+      "description": "Output format for diagnostics."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "diagnostics",
+        "files_processed"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "files_processed": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "integer"
+        },
+        "warnings": {
+          "type": "integer"
+        },
+        "fixed": {
+          "type": "integer"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings_arr": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 60000,
+    "command": "ruff",
+    "args": [
+      "{% if action == 'check' %}check{% elif action == 'format' %}format{% elif action == 'lint' %}check --select E,W,F{% endif %}",
+      "{% if fix %}--fix{% endif %}",
+      "{% if select %}--select {{ select }}{% endif %}",
+      "{% if ignore %}--ignore {{ ignore }}{% endif %}",
+      "{% if config %}--config {{ config }}{% endif %}",
+      "{% if output_format %}--output-format={{ output_format }}{% endif %}",
+      "{{ path }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse ruff JSON output into structured diagnostics."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build lint envelope with diagnostics, counts, and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "flake8",
+      "args": [
+        "{% if select %}--select={{ select }}{% endif %}",
+        "{% if ignore %}--ignore={{ ignore }}{% endif %}",
+        "{% if config %}--config={{ config }}{% endif %}",
+        "{{ path }}"
+      ],
+      "normalization": "flake8_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no automatic fixing support",
+        "format action unavailable",
+        "output_format has no effect",
+        "different diagnostic schema from ruff"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "lint_diagnostics"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/python_lint_fix/v1.json"
+    },
+    "compatible_downstream": [],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "ruff",
+      "flake8",
+      "python",
+      "lint",
+      "format"
+    ],
+    "performance": {
+      "typical_execution_ms": 300,
+      "worst_case_execution_ms": 60000,
+      "output_scale": "O(files)",
+      "token_pressure": "medium"
+    }
+  }
+}

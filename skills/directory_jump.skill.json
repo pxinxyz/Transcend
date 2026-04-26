@@ -1,0 +1,241 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "directory_jump",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "search_navigation",
+  "description": "Smart directory jumping using zoxide, returning ranked directory matches with scores and access history.",
+  "requires": {
+    "primary": {
+      "command": "zoxide",
+      "min_version": "0.9.0",
+      "note": "Smart directory jumper that learns your habits and ranks directories by frequency and recency."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "find",
+      "note": "POSIX find. Reduced fidelity — no scoring, no access history, no smart ranking."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "query": {
+      "type": "string",
+      "required": true,
+      "description": "Directory query string.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 1024
+      }
+    },
+    "interactive": {
+      "type": "boolean",
+      "default": false,
+      "description": "Interactive selection mode. Disabled by default for agent consumption."
+    },
+    "all_matches": {
+      "type": "boolean",
+      "default": false,
+      "description": "Return all matches instead of the best match."
+    },
+    "list": {
+      "type": "boolean",
+      "default": false,
+      "description": "List all directories in the database."
+    },
+    "exclude": {
+      "type": "string",
+      "default": "",
+      "description": "Path to exclude from results."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "matches"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "score": {
+                "type": "number"
+              },
+              "last_accessed": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "selected": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "zoxide",
+    "args": [
+      "query",
+      "{% if interactive %}--interactive{% endif %}",
+      "{% if all_matches %}--all{% endif %}",
+      "{% if list %}--list{% endif %}",
+      "{% if exclude %}--exclude {{ exclude }}{% endif %}",
+      "--score",
+      "{{ query }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_plaintext_lines",
+        "description": "Parse zoxide/find output into structured directory matches."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build directory jump envelope with matches array and selected path."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "find",
+      "args": [
+        ".",
+        "-type",
+        "d",
+        "-name",
+        "\"*{{ query }}*\""
+      ],
+      "normalization": "find_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no scoring or access history",
+        "interactive, all_matches, and list options have no effect",
+        "exclude option has no effect",
+        "simple substring matching only"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "directory_matches"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/directory_jump/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "matches"
+        ],
+        "description": "View files within the selected directory."
+      }
+    ],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "zoxide",
+      "find",
+      "directory",
+      "navigation",
+      "cd"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(matches)",
+      "token_pressure": "low"
+    }
+  }
+}

@@ -1,0 +1,261 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "structural_search",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "search_navigation",
+  "description": "Performs AST-level code search using ast-grep (sg), returning structured match objects with optional rewrite support.",
+  "requires": {
+    "primary": {
+      "command": "sg",
+      "min_version": "0.20.0",
+      "note": "AST-based structural search and replace with multi-language support."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "rg",
+      "note": "ripgrep. Reduced fidelity — text-level search only; no AST awareness; no rewrite support."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "pattern": {
+      "type": "string",
+      "required": true,
+      "description": "AST pattern or rule to search for.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 4096
+      }
+    },
+    "language": {
+      "type": "string",
+      "default": "",
+      "description": "Target programming language."
+    },
+    "rule_file": {
+      "type": "string",
+      "default": "",
+      "description": "Path to an ast-grep rule file."
+    },
+    "context_lines": {
+      "type": "integer",
+      "default": 2,
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Number of context lines around matches."
+    },
+    "json_format": {
+      "type": "boolean",
+      "default": true,
+      "description": "Output matches as JSON."
+    },
+    "rewrite": {
+      "type": "string",
+      "default": "",
+      "description": "Rewrite template to apply to matches."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "matches",
+        "total"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer"
+              },
+              "column": {
+                "type": "integer"
+              },
+              "text": {
+                "type": "string"
+              },
+              "replacement": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "total": {
+          "type": "integer"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 60000,
+    "command": "sg",
+    "args": [
+      "run",
+      "--pattern",
+      "\"{{ pattern }}\"",
+      "{% if language %}--lang {{ language }}{% endif %}",
+      "{% if rule_file %}--rule {{ rule_file }}{% endif %}",
+      "{% if context_lines is defined and context_lines is not none %}--context {{ context_lines }}{% endif %}",
+      "{% if json_format %}--json{% endif %}",
+      "{% if rewrite %}--rewrite \"{{ rewrite }}\"{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse ast-grep JSON output into structured matches."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build search envelope with matches array and total count."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "rg",
+      "args": [
+        "--json",
+        "{% if context_lines is defined and context_lines is not none %}-C {{ context_lines }}{% endif %}",
+        "\"{{ pattern }}\""
+      ],
+      "normalization": "rg_ndjson_to_transcend_schema",
+      "output_gaps": [
+        "no AST-level matching; text search only",
+        "language and rule_file options have no effect",
+        "rewrite option has no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "ast_matches"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/structural_search/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "matches"
+        ],
+        "description": "View matched files for context."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "codebase_analysis",
+        "via": [
+          "pattern"
+        ],
+        "description": "Use codebase metrics to inform search patterns."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "ast-grep",
+      "sg",
+      "ast",
+      "structural-search",
+      "ripgrep"
+    ],
+    "performance": {
+      "typical_execution_ms": 500,
+      "worst_case_execution_ms": 60000,
+      "output_scale": "O(matches)",
+      "token_pressure": "medium"
+    }
+  }
+}

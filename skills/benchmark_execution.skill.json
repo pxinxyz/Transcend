@@ -1,0 +1,261 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "benchmark_execution",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development_tooling",
+  "description": "Benchmarks shell commands using hyperfine, returning structured timing statistics. Supports warmup, multiple runs, parameter scanning, and shell selection.",
+  "requires": {
+    "primary": {
+      "command": "hyperfine",
+      "min_version": "1.18.0",
+      "note": "Rust-native benchmarking tool with statistical analysis and JSON export."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "time",
+      "note": "POSIX time command. Reduced fidelity — only single-run real/user/sys times; no statistics."
+    },
+    "permissions": [
+      "process.spawn"
+    ]
+  },
+  "inputs": {
+    "command": {
+      "type": "string",
+      "required": true,
+      "description": "The command to benchmark.",
+      "validation": {
+        "min_length": 1,
+        "max_length": 4096
+      }
+    },
+    "warmup": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 0,
+      "maximum": 100,
+      "description": "Number of warmup runs before benchmarking."
+    },
+    "runs": {
+      "type": "integer",
+      "default": 10,
+      "minimum": 1,
+      "maximum": 10000,
+      "description": "Minimum number of benchmark runs."
+    },
+    "shell": {
+      "type": "string",
+      "default": "",
+      "description": "Shell to use for executing the benchmark command."
+    },
+    "prepare": {
+      "type": "string",
+      "default": "",
+      "description": "Command to run before each benchmark invocation."
+    },
+    "cleanup": {
+      "type": "string",
+      "default": "",
+      "description": "Command to run after each benchmark invocation."
+    },
+    "export_json": {
+      "type": "boolean",
+      "default": true,
+      "description": "Export results as JSON."
+    },
+    "parameter_scan": {
+      "type": "object",
+      "default": null,
+      "description": "Parameter scan configuration with name, min, max, and optional step."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "results",
+        "command"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mean": {
+                "type": "number"
+              },
+              "stddev": {
+                "type": "number"
+              },
+              "median": {
+                "type": "number"
+              },
+              "min": {
+                "type": "number"
+              },
+              "max": {
+                "type": "number"
+              },
+              "times": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                }
+              }
+            }
+          }
+        },
+        "command": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 300000,
+    "command": "hyperfine",
+    "args": [
+      "{% if warmup is defined and warmup is not none %}--warmup {{ warmup }}{% endif %}",
+      "{% if runs is defined and runs is not none %}--runs {{ runs }}{% endif %}",
+      "{% if shell %}--shell {{ shell }}{% endif %}",
+      "{% if prepare %}--prepare \"{{ prepare }}\"{% endif %}",
+      "{% if cleanup %}--cleanup \"{{ cleanup }}\"{% endif %}",
+      "{% if export_json %}--export-json -{% endif %}",
+      "{% if parameter_scan %}-P {{ parameter_scan.name }} {{ parameter_scan.min }} {{ parameter_scan.max }}{% if parameter_scan.step %} {{ parameter_scan.step }}{% endif %}{% endif %}",
+      "\"{{ command }}\""
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse hyperfine JSON export into structured results."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build benchmark envelope with results array and command."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "time",
+      "args": [
+        "-p",
+        "{{ command }}"
+      ],
+      "normalization": "time_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no statistical analysis (mean, stddev, median unavailable)",
+        "only single-run timing (real, user, sys)",
+        "warmup, runs, shell, prepare, cleanup, and parameter_scan have no effect"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "benchmark_results"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/benchmark_execution/v1.json"
+    },
+    "compatible_downstream": [],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "benchmark",
+      "hyperfine",
+      "performance",
+      "timing"
+    ],
+    "performance": {
+      "typical_execution_ms": 5000,
+      "worst_case_execution_ms": 300000,
+      "output_scale": "O(runs)",
+      "token_pressure": "low"
+    }
+  }
+}

@@ -1,0 +1,256 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "file_view",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "file_system",
+  "description": "Views file contents with syntax highlighting using bat, returning structured line arrays with optional line ranges, themes, and paging control.",
+  "requires": {
+    "primary": {
+      "command": "bat",
+      "min_version": "0.24.0",
+      "note": "Syntax-highlighting cat clone with git integration and themes."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "cat",
+      "note": "POSIX cat. Reduced fidelity — no syntax highlighting, no themes, no language detection."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "file": {
+      "type": "string",
+      "required": true,
+      "description": "Path to the file to view.",
+      "validation": {
+        "min_length": 1
+      }
+    },
+    "line_range": {
+      "type": "string",
+      "default": "",
+      "description": "Line range to display (e.g., '10:20')."
+    },
+    "plain": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable syntax highlighting and decorations."
+    },
+    "number": {
+      "type": "boolean",
+      "default": true,
+      "description": "Show line numbers."
+    },
+    "theme": {
+      "type": "string",
+      "default": "",
+      "description": "Color theme to use for syntax highlighting."
+    },
+    "language": {
+      "type": "string",
+      "default": "",
+      "description": "Explicit language override for syntax highlighting."
+    },
+    "paging": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable paging. Defaults to false for agent consumption."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "lines",
+        "total_lines"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "line_number": {
+                "type": "integer"
+              },
+              "content": {
+                "type": "string"
+              },
+              "highlighted": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "total_lines": {
+          "type": "integer"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "bat",
+    "args": [
+      "{% if line_range %}--line-range {{ line_range }}{% endif %}",
+      "{% if plain %}--plain{% endif %}",
+      "{% if number %}--number{% endif %}",
+      "{% if theme %}--theme={{ theme }}{% endif %}",
+      "{% if language %}--language={{ language }}{% endif %}",
+      "{% if not paging %}--paging=never{% endif %}",
+      "{{ file }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_plaintext_lines",
+        "description": "Split bat/cat output into structured line objects."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build file view envelope with lines array and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "cat",
+      "args": [
+        "{% if line_range %}-n{% endif %}",
+        "{{ file }}"
+      ],
+      "normalization": "cat_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no syntax highlighting",
+        "theme and language options have no effect",
+        "line_range may be inaccurate with cat -n"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "file_content",
+        "highlighted_lines"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/file_view/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "find_replace",
+        "via": [
+          "lines"
+        ],
+        "description": "Pass file lines into find_replace for targeted modifications."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "universal_search",
+        "via": [
+          "file"
+        ],
+        "description": "Use search results to identify files to view."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "bat",
+      "cat",
+      "file",
+      "view",
+      "syntax-highlighting"
+    ],
+    "performance": {
+      "typical_execution_ms": 50,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(lines)",
+      "token_pressure": "high"
+    }
+  }
+}

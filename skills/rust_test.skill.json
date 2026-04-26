@@ -1,0 +1,278 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "rust_test",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development_tooling",
+  "description": "Runs Rust tests using cargo nextest, returning structured test results with status, duration, and output capture. Falls back to cargo test.",
+  "requires": {
+    "primary": {
+      "command": "cargo",
+      "min_version": "1.70.0",
+      "note": "Cargo with nextest runner for fast, structured Rust test execution."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      },
+      {
+        "type": "tool",
+        "name": "cargo-nextest",
+        "min_version": "0.9.0",
+        "note": "Must be installed as a cargo subcommand: cargo install cargo-nextest"
+      }
+    ],
+    "fallback": {
+      "command": "cargo",
+      "note": "Standard cargo test. Reduced fidelity — slower execution, no structured nextest profiles, different JSON format."
+    },
+    "permissions": [
+      "filesystem.read",
+      "process.spawn"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "default": ".",
+      "description": "Path to the Rust project or workspace."
+    },
+    "action": {
+      "type": "string",
+      "default": "run",
+      "enum": [
+        "run",
+        "list"
+      ],
+      "description": "Action to perform: run tests or list tests."
+    },
+    "profile": {
+      "type": "string",
+      "default": "",
+      "description": "Nextest profile to use."
+    },
+    "filter": {
+      "type": "string",
+      "default": "",
+      "description": "Test filter expression."
+    },
+    "retries": {
+      "type": "integer",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 10,
+      "description": "Number of retries for flaky tests."
+    },
+    "no_capture": {
+      "type": "boolean",
+      "default": false,
+      "description": "Disable output capture."
+    },
+    "json_output": {
+      "type": "boolean",
+      "default": true,
+      "description": "Output test results as JSON."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "tests",
+        "summary"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "duration": {
+                "type": "number"
+              },
+              "stdout": {
+                "type": "string"
+              },
+              "stderr": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "passed": {
+              "type": "integer"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "skipped": {
+              "type": "integer"
+            },
+            "duration_ms": {
+              "type": "number"
+            }
+          }
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 300000,
+    "command": "cargo",
+    "args": [
+      "nextest",
+      "{% if action == 'run' %}run{% elif action == 'list' %}list{% endif %}",
+      "{% if profile %}--profile {{ profile }}{% endif %}",
+      "{% if filter %}-E {{ filter }}{% endif %}",
+      "{% if retries %}--retries {{ retries }}{% endif %}",
+      "{% if no_capture %}--nocapture{% endif %}",
+      "{% if json_output %}--message-format json{% endif %}",
+      "{% if path and path != '.' %}--manifest-path {{ path }}/Cargo.toml{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error",
+      "101": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "ndjson",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse cargo nextest NDJSON output into structured test results."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build test envelope with tests array and summary."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "cargo",
+      "args": [
+        "test",
+        "{% if filter %}{{ filter }}{% endif %}",
+        "{% if no_capture %}--nocapture{% endif %}",
+        "{% if json_output %}--message-format=json{% endif %}",
+        "{% if path and path != '.' %}--manifest-path {{ path }}/Cargo.toml{% endif %}"
+      ],
+      "normalization": "cargo_test_ndjson_to_transcend_schema",
+      "output_gaps": [
+        "no nextest profiles",
+        "filter syntax is different (simple substring match)",
+        "retries option has no effect",
+        "list action unavailable as structured output"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "test_results"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/rust_test/v1.json"
+    },
+    "compatible_downstream": [],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "cargo",
+      "nextest",
+      "rust",
+      "test",
+      "unit-test"
+    ],
+    "performance": {
+      "typical_execution_ms": 5000,
+      "worst_case_execution_ms": 300000,
+      "output_scale": "O(tests)",
+      "token_pressure": "high"
+    }
+  }
+}

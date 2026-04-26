@@ -1,0 +1,243 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "github_api",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Performs GitHub operations via the gh CLI, supporting PRs, issues, repos, workflows, and raw API calls. Returns structured JSON responses.",
+  "requires": {
+    "primary": {
+      "command": "gh",
+      "min_version": "2.40.0",
+      "note": "Official GitHub CLI with structured JSON output support."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "curl",
+      "note": "HTTP client. Reduced fidelity — manual URL construction and authentication required."
+    },
+    "permissions": [
+      "network.http"
+    ]
+  },
+  "inputs": {
+    "action": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "pr_create",
+        "pr_list",
+        "issue_create",
+        "issue_list",
+        "repo_clone",
+        "repo_view",
+        "workflow_run",
+        "api"
+      ],
+      "description": "GitHub operation to perform."
+    },
+    "args": {
+      "type": "object",
+      "default": {},
+      "description": "Action-specific arguments."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "action"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "action": {
+          "type": "string"
+        },
+        "prs": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "repo": {
+          "type": "object"
+        },
+        "workflows": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "api_response": {
+          "type": "object"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 60000,
+    "command": "gh",
+    "args": [
+      "{% if action == 'pr_create' %}pr create{% elif action == 'pr_list' %}pr list --json number,title,author,state,createdAt,updatedAt,url{% elif action == 'issue_create' %}issue create{% elif action == 'issue_list' %}issue list --json number,title,author,state,createdAt,updatedAt,url{% elif action == 'repo_clone' %}repo clone{% elif action == 'repo_view' %}repo view --json name,owner,description,url,defaultBranch{% elif action == 'workflow_run' %}run list --json databaseId,status,conclusion,event,headBranch,createdAt{% elif action == 'api' %}api{% endif %}",
+      "{% if action in ['pr_create','issue_create'] and args.title %}--title \"{{ args.title }}\"{% endif %}",
+      "{% if action in ['pr_create','issue_create'] and args.body %}--body \"{{ args.body }}\"{% endif %}",
+      "{% if action == 'pr_create' and args.base %}--base {{ args.base }}{% endif %}",
+      "{% if action in ['pr_list','issue_list'] and args.state %}--state {{ args.state }}{% endif %}",
+      "{% if action == 'repo_clone' and args.repo %}\"{{ args.repo }}\"{% endif %}",
+      "{% if action == 'repo_clone' and args.directory %}\"{{ args.directory }}\"{% endif %}",
+      "{% if action == 'repo_view' and args.repo %}{{ args.repo }}{% endif %}",
+      "{% if action == 'workflow_run' and args.repo %}--repo {{ args.repo }}{% endif %}",
+      "{% if action == 'api' and args.endpoint %}{{ args.endpoint }}{% endif %}",
+      "{% if action == 'api' and args.method %}--method {{ args.method }}{% endif %}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse gh JSON output into structured response."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build GitHub API envelope with action-specific fields."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "curl",
+      "args": [
+        "-s",
+        "-H",
+        "Accept: application/vnd.github+json",
+        "{% if args.method == 'POST' or args.method == 'PUT' or args.method == 'PATCH' %}-X {{ args.method }}{% endif %}",
+        "https://api.github.com{{ args.endpoint }}"
+      ],
+      "normalization": "curl_json_to_transcend_schema",
+      "output_gaps": [
+        "gh-specific convenience flags unavailable",
+        "authentication must be provided manually via headers",
+        "action-specific output shaping unavailable; raw API response returned"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "github_data"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/github_api/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "json_query",
+        "via": [
+          "api_response"
+        ],
+        "description": "Pipe GitHub API responses into jq for extraction."
+      }
+    ],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "github",
+      "gh",
+      "pr",
+      "issue",
+      "repo",
+      "api"
+    ],
+    "performance": {
+      "typical_execution_ms": 1000,
+      "worst_case_execution_ms": 60000,
+      "output_scale": "O(results)",
+      "token_pressure": "medium"
+    }
+  }
+}

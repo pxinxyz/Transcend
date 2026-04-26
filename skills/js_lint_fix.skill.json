@@ -1,0 +1,241 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "js_lint_fix",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "development_tooling",
+  "description": "Lints and formats JavaScript/TypeScript code using Biome, returning structured diagnostics with fix counts.",
+  "requires": {
+    "primary": {
+      "command": "biome",
+      "min_version": "1.5.0",
+      "note": "Fast JS/TS linter and formatter with JSON diagnostics output."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "eslint",
+      "note": "ESLint. Reduced fidelity — only linting available; no formatting; different diagnostic format."
+    },
+    "permissions": [
+      "filesystem.read",
+      "filesystem.write"
+    ]
+  },
+  "inputs": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "description": "Path to file or directory to lint/format.",
+      "validation": {
+        "min_length": 1
+      }
+    },
+    "action": {
+      "type": "string",
+      "required": true,
+      "enum": [
+        "lint",
+        "format",
+        "check"
+      ],
+      "description": "Operation to perform: lint, format, or check."
+    },
+    "write": {
+      "type": "boolean",
+      "default": false,
+      "description": "Write fixes to disk."
+    },
+    "staged": {
+      "type": "boolean",
+      "default": false,
+      "description": "Only process staged files."
+    },
+    "config_path": {
+      "type": "string",
+      "default": "",
+      "description": "Path to biome.json config file."
+    },
+    "rules": {
+      "type": "string",
+      "default": "",
+      "description": "Comma-separated rule names to enable or configure."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "diagnostics",
+        "files_processed"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "diagnostics": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "files_processed": {
+          "type": "integer"
+        },
+        "errors": {
+          "type": "integer"
+        },
+        "warnings": {
+          "type": "integer"
+        },
+        "fixed": {
+          "type": "integer"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings_arr": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 60000,
+    "command": "biome",
+    "args": [
+      "{% if action == 'lint' %}lint{% elif action == 'format' %}format{% elif action == 'check' %}check{% endif %}",
+      "{% if write %}--write{% endif %}",
+      "{% if staged %}--staged{% endif %}",
+      "{% if config_path %}--config-path={{ config_path }}{% endif %}",
+      "{% if rules %}--rules {{ rules }}{% endif %}",
+      "--json",
+      "{{ path }}"
+    ],
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "json",
+    "pipeline": [
+      {
+        "step": "parse_json",
+        "description": "Parse biome JSON diagnostics into structured results."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build lint envelope with diagnostics, counts, and metadata."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "eslint",
+      "args": [
+        "{% if write %}--fix{% endif %}",
+        "--format",
+        "json",
+        "{{ path }}"
+      ],
+      "normalization": "eslint_json_to_transcend_schema",
+      "output_gaps": [
+        "no formatting support; only linting",
+        "staged, config_path, and rules options have no effect",
+        "different diagnostic schema from biome"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "lint_diagnostics"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/js_lint_fix/v1.json"
+    },
+    "compatible_downstream": [],
+    "compatible_upstream": []
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "biome",
+      "eslint",
+      "javascript",
+      "typescript",
+      "lint",
+      "format"
+    ],
+    "performance": {
+      "typical_execution_ms": 500,
+      "worst_case_execution_ms": 60000,
+      "output_scale": "O(files)",
+      "token_pressure": "medium"
+    }
+  }
+}

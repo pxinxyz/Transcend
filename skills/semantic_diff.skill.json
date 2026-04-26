@@ -1,0 +1,263 @@
+{
+  "$schema": "https://transcend.tools/schema/skill/v1.json",
+  "name": "semantic_diff",
+  "version": "1.0.0",
+  "stability": "stable",
+  "category": "version_control",
+  "description": "Renders semantic diffs using delta, supporting side-by-side mode, themes, and hyperlink navigation. Accepts diff input via stdin.",
+  "requires": {
+    "primary": {
+      "command": "delta",
+      "min_version": "0.16.0",
+      "note": "Syntax-highlighting pager for git and diff output with side-by-side support."
+    },
+    "dependencies": [
+      {
+        "type": "runtime",
+        "name": "node",
+        "min_version": "18.0.0"
+      }
+    ],
+    "fallback": {
+      "command": "diff",
+      "note": "POSIX diff. Reduced fidelity — no syntax highlighting, no side-by-side, no themes."
+    },
+    "permissions": [
+      "filesystem.read"
+    ]
+  },
+  "inputs": {
+    "diff_input": {
+      "type": "string",
+      "required": true,
+      "description": "Diff content to process, fed via stdin.",
+      "validation": {
+        "min_length": 1
+      }
+    },
+    "side_by_side": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable side-by-side diff view."
+    },
+    "theme": {
+      "type": "string",
+      "default": "",
+      "description": "Color theme for syntax highlighting."
+    },
+    "max_line_distance": {
+      "type": "integer",
+      "default": 0,
+      "description": "Maximum line distance for intra-line highlighting."
+    },
+    "navigate": {
+      "type": "boolean",
+      "default": false,
+      "description": "Enable file navigation."
+    },
+    "hyperlinks": {
+      "type": "boolean",
+      "default": false,
+      "description": "Render file paths as hyperlinks."
+    }
+  },
+  "outputs": {
+    "success": {
+      "type": "object",
+      "required": [
+        "status",
+        "files",
+        "stats"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "ok"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "old_path": {
+                "type": "string"
+              },
+              "new_path": {
+                "type": "string"
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "files_changed": {
+              "type": "integer"
+            },
+            "insertions": {
+              "type": "integer"
+            },
+            "deletions": {
+              "type": "integer"
+            }
+          }
+        },
+        "used_fallback": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "const": "error"
+        },
+        "error_type": {
+          "type": "string",
+          "enum": [
+            "command_not_found",
+            "invalid_argument",
+            "timeout",
+            "unknown"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stderr": {
+          "type": "string"
+        },
+        "used_fallback": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "execution": {
+    "engine": "subprocess",
+    "template_engine": "nunjucks",
+    "timeout_ms": 30000,
+    "command": "delta",
+    "args": [
+      "{% if side_by_side %}--side-by-side{% endif %}",
+      "{% if theme %}--theme={{ theme }}{% endif %}",
+      "{% if max_line_distance %}--max-line-distance={{ max_line_distance }}{% endif %}",
+      "{% if navigate %}--navigate{% endif %}",
+      "{% if hyperlinks %}--hyperlinks{% endif %}",
+      "--no-gitconfig"
+    ],
+    "note": "Diff input is fed to delta via stdin when the 'diff_input' field is provided.",
+    "exit_code_map": {
+      "0": "success",
+      "1": "error"
+    }
+  },
+  "normalization": {
+    "input_format": "plaintext",
+    "pipeline": [
+      {
+        "step": "parse_plaintext_lines",
+        "description": "Split delta/diff output into structured line objects."
+      },
+      {
+        "step": "assemble_output",
+        "description": "Build diff envelope with files array and statistics."
+      }
+    ]
+  },
+  "resilience": {
+    "retry": {
+      "on_exit_codes": [],
+      "on_errors": [
+        "ETIMEDOUT"
+      ],
+      "max_retries": 1,
+      "backoff_ms": 500
+    },
+    "fallback": {
+      "condition": "command_not_found",
+      "command": "diff",
+      "args": [
+        "-u",
+        "-"
+      ],
+      "normalization": "diff_plaintext_to_transcend_schema",
+      "output_gaps": [
+        "no syntax highlighting",
+        "side_by_side, theme, max_line_distance, navigate, and hyperlinks have no effect",
+        "unified diff format only"
+      ]
+    }
+  },
+  "chains": {
+    "produces": {
+      "types": [
+        "diff_output"
+      ],
+      "schema_ref": "https://transcend.tools/schema/types/semantic_diff/v1.json"
+    },
+    "compatible_downstream": [
+      {
+        "skill": "file_view",
+        "via": [
+          "files"
+        ],
+        "description": "View changed files after diff analysis."
+      }
+    ],
+    "compatible_upstream": [
+      {
+        "skill": "git_diff",
+        "via": [
+          "diff_input"
+        ],
+        "description": "Pipe git diff output into semantic_diff for enhanced rendering."
+      }
+    ]
+  },
+  "metadata": {
+    "platforms": [
+      "linux",
+      "macos",
+      "windows",
+      "wsl"
+    ],
+    "tags": [
+      "delta",
+      "diff",
+      "semantic",
+      "syntax-highlighting"
+    ],
+    "performance": {
+      "typical_execution_ms": 100,
+      "worst_case_execution_ms": 30000,
+      "output_scale": "O(lines)",
+      "token_pressure": "high"
+    }
+  }
+}
