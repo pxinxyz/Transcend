@@ -8,6 +8,12 @@
  *   transcend codebase_analysis --path="." --granularity=per_language
  *   transcend find_replace --pattern="old" --replacement="new" --files="a.ts,b.ts"
  *
+ * Commands:
+ *   list                  Display all skills in a formatted table
+ *   show <skill>          Display full JSON spec with pretty-printing
+ *   validate              Check all skill specs for structural integrity
+ *   test                  Run npm test
+ *
  * Global flags:
  *   --skills-dir <path>   Directory containing .skill.json files (default: ./skills)
  *   --timeout <ms>        Global timeout in milliseconds (default: 60000)
@@ -23,6 +29,9 @@
 import { createRequire } from 'module';
 import { TranscendRuntime } from '../lib/TranscendRuntime.js';
 import { ChainRouter } from '../lib/ChainRouter.js';
+import { SkillLoader, SkillValidationError } from '../lib/SkillLoader.js';
+import { SkillRegistry } from '../lib/SkillRegistry.js';
+import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -37,7 +46,14 @@ const HELP = `
 Transcend — Agent-Native CLI Skill Framework (v${pkg.version})
 
 Usage:
+  transcend <command> [options]
   transcend <skill> [inputs...] [flags]
+
+Commands:
+  list                  Display all skills in a formatted table
+  show <skill>          Display full JSON spec with pretty-printing
+  validate              Check all skill specs for structural integrity
+  test                  Run npm test
 
 Execute a skill:
   transcend universal_search --pattern="fetchUser" --path="./src"
@@ -72,6 +88,8 @@ Examples:
   transcend universal_search --pattern="oldFunc" --path="./src" --chain=find_replace --replacement="newFunc" --dry-run
 `;
 
+const COMMANDS = ['list', 'show', 'validate', 'test'];
+
 function main() {
   const args = process.argv.slice(2);
 
@@ -96,6 +114,10 @@ function main() {
     process.exit(0);
   }
 
+  // Determine if first positional arg is a built-in command
+  const firstPositional = args.find(a => !a.startsWith('--'));
+  const isCommand = firstPositional && COMMANDS.includes(firstPositional);
+
   // Initialize runtime
   const runtime = new TranscendRuntime({
     skillsDir: flags['skills-dir'] || './skills',
@@ -103,7 +125,7 @@ function main() {
     debug: flags.debug || false
   });
 
-  // --list
+  // --list (legacy flag)
   if (flags.list) {
     const skills = runtime.listSkills();
     console.log('Available skills:\n');
@@ -117,6 +139,23 @@ function main() {
     process.exit(0);
   }
 
+  // Built-in commands
+  if (isCommand) {
+    switch (firstPositional) {
+      case 'list':
+        return cmdList(runtime);
+      case 'show':
+        return cmdShow(runtime, args);
+      case 'validate':
+        return cmdValidate(runtime);
+      case 'test':
+        return cmdTest();
+      default:
+        console.error(`Error: Unknown command: ${firstPositional}`);
+        process.exit(1);
+    }
+  }
+
   // No skill specified
   if (!skillName) {
     console.error('Error: No skill specified. Run `transcend --list` to see available skills.');
@@ -125,8 +164,8 @@ function main() {
 
   // --dry-run: just render args
   if (flags['dry-run']) {
-    const { NunjucksEngine } = require('../lib/NunjucksEngine.js');
-    const { SkillLoader } = require('../lib/SkillLoader.js');
+    const { NunjucksEngine } = await import('../lib/NunjucksEngine.js');
+    const { SkillLoader } = await import('../lib/SkillLoader.js');
     const engine = new NunjucksEngine({ debug: flags.debug });
     const loader = new SkillLoader({ skillsDir: flags['skills-dir'] || defaultSkillsDir });
 
@@ -143,6 +182,94 @@ function main() {
 
   // Execute (and optionally chain)
   execute(runtime, skillName, inputs, flags);
+}
+
+function cmdList(runtime) {
+  const registry = new SkillRegistry({ loader: runtime.loader });
+  const skills = registry.getAll();
+
+  // Compute column widths
+  const nameWidth = Math.max(4, ...skills.map(s => s.name.length));
+  const versionWidth = Math.max(7, ...skills.map(s => (s.version || '').length));
+  const stabilityWidth = Math.max(9, ...skills.map(s => (s.stability || '').length));
+  const categoryWidth = Math.max(8, ...skills.map(s => (s.category || 'general').length));
+
+  const header = `${'NAME'.padEnd(nameWidth)}  ${'VERSION'.padEnd(versionWidth)}  ${'STABILITY'.padEnd(stabilityWidth)}  ${'CATEGORY'.padEnd(categoryWidth)}  DESCRIPTION`;
+  const line = '-'.repeat(header.length);
+
+  console.log(header);
+  console.log(line);
+
+  for (const s of skills) {
+    const name = s.name.padEnd(nameWidth);
+    const version = (s.version || '').padEnd(versionWidth);
+    const stability = (s.stability || '').padEnd(stabilityWidth);
+    const category = (s.category || 'general').padEnd(categoryWidth);
+    const desc = (s.description || '').split('\n')[0];
+    console.log(`${name}  ${version}  ${stability}  ${category}  ${desc}`);
+  }
+
+  console.log(`\nTotal: ${skills.length} skill(s)`);
+  process.exit(0);
+}
+
+function cmdShow(runtime, args) {
+  const showIndex = args.indexOf('show');
+  const skillName = args[showIndex + 1];
+
+  if (!skillName || skillName.startsWith('--')) {
+    console.error('Error: No skill specified for show. Usage: transcend show <skill>');
+    process.exit(1);
+  }
+
+  try {
+    const spec = runtime.getSpec(skillName);
+    console.log(JSON.stringify(spec, null, 2));
+    process.exit(0);
+  } catch (err) {
+    console.error(`Error: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+function cmdValidate(runtime) {
+  const registry = new SkillRegistry({ loader: runtime.loader });
+  const skills = registry.getAll();
+  let errors = 0;
+
+  for (const spec of skills) {
+    try {
+      runtime.loader.reload(spec.name);
+    } catch (err) {
+      errors++;
+      console.error(`✗ ${spec.name}: ${err.message}`);
+    }
+  }
+
+  if (errors === 0) {
+    console.log(`✓ All ${skills.length} skill spec(s) are structurally valid.`);
+    process.exit(0);
+  } else {
+    console.error(`\n✗ ${errors} skill spec(s) failed validation.`);
+    process.exit(1);
+  }
+}
+
+function cmdTest() {
+  const child = spawn('npm', ['test'], {
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+    cwd: path.join(__dirname, '..')
+  });
+
+  child.on('exit', code => {
+    process.exit(code ?? 0);
+  });
+
+  child.on('error', err => {
+    console.error(`Failed to run npm test: ${err.message}`);
+    process.exit(1);
+  });
 }
 
 async function execute(runtime, skillName, inputs, flags) {
@@ -231,7 +358,7 @@ function parseArgs(args) {
       continue;
     }
 
-    // Positional argument: first one is the skill name
+    // Positional argument: first one is the skill name, unless it's a built-in command
     if (!skillName && !arg.startsWith('-')) {
       skillName = arg;
     }
