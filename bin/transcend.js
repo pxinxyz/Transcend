@@ -22,6 +22,7 @@
  *   --chain <skill>       Chain to a second skill after the first completes
  *   --dry-run             Show rendered args without executing
  *   --list                List all available skills and exit
+ *   --mcp                 Start the MCP server (stdio mode)
  *   --version             Show version and exit
  *   --help                Show this help message
  */
@@ -68,6 +69,7 @@ Global flags:
   --chain <skill>       Chain to downstream skill
   --dry-run             Show rendered args without executing
   --list                List available skills
+  --mcp                 Start MCP server on stdio
   --version             Show version
   --help                Show this help
 
@@ -92,6 +94,12 @@ const COMMANDS = ['list', 'show', 'validate', 'test'];
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // ── MCP mode: start the MCP server and stay alive on stdio ──
+  if (args.some(a => a === '--mcp')) {
+    await import('../lib/mcp-server.js');
+    return;
+  }
 
   // No args → help
   if (args.length === 0) {
@@ -349,7 +357,7 @@ function parseArgs(args) {
       }
 
       // Known global flags
-      const globalFlags = ['skills-dir', 'timeout', 'debug', 'json', 'chain', 'dry-run', 'list', 'version', 'help'];
+      const globalFlags = ['skills-dir', 'timeout', 'debug', 'json', 'chain', 'dry-run', 'list', 'mcp', 'version', 'help'];
       if (globalFlags.includes(key)) {
         flags[key] = value;
       } else {
