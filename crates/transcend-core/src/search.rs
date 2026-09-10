@@ -1,13 +1,16 @@
 //! In-process code search engine powered by ripgrep primitives.
 //!
-//! Provides fast, single-threaded (V1) recursive code search respecting `.gitignore`,
-//! with NUL-byte binary detection, lossy UTF-8 decoding, and token-budget bounding.
+//! Provides fast, parallel recursive code search respecting `.gitignore`,
+//! with NUL-byte binary detection, lossy UTF-8 decoding, atomic match budgeting,
+//! and deterministic result aggregation.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, SearcherBuilder, Sink, SinkMatch};
-use ignore::WalkBuilder;
 use ignore::overrides::OverrideBuilder;
+use ignore::{WalkBuilder, WalkState};
 use transcend_protocol::{FileCluster, MatchItem, SearchRequest, SearchResponse};
 
 use crate::{CoreError, CoreResult};
@@ -15,11 +18,14 @@ use crate::{CoreError, CoreResult};
 /// Default maximum number of line matches to collect before truncation.
 pub const DEFAULT_MAX_MATCHES: usize = 50;
 
-/// In-process search scanner.
+/// Safety cutoff for total match aggregation to prevent unbounded memory on pathological inputs.
+pub const MAX_SAFETY_MATCH_LIMIT: usize = 500_000;
+
+/// In-process search scanner with parallel traversal.
 pub struct SearchScanner;
 
 impl SearchScanner {
-    /// Execute search against the filesystem.
+    /// Execute multi-threaded search against the filesystem.
     pub fn scan(req: &SearchRequest) -> CoreResult<SearchResponse> {
         let root_str = req.path.as_deref().unwrap_or(".");
         let root_path = Path::new(root_str);
@@ -33,11 +39,13 @@ impl SearchScanner {
 
         // Build regex matcher
         let case_insensitive = !req.case_sensitive.unwrap_or(false);
-        let matcher = RegexMatcherBuilder::new()
-            .case_insensitive(case_insensitive)
-            .multi_line(false)
-            .build(&req.pattern)
-            .map_err(|e| CoreError::InvalidPattern(e.to_string()))?;
+        let matcher = Arc::new(
+            RegexMatcherBuilder::new()
+                .case_insensitive(case_insensitive)
+                .multi_line(false)
+                .build(&req.pattern)
+                .map_err(|e| CoreError::InvalidPattern(e.to_string()))?,
+        );
 
         // Build file walker
         let mut walk_builder = WalkBuilder::new(root_path);
@@ -61,79 +69,135 @@ impl SearchScanner {
         }
 
         let max_matches = req.max_matches.unwrap_or(DEFAULT_MAX_MATCHES);
-        let mut collected_matches: Vec<MatchItem> = Vec::new();
-        let mut clusters: Vec<FileCluster> = Vec::new();
-        let mut total_matches = 0;
+        let total_matches = Arc::new(AtomicUsize::new(0));
+        let collected_matches = Arc::new(Mutex::new(Vec::new()));
+        let clusters = Arc::new(Mutex::new(Vec::new()));
 
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(0x00))
-            .bom_sniffing(true)
-            .line_number(true)
-            .build();
+        let root_path_buf = root_path.to_path_buf();
+        let walk_parallel = walk_builder.build_parallel();
 
-        for entry_result in walk_builder.build() {
-            let entry = match entry_result {
-                Ok(ent) => ent,
-                Err(err) => {
-                    tracing::debug!(error = %err, "Error reading directory entry");
-                    continue;
+        walk_parallel.run(|| {
+            let matcher = Arc::clone(&matcher);
+            let total_matches = Arc::clone(&total_matches);
+            let collected_matches = Arc::clone(&collected_matches);
+            let clusters = Arc::clone(&clusters);
+            let root_path_buf = root_path_buf.clone();
+
+            let mut searcher = SearcherBuilder::new()
+                .binary_detection(BinaryDetection::quit(0x00))
+                .bom_sniffing(true)
+                .line_number(true)
+                .build();
+
+            Box::new(move |entry_result| {
+                if total_matches.load(Ordering::Relaxed) >= MAX_SAFETY_MATCH_LIMIT {
+                    return WalkState::Quit;
                 }
-            };
 
-            // Only process regular files
-            if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
-                continue;
-            }
+                let entry = match entry_result {
+                    Ok(ent) => ent,
+                    Err(err) => {
+                        tracing::debug!(error = %err, "Error reading directory entry");
+                        return WalkState::Continue;
+                    }
+                };
 
-            let path = entry.path();
-            let relative_path = path
-                .strip_prefix(root_path)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
+                // Only process regular files
+                if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                    return WalkState::Continue;
+                }
 
-            let mut file_match_count = 0;
-            let mut collector = MatchCollector {
-                file_path: &relative_path,
-                max_matches,
-                matches: &mut collected_matches,
-                file_match_count: &mut file_match_count,
-                total_matches: &mut total_matches,
-            };
+                let path = entry.path();
+                let relative_path = path
+                    .strip_prefix(&root_path_buf)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
 
-            if let Err(err) = searcher.search_path(&matcher, path, &mut collector) {
-                tracing::debug!(path = %path.display(), error = %err, "Search failed for path");
-            }
+                let mut local_matches: Vec<MatchItem> = Vec::new();
+                let mut file_match_count: usize = 0;
 
-            if file_match_count > 0 {
-                clusters.push(FileCluster {
-                    file: relative_path,
-                    match_count: file_match_count,
-                });
-            }
-        }
+                let mut collector = ThreadMatchCollector {
+                    file_path: &relative_path,
+                    max_matches,
+                    local_matches: &mut local_matches,
+                    file_match_count: &mut file_match_count,
+                    total_matches: &total_matches,
+                };
 
-        let truncated = total_matches > max_matches;
+                if let Err(err) = searcher.search_path(&*matcher, path, &mut collector) {
+                    tracing::debug!(path = %path.display(), error = %err, "Search failed for path");
+                }
+
+                if file_match_count > 0 {
+                    // Record file cluster summary
+                    if let Ok(mut c_guard) = clusters.lock() {
+                        c_guard.push(FileCluster {
+                            file: relative_path,
+                            match_count: file_match_count,
+                        });
+                    }
+
+                    // Flush local matches to shared collector up to budget cap
+                    if !local_matches.is_empty() {
+                        if let Ok(mut m_guard) = collected_matches.lock() {
+                            if m_guard.len() < max_matches {
+                                let remaining = max_matches - m_guard.len();
+                                m_guard.extend(local_matches.into_iter().take(remaining));
+                            }
+                        }
+                    }
+                }
+
+                WalkState::Continue
+            })
+        });
+
+        let total = total_matches.load(Ordering::SeqCst);
+        let mut matches = Arc::try_unwrap(collected_matches)
+            .map(|m| m.into_inner().unwrap_or_default())
+            .unwrap_or_else(|m| m.lock().unwrap().clone());
+        let mut clusters = Arc::try_unwrap(clusters)
+            .map(|c| c.into_inner().unwrap_or_default())
+            .unwrap_or_else(|c| c.lock().unwrap().clone());
+
+        // Deterministic sorting across concurrent worker completions:
+        // 1. Line matches ordered by file path then line number
+        matches.sort_by(|a, b| {
+            a.file
+                .cmp(&b.file)
+                .then_with(|| a.line_number.cmp(&b.line_number))
+        });
+        matches.truncate(max_matches);
+
+        // 2. Clusters ordered by match_count descending (dense files first)
+        clusters.sort_by(|a, b| {
+            b.match_count
+                .cmp(&a.match_count)
+                .then_with(|| a.file.cmp(&b.file))
+        });
+
+        let truncated = total > max_matches;
 
         Ok(SearchResponse {
-            total_matches,
-            matches: collected_matches,
+            total_matches: total,
+            matches,
             clusters,
             truncated,
         })
     }
 }
 
-/// Custom sink that collects matches into strongly-typed items.
-struct MatchCollector<'a> {
+/// Thread-local sink that collects matches for a single file into local buffers.
+struct ThreadMatchCollector<'a> {
     file_path: &'a str,
     max_matches: usize,
-    matches: &'a mut Vec<MatchItem>,
+    local_matches: &'a mut Vec<MatchItem>,
     file_match_count: &'a mut usize,
-    total_matches: &'a mut usize,
+    total_matches: &'a AtomicUsize,
 }
 
-impl<'a> Sink for MatchCollector<'a> {
+impl<'a> Sink for ThreadMatchCollector<'a> {
     type Error = std::io::Error;
 
     fn matched(
@@ -141,17 +205,16 @@ impl<'a> Sink for MatchCollector<'a> {
         _searcher: &grep_searcher::Searcher,
         mat: &SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
-        *self.total_matches += 1;
+        self.total_matches.fetch_add(1, Ordering::Relaxed);
         *self.file_match_count += 1;
 
-        if self.matches.len() < self.max_matches {
+        if self.local_matches.len() < self.max_matches {
             let line_number = mat.line_number().unwrap_or(0) as usize;
-            // Lossy UTF-8 decoding to guarantee no panics on non-UTF-8 / Latin-1 text files
             let raw_bytes = mat.bytes();
             let line_str = String::from_utf8_lossy(raw_bytes);
             let line_trimmed = line_str.trim_end_matches(['\r', '\n']).to_string();
 
-            self.matches.push(MatchItem {
+            self.local_matches.push(MatchItem {
                 file: self.file_path.to_string(),
                 line_number,
                 line_text: line_trimmed,

@@ -259,4 +259,66 @@ mod tests {
         assert_eq!(res.clusters.len(), 1);
         assert_eq!(res.clusters[0].match_count, 10);
     }
+
+    #[test]
+    fn test_search_concurrency_and_deterministic_ordering() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Create 20 files across subdirectories with variable hit counts
+        let mut expected_total = 0;
+        for i in 1..=20 {
+            let sub = sandbox.dir.join(format!("sub_{}", i % 4));
+            fs::create_dir_all(&sub).unwrap();
+            let mut file_content = String::new();
+            for line_idx in 0..i {
+                file_content.push_str(&format!("noise line {}\n", line_idx));
+                file_content.push_str("concurrent_needle_marker\n");
+                expected_total += 1;
+            }
+            fs::write(sub.join(format!("file_{:02}.txt", i)), file_content).unwrap();
+        }
+
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "concurrent_needle_marker".to_string(),
+                path: Some(sandbox.path_str()),
+                file_pattern: None,
+                case_sensitive: Some(true),
+                max_matches: Some(25),
+            })
+            .expect("concurrent search should succeed");
+
+        assert_eq!(res.total_matches, expected_total);
+        assert_eq!(res.matches.len(), 25);
+        assert!(res.truncated);
+
+        // Verify deterministic match sorting: (file, line_number)
+        for window in res.matches.windows(2) {
+            let a = &window[0];
+            let b = &window[1];
+            assert!(
+                a.file < b.file || (a.file == b.file && a.line_number <= b.line_number),
+                "Matches must be strictly sorted by file and line: {:?} vs {:?}",
+                a,
+                b
+            );
+        }
+
+        // Verify clusters are sorted by match_count descending
+        assert_eq!(res.clusters.len(), 20);
+        for window in res.clusters.windows(2) {
+            let a = &window[0];
+            let b = &window[1];
+            assert!(
+                a.match_count >= b.match_count,
+                "Clusters must be sorted by match_count descending: {} vs {}",
+                a.match_count,
+                b.match_count
+            );
+        }
+        // Top cluster must have 20 matches (from file_20)
+        assert_eq!(res.clusters[0].match_count, 20);
+    }
 }
+
