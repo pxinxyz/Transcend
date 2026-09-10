@@ -14,16 +14,18 @@ pub struct SearchRequest {
     pub pattern: String,
     /// Optional directory or file path to search within. Defaults to current directory.
     pub path: Option<String>,
-    /// Whether the search should be case-sensitive.
+    /// Optional glob or file extension filter (e.g. "*.rs", "*.py").
+    pub file_pattern: Option<String>,
+    /// Whether the search should be case-sensitive. Defaults to false.
     pub case_sensitive: Option<bool>,
-    /// Optional maximum number of matches to return before clustering.
+    /// Optional maximum number of individual line matches to return before truncation. Defaults to 50.
     pub max_matches: Option<usize>,
 }
 
 /// A single matched line within a file.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct MatchItem {
-    /// File path where the match occurred.
+    /// File path where the match occurred (relative to search root).
     pub file: String,
     /// 1-based line number.
     pub line_number: usize,
@@ -31,14 +33,25 @@ pub struct MatchItem {
     pub line_text: String,
 }
 
+/// Summary cluster of matches within a specific file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FileCluster {
+    /// File path containing matches.
+    pub file: String,
+    /// Total number of matches in this file.
+    pub match_count: usize,
+}
+
 /// Response returned by a search operation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchResponse {
-    /// Total number of matches encountered.
+    /// Total number of matches encountered across all searched files.
     pub total_matches: usize,
-    /// List of matched items.
+    /// List of matched items (capped at max_matches).
     pub matches: Vec<MatchItem>,
-    /// Whether the results were truncated or clustered due to budget limits.
+    /// Macro-level distribution of matches across files.
+    pub clusters: Vec<FileCluster>,
+    /// Whether individual line matches were capped due to the match budget.
     pub truncated: bool,
 }
 

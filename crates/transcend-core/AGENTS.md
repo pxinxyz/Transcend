@@ -8,6 +8,10 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 
 ## 3. Local Contracts
 - Pure Rust in-process implementation; no shelling out to external Node/CLI subprocesses.
+- Search engine (V1): in-process `grep-searcher`, `grep-regex`, and `ignore::WalkBuilder`.
+- Binary skipping via NUL byte detection (`BinaryDetection::quit(0x00)`).
+- Lossy UTF-8 decoding with CRLF normalization; searching non-UTF-8 text files must never panic.
+- Match budget capping (`max_matches`) with `FileCluster` aggregation to prevent context window overflow.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
 

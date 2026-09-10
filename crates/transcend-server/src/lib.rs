@@ -66,3 +66,28 @@ impl TranscendServer {
         self.engine.outline(&req).map(Json).map_err(|e| e.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_server_search_tool_execution() {
+        let server = TranscendServer::default();
+        let res = server
+            .search(Parameters(SearchRequest {
+                pattern: "TranscendServer".to_string(),
+                path: Some(".".to_string()),
+                file_pattern: Some("*.rs".to_string()),
+                case_sensitive: Some(true),
+                max_matches: Some(10),
+            }))
+            .await
+            .expect("tool call should succeed");
+
+        assert!(res.0.total_matches > 0);
+        assert!(!res.0.matches.is_empty());
+        assert!(res.0.matches[0].line_text.contains("TranscendServer"));
+    }
+}
+
