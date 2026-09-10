@@ -1,0 +1,17 @@
+[package]
+name = "transcend-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+transcend-core = { workspace = true }
+transcend-protocol = { workspace = true }
+rmcp = { workspace = true, features = ["server", "macros", "transport-io", "schemars"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

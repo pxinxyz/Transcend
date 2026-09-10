@@ -1,0 +1,9 @@
+# Legacy reference files
+/LEGACY/
+
+# Cloned Rust MCP SDK reference
+/rust-sdk/
+
+# Cargo build artifacts
+/target/
+

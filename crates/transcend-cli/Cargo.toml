@@ -1,0 +1,18 @@
+[package]
+name = "transcend-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "transcend"
+path = "src/main.rs"
+
+[dependencies]
+transcend-server = { workspace = true }
+rmcp = { workspace = true, features = ["server", "transport-io"] }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
