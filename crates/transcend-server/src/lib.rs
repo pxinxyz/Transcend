@@ -6,7 +6,8 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, OutlineRequest, OutlineResponse, ReadSymbolRequest,
+    ReadSymbolResponse, SearchRequest, SearchResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -64,6 +65,18 @@ impl TranscendServer {
         Parameters(req): Parameters<OutlineRequest>,
     ) -> Result<Json<OutlineResponse>, String> {
         self.engine.outline(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Surgically extract a specific symbol by name or qualified locator.
+    #[tool(
+        name = "read_symbol",
+        description = "Surgically extract a specific symbol by name or qualified locator, returning exact source code and span"
+    )]
+    pub async fn read_symbol(
+        &self,
+        Parameters(req): Parameters<ReadSymbolRequest>,
+    ) -> Result<Json<ReadSymbolResponse>, String> {
+        self.engine.read_symbol(&req).map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -146,6 +159,24 @@ mod tests {
         assert!(tool_impl.children.iter().any(|c| c.name == "search"));
         assert!(tool_impl.children.iter().any(|c| c.name == "find"));
         assert!(tool_impl.children.iter().any(|c| c.name == "outline"));
+        assert!(tool_impl.children.iter().any(|c| c.name == "read_symbol"));
+    }
+
+    #[tokio::test]
+    async fn test_server_read_symbol_tool_execution() {
+        let server = TranscendServer::default();
+        let res = server
+            .read_symbol(Parameters(ReadSymbolRequest {
+                path: Some("src/lib.rs".to_string()),
+                symbol: "TranscendServer::new".to_string(),
+                ..Default::default()
+            }))
+            .await
+            .expect("read_symbol tool call should succeed");
+
+        assert!(res.0.found);
+        assert_eq!(res.0.symbol.unwrap().name, "new");
+        assert!(res.0.source_code.unwrap().contains("pub fn new"));
     }
 }
 

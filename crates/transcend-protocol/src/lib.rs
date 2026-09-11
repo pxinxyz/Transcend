@@ -298,3 +298,51 @@ pub struct OutlineResponse {
     /// Whether results were capped by symbol or file budget.
     pub truncated: bool,
 }
+
+/// Request parameters for reading a specific symbol.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ReadSymbolRequest {
+    /// File path on disk.
+    pub path: Option<String>,
+    /// Optional direct source content (for in-memory buffers / unsaved code inspection).
+    pub content: Option<String>,
+    /// Symbol locator: bare name (e.g. "poll") or qualified path (e.g. "Heartbeat::poll", "Uart.write_byte").
+    pub symbol: String,
+    /// Optional symbol kind filter to disambiguate.
+    pub kind: Option<SymbolKind>,
+    /// 0-based occurrence index if multiple symbols match (defaults to 0 / first match).
+    pub occurrence: Option<usize>,
+    /// Optional surrounding context lines before/after symbol span. Defaults to 0.
+    pub context_lines: Option<usize>,
+}
+
+/// Response returned by a read_symbol operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ReadSymbolResponse {
+    /// Whether the symbol was found.
+    pub found: bool,
+    /// Relative or absolute path to file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Full qualified name of the symbol (e.g. "Heartbeat::poll").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub qualified_name: Option<String>,
+    /// Complete symbol metadata and span.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<Symbol>,
+    /// Exact source code of the symbol (from start_byte to end_byte).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_code: Option<String>,
+    /// Surrounding context lines before the symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_before: Option<String>,
+    /// Surrounding context lines after the symbol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_after: Option<String>,
+    /// Total number of matching symbols in the file.
+    pub total_occurrences: usize,
+    /// Diagnostic feedback or suggestions if symbol was not found.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+

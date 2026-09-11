@@ -9,11 +9,13 @@ pub mod search;
 
 use thiserror::Error;
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, OutlineRequest, OutlineResponse, ReadSymbolRequest,
+    ReadSymbolResponse, SearchRequest, SearchResponse,
 };
 
 use crate::find::FindScanner;
 use crate::outline::scanner::OutlineScanner;
+use crate::outline::symbol_reader::SymbolReader;
 use crate::search::SearchScanner;
 
 /// Core engine errors.
@@ -45,6 +47,9 @@ pub trait Engine: Send + Sync {
 
     /// Extract an AST outline of a source file.
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse>;
+
+    /// Surgically extract a specific symbol by name or qualified locator.
+    fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse>;
 }
 
 /// Default in-process engine implementation.
@@ -68,6 +73,10 @@ impl Engine for NativeEngine {
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
         OutlineScanner::scan(req)
+    }
+
+    fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
+        SymbolReader::read(req)
     }
 }
 
@@ -1505,6 +1514,151 @@ Automated test suite.
         assert_eq!(core_features.children.len(), 2);
         assert_eq!(core_features.children[0].name, "Fast Search");
         assert_eq!(core_features.children[1].name, "Code Outline");
+    }
+
+    #[test]
+    fn test_read_symbol_bare_and_qualified_name() {
+        let engine = NativeEngine::new();
+        let code = r#"
+pub struct Calculator {
+    pub scale: f64,
+}
+
+impl Calculator {
+    /// Adds two numbers with scale
+    pub fn add(&self, a: f64, b: f64) -> f64 {
+        (a + b) * self.scale
+    }
+}
+
+pub fn global_helper() -> i32 {
+    42
+}
+"#;
+
+        // 1. Bare name lookup of global function
+        let res1 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("calc.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "global_helper".to_string(),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res1.found);
+        assert_eq!(res1.symbol.as_ref().unwrap().name, "global_helper");
+        assert!(res1.source_code.as_ref().unwrap().contains("42"));
+        assert_eq!(res1.total_occurrences, 1);
+
+        // 2. Qualified name lookup of method: Calculator::add
+        let res2 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("calc.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "Calculator::add".to_string(),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res2.found);
+        assert_eq!(res2.qualified_name.as_deref(), Some("Calculator::add"));
+        assert!(res2.source_code.as_ref().unwrap().contains("(a + b) * self.scale"));
+        assert_eq!(res2.symbol.as_ref().unwrap().doc_comment.as_deref(), Some("Adds two numbers with scale"));
+
+        // 3. Normalized dot notation lookup: Calculator.add
+        let res3 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("calc.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "Calculator.add".to_string(),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res3.found);
+        assert_eq!(res3.qualified_name.as_deref(), Some("Calculator::add"));
+
+        // 4. Bare method name lookup
+        let res4 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("calc.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "add".to_string(),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res4.found);
+        assert_eq!(res4.symbol.as_ref().unwrap().name, "add");
+    }
+
+    #[test]
+    fn test_read_symbol_occurrences_and_context() {
+        let engine = NativeEngine::new();
+        let code = r#"// Line 1: header
+// Line 2: intro
+fn execute() {
+    println!("first");
+}
+// Line 6: middle
+fn execute() {
+    println!("second");
+}
+// Line 10: footer"#;
+
+        // Occurrence 0 (first) with 1 context line before and after
+        let res0 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("exec.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "execute".to_string(),
+            occurrence: Some(0),
+            context_lines: Some(1),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res0.found);
+        assert_eq!(res0.total_occurrences, 2);
+        assert!(res0.source_code.as_ref().unwrap().contains("first"));
+        assert!(res0.context_before.as_ref().unwrap().contains("Line 2"));
+        assert!(res0.context_after.as_ref().unwrap().contains("Line 6"));
+
+        // Occurrence 1 (second)
+        let res1 = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("exec.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "execute".to_string(),
+            occurrence: Some(1),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(res1.found);
+        assert!(res1.source_code.as_ref().unwrap().contains("second"));
+
+        // Occurrence out of range
+        let res_out = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("exec.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "execute".to_string(),
+            occurrence: Some(99),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(!res_out.found);
+        assert!(res_out.message.as_ref().unwrap().contains("out of range"));
+    }
+
+    #[test]
+    fn test_read_symbol_not_found_suggestions() {
+        let engine = NativeEngine::new();
+        let code = r#"
+pub fn parse_header() {}
+pub fn parse_body() {}
+"#;
+        let res = engine.read_symbol(&ReadSymbolRequest {
+            path: Some("parser.rs".to_string()),
+            content: Some(code.to_string()),
+            symbol: "parse_footer".to_string(),
+            ..Default::default()
+        }).unwrap();
+
+        assert!(!res.found);
+        assert_eq!(res.total_occurrences, 0);
+        let msg = res.message.unwrap();
+        assert!(msg.contains("parse_header"));
+        assert!(msg.contains("parse_body"));
     }
 }
 
