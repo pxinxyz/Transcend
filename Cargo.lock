@@ -607,6 +607,8 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rmcp"
 version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b88db56b8ae316560e9e868b6b978ea940f27cb883323fc90e07435e44158f5c"
 dependencies = [
  "chrono",
  "futures",
@@ -627,6 +629,8 @@ dependencies = [
 [[package]]
 name = "rmcp-macros"
 version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "873b730df6f0a9b74b13eb514e0dca4c2db0d8b68b74af98a2e9bf3f9d436585"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -932,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -944,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "globset",
@@ -980,7 +984,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "schemars",
  "serde",
@@ -989,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "rmcp",

@@ -5,14 +5,17 @@ members = [
     "crates/transcend-server",
     "crates/transcend-cli",
 ]
-exclude = ["rust-sdk"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 authors = ["pxin"]
+repository = "https://github.com/pxinxyz/Transcend"
+homepage = "https://github.com/pxinxyz/Transcend"
+readme = "README.md"
+description = "The High-Performance Native Codebase Intelligence Engine for AI Agents"
 
 [workspace.dependencies]
 # In-workspace crates
@@ -21,7 +24,7 @@ transcend-core = { path = "crates/transcend-core" }
 transcend-server = { path = "crates/transcend-server" }
 
 # MCP Rust SDK
-rmcp = { path = "rust-sdk/crates/rmcp", default-features = false }
+rmcp = { version = "3.3.0", default-features = false }
 
 # Serialization & Schemas
 serde = { version = "1.0", features = ["derive"] }
