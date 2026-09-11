@@ -476,10 +476,21 @@ mod tests {
             .expect("find all files should succeed");
 
         assert_eq!(res.total_count, 4);
-        assert_eq!(res.paths.len(), 4);
+        assert_eq!(res.entries.len(), 4);
         assert!(!res.truncated);
-        assert!(res.paths.iter().any(|p| p.ends_with("main.rs")));
-        assert!(res.paths.iter().any(|p| p.ends_with("budget.txt")));
+        assert!(res.entries.iter().any(|e| e.path.ends_with("main.rs")));
+        assert!(res.entries.iter().any(|e| e.path.ends_with("budget.txt")));
+
+        // Metadata check
+        for entry in &res.entries {
+            assert!(entry.size_bytes > 0);
+            assert!(entry.modified.is_some());
+        }
+
+        // Extension breakdown check
+        assert_eq!(res.extension_breakdown.get("rs"), Some(&1));
+        assert_eq!(res.extension_breakdown.get("txt"), Some(&2));
+        assert_eq!(res.extension_breakdown.get("bin"), Some(&1));
     }
 
     #[test]
@@ -496,8 +507,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.total_count, 1);
-        assert_eq!(res.paths.len(), 1);
-        assert_eq!(res.paths[0], "src/main.rs");
+        assert_eq!(res.entries.len(), 1);
+        assert_eq!(res.entries[0].path, "src/main.rs");
     }
 
     #[test]
@@ -517,7 +528,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.total_count, 2);
-        assert!(res.paths.iter().all(|p| p.ends_with(".txt")));
+        assert!(res.entries.iter().all(|e| e.path.ends_with(".txt")));
     }
 
     #[test]
@@ -538,7 +549,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.total_count, 3);
-        assert!(!res.paths.iter().any(|p| p.contains("main.rs")));
+        assert!(!res.entries.iter().any(|e| e.path.contains("main.rs")));
     }
 
     #[test]
@@ -558,7 +569,84 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.total_count, 1);
-        assert_eq!(res.paths[0], "src");
+        assert_eq!(res.entries[0].path, "src");
+    }
+
+    #[test]
+    fn test_find_dynamic_excludes() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    exclude: Some(vec!["*.txt".to_string(), "*.bin".to_string()]),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        // Only src/main.rs remains
+        assert_eq!(res.total_count, 1);
+        assert_eq!(res.entries[0].path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_find_max_per_dir_diversity() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Create heavy folder with 5 files
+        let heavy = sandbox.dir.join("heavy");
+        fs::create_dir_all(&heavy).unwrap();
+        for i in 0..5 {
+            fs::write(heavy.join(format!("item_{}.rs", i)), "fn x() {}\n").unwrap();
+        }
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: Some("*.rs".to_string()),
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    max_per_dir: Some(2),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        // Total .rs files is 6 (1 in src + 5 in heavy)
+        assert_eq!(res.total_count, 6);
+        // But heavy contributed at most 2, src contributed 1 -> 3 entries returned
+        assert_eq!(res.entries.len(), 3);
+        let heavy_count = res.entries.iter().filter(|e| e.path.starts_with("heavy/")).count();
+        assert_eq!(heavy_count, 2);
+    }
+
+    #[test]
+    fn test_find_sort_by_size() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    sort_by: Some("size".to_string()),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res.entries.len(), 4);
+        for window in res.entries.windows(2) {
+            assert!(
+                window[0].size_bytes >= window[1].size_bytes,
+                "Entries must be sorted by size descending"
+            );
+        }
     }
 
     #[test]
@@ -578,7 +666,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(res.total_count, 4);
-        assert_eq!(res.paths.len(), 2);
+        assert_eq!(res.entries.len(), 2);
         assert!(res.truncated);
         assert!(!res.directory_radar.is_empty());
     }

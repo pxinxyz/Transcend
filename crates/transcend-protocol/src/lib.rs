@@ -4,6 +4,7 @@
 //! All request and response structures derive `schemars::JsonSchema` for
 //! automated schema generation within the Model Context Protocol.
 
+use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -105,12 +106,30 @@ pub struct FindOptions {
     pub max_depth: Option<usize>,
     /// Optional maximum number of file paths to return. Defaults to 100.
     pub max_results: Option<usize>,
+    /// Optional maximum number of results to return from any single directory (prevents fixture folders from monopolizing results).
+    pub max_per_dir: Option<usize>,
     /// Optional filter by file type: "file", "directory", or "any". Defaults to "file".
     pub file_type: Option<String>,
     /// Optional file extension filter (e.g. "rs", "json").
     pub extension: Option<String>,
+    /// Optional glob patterns to exclude from discovery (e.g. ["fixtures/**", "*.min.js"]).
+    pub exclude: Option<Vec<String>>,
+    /// Optional sorting criteria: "path" (alphabetical), "modified" (most recently updated first), or "size" (largest first). Defaults to "path".
+    pub sort_by: Option<String>,
     /// Whether pattern matching should be case-sensitive. Defaults to false.
     pub case_sensitive: Option<bool>,
+}
+
+/// A discovered filesystem entry with compact metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PathEntry {
+    /// Relative path from search root.
+    pub path: String,
+    /// Size of the file in bytes (0 for directories).
+    pub size_bytes: u64,
+    /// ISO 8601 timestamp of last modification time (if available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
 }
 
 /// Response returned by a file discovery operation.
@@ -118,11 +137,13 @@ pub struct FindOptions {
 pub struct FindResponse {
     /// Total number of matched files/directories before budget capping.
     pub total_count: usize,
-    /// Matched file paths relative to search root (capped by max_results).
-    pub paths: Vec<String>,
+    /// Matched file entries relative to search root (capped by max_results and max_per_dir).
+    pub entries: Vec<PathEntry>,
     /// Macro-level directory radar summarizing match distribution across directories.
     pub directory_radar: Vec<DirectoryRadar>,
-    /// Whether the returned paths were capped by max_results.
+    /// Tech-stack extension census mapping extension to count of matched files.
+    pub extension_breakdown: BTreeMap<String, usize>,
+    /// Whether the returned entries were capped by max_results or max_per_dir.
     pub truncated: bool,
 }
 

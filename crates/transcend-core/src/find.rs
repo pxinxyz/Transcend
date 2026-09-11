@@ -1,15 +1,18 @@
 //! In-process file discovery engine powered by ignore traversal.
 //!
 //! Fast, parallel filesystem traversal respecting `.gitignore`, with glob and name
-//! pattern matching, file-type filtering, depth bounding, and macro directory radar.
+//! pattern matching, file-type filtering, depth bounding, directory diversity quotas,
+//! recency/size sorting, metadata extraction, dynamic exclusions, and extension censuses.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use globset::{GlobBuilder, GlobMatcher};
+use std::time::SystemTime;
+use chrono::{DateTime, SecondsFormat, Utc};
+use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
 use ignore::{WalkBuilder, WalkState};
-use transcend_protocol::{DirectoryRadar, FindOptions, FindRequest, FindResponse};
+use transcend_protocol::{DirectoryRadar, FindOptions, FindRequest, FindResponse, PathEntry};
 
 use crate::{CoreError, CoreResult};
 
@@ -46,11 +49,10 @@ impl FindScanner {
             .as_deref()
             .map(|e| e.trim_start_matches('.').to_lowercase());
 
-        // Prepare pattern matcher if provided
+        // 1. Prepare positive pattern matcher if provided
         let pattern_matcher: Option<PatternFilter> = match &req.pattern {
             Some(pat) if !pat.is_empty() && pat != "*" => {
                 let case_insensitive = !case_sensitive;
-                // If pattern contains glob metacharacters, compile as GlobMatcher
                 if pat.contains('*') || pat.contains('?') || pat.contains('[') {
                     let glob = GlobBuilder::new(pat)
                         .case_insensitive(case_insensitive)
@@ -67,7 +69,27 @@ impl FindScanner {
             _ => None,
         };
 
-        // Build file walker
+        // 2. Prepare dynamic exclude matcher if provided
+        let exclude_matcher: Option<GlobSet> = if let Some(excludes) = &opts.exclude {
+            if !excludes.is_empty() {
+                let mut builder = GlobSetBuilder::new();
+                for pattern in excludes {
+                    let glob = GlobBuilder::new(pattern)
+                        .case_insensitive(true)
+                        .literal_separator(false)
+                        .build()
+                        .map_err(|e| CoreError::InvalidPattern(e.to_string()))?;
+                    builder.add(glob);
+                }
+                Some(builder.build().map_err(|e| CoreError::InvalidPattern(e.to_string()))?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 3. Build file walker
         let mut walk_builder = WalkBuilder::new(root_path);
         walk_builder
             .hidden(true)
@@ -81,18 +103,21 @@ impl FindScanner {
         }
 
         let total_count = Arc::new(AtomicUsize::new(0));
-        let collected_paths = Arc::new(Mutex::new(Vec::new()));
+        let collected_raw = Arc::new(Mutex::new(Vec::new()));
         let dir_counts = Arc::new(Mutex::new(HashMap::new()));
+        let extension_counts = Arc::new(Mutex::new(HashMap::new()));
 
         let root_path_buf = root_path.to_path_buf();
         let walk_parallel = walk_builder.build_parallel();
 
         walk_parallel.run(|| {
             let total_count = Arc::clone(&total_count);
-            let collected_paths = Arc::clone(&collected_paths);
+            let collected_raw = Arc::clone(&collected_raw);
             let dir_counts = Arc::clone(&dir_counts);
+            let extension_counts = Arc::clone(&extension_counts);
             let root_path_buf = root_path_buf.clone();
             let pattern_matcher = pattern_matcher.clone();
+            let exclude_matcher = exclude_matcher.clone();
             let extension_filter = extension_filter.clone();
 
             Box::new(move |entry_result| {
@@ -108,7 +133,7 @@ impl FindScanner {
                     }
                 };
 
-                // Skip the root directory itself (depth 0)
+                // Skip root directory itself (depth 0)
                 if entry.depth() == 0 {
                     return WalkState::Continue;
                 }
@@ -117,7 +142,7 @@ impl FindScanner {
                 let is_dir = file_type.map(|ft| ft.is_dir()).unwrap_or(false);
                 let is_file = file_type.map(|ft| ft.is_file()).unwrap_or(false);
 
-                // Apply file type filter
+                // File type filter
                 match file_type_filter {
                     "dir" | "directory" => {
                         if !is_dir {
@@ -138,19 +163,6 @@ impl FindScanner {
                 }
 
                 let path = entry.path();
-
-                // Apply extension filter
-                if let Some(ref ext_filter) = extension_filter {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase())
-                        .unwrap_or_default();
-                    if &ext != ext_filter {
-                        return WalkState::Continue;
-                    }
-                }
-
                 let file_name = entry.file_name().to_string_lossy();
                 let relative_path = path
                     .strip_prefix(&root_path_buf)
@@ -158,7 +170,27 @@ impl FindScanner {
                     .to_string_lossy()
                     .replace('\\', "/");
 
-                // Apply pattern filter
+                // Dynamic exclusion check
+                if let Some(ref matcher) = exclude_matcher {
+                    if matcher.is_match(&*relative_path) || matcher.is_match(&*file_name) {
+                        return WalkState::Continue;
+                    }
+                }
+
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+
+                // Extension filter check
+                if let Some(ref ext_filter) = extension_filter {
+                    if &ext != ext_filter {
+                        return WalkState::Continue;
+                    }
+                }
+
+                // Positive pattern filter check
                 if let Some(ref matcher) = pattern_matcher {
                     let matched = match matcher {
                         PatternFilter::Glob(g) => g.is_match(&*file_name) || g.is_match(&*relative_path),
@@ -175,6 +207,26 @@ impl FindScanner {
 
                 total_count.fetch_add(1, Ordering::Relaxed);
 
+                // Extract metadata: size and modification time
+                let metadata = entry.metadata().ok();
+                let size_bytes = if is_file {
+                    metadata.as_ref().map(|m| m.len()).unwrap_or(0)
+                } else {
+                    0
+                };
+                let modified_system = metadata.and_then(|m| m.modified().ok());
+                let modified_iso = modified_system.map(|st| {
+                    let dt: DateTime<Utc> = st.into();
+                    dt.to_rfc3339_opts(SecondsFormat::Secs, true)
+                });
+
+                // Update extension census
+                if is_file && !ext.is_empty() {
+                    if let Ok(mut e_guard) = extension_counts.lock() {
+                        *e_guard.entry(ext).or_insert(0) += 1;
+                    }
+                }
+
                 // Record parent directory for radar
                 let parent_dir = match Path::new(&relative_path).parent() {
                     Some(p) if !p.as_os_str().is_empty() => p.to_string_lossy().replace('\\', "/"),
@@ -182,11 +234,17 @@ impl FindScanner {
                 };
 
                 if let Ok(mut d_guard) = dir_counts.lock() {
-                    *d_guard.entry(parent_dir).or_insert(0) += 1;
+                    *d_guard.entry(parent_dir.clone()).or_insert(0) += 1;
                 }
 
-                if let Ok(mut p_guard) = collected_paths.lock() {
-                    p_guard.push(relative_path);
+                if let Ok(mut p_guard) = collected_raw.lock() {
+                    p_guard.push(RawPathEntry {
+                        path: relative_path,
+                        parent_dir,
+                        size_bytes,
+                        modified_system,
+                        modified_iso,
+                    });
                 }
 
                 WalkState::Continue
@@ -194,20 +252,66 @@ impl FindScanner {
         });
 
         let total = total_count.load(Ordering::SeqCst);
-        let mut paths = Arc::try_unwrap(collected_paths)
+        let mut raw_entries = Arc::try_unwrap(collected_raw)
             .map(|p| p.into_inner().unwrap_or_default())
             .unwrap_or_else(|p| p.lock().unwrap().clone());
         let dir_map = Arc::try_unwrap(dir_counts)
             .map(|d| d.into_inner().unwrap_or_default())
             .unwrap_or_else(|d| d.lock().unwrap().clone());
+        let ext_map = Arc::try_unwrap(extension_counts)
+            .map(|e| e.into_inner().unwrap_or_default())
+            .unwrap_or_else(|e| e.lock().unwrap().clone());
 
-        // Deterministic alphabetical sorting
-        paths.sort();
+        // 4. Sorting
+        match opts.sort_by.as_deref() {
+            Some("modified") => {
+                raw_entries.sort_by(|a, b| {
+                    b.modified_system
+                        .cmp(&a.modified_system)
+                        .then_with(|| a.path.cmp(&b.path))
+                });
+            }
+            Some("size") => {
+                raw_entries.sort_by(|a, b| {
+                    b.size_bytes
+                        .cmp(&a.size_bytes)
+                        .then_with(|| a.path.cmp(&b.path))
+                });
+            }
+            _ => {
+                // Default: "path" (alphabetical)
+                raw_entries.sort_by(|a, b| a.path.cmp(&b.path));
+            }
+        }
 
-        let truncated = total > max_results;
-        paths.truncate(max_results);
+        // 5. Apply per-directory diversity quota (max_per_dir) & max_results budget
+        let max_per_dir = opts.max_per_dir;
+        let mut dir_yield_count: HashMap<String, usize> = HashMap::new();
+        let mut entries: Vec<PathEntry> = Vec::new();
 
-        // Compute directory radar
+        for item in raw_entries {
+            if let Some(mpd) = max_per_dir {
+                let count = dir_yield_count.entry(item.parent_dir.clone()).or_insert(0);
+                if *count >= mpd {
+                    continue;
+                }
+                *count += 1;
+            }
+
+            entries.push(PathEntry {
+                path: item.path,
+                size_bytes: item.size_bytes,
+                modified: item.modified_iso,
+            });
+
+            if entries.len() >= max_results {
+                break;
+            }
+        }
+
+        let truncated = total > max_results || entries.len() < total;
+
+        // 6. Build directory radar
         let mut directory_radar: Vec<DirectoryRadar> = dir_map
             .into_iter()
             .map(|(directory, count)| DirectoryRadar {
@@ -223,10 +327,14 @@ impl FindScanner {
                 .then_with(|| a.directory.cmp(&b.directory))
         });
 
+        // 7. Build tech-stack extension breakdown
+        let extension_breakdown: BTreeMap<String, usize> = ext_map.into_iter().collect();
+
         Ok(FindResponse {
             total_count: total,
-            paths,
+            entries,
             directory_radar,
+            extension_breakdown,
             truncated,
         })
     }
@@ -238,4 +346,14 @@ enum PatternFilter {
     Glob(GlobMatcher),
     ExactSubstring(String),
     CaseInsensitiveSubstring(String),
+}
+
+/// Raw discovered path entry before sorting, diversity filtering, and serialization.
+#[derive(Clone, Debug)]
+struct RawPathEntry {
+    path: String,
+    parent_dir: String,
+    size_bytes: u64,
+    modified_system: Option<SystemTime>,
+    modified_iso: Option<String>,
 }

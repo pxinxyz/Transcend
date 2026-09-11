@@ -108,8 +108,9 @@ mod tests {
             .expect("find tool call should succeed");
 
         assert!(res.0.total_count > 0);
-        assert!(!res.0.paths.is_empty());
-        assert!(res.0.paths.iter().any(|p| p.ends_with("lib.rs")));
+        assert!(!res.0.entries.is_empty());
+        assert!(res.0.entries.iter().any(|e| e.path.ends_with("lib.rs")));
+        assert!(res.0.entries[0].size_bytes > 0);
     }
 }
 
