@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Request parameters for code searching.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchRequest {
     /// Regular expression or text pattern to search for.
     pub pattern: String,
@@ -20,6 +20,12 @@ pub struct SearchRequest {
     pub case_sensitive: Option<bool>,
     /// Optional maximum number of individual line matches to return before truncation. Defaults to 50.
     pub max_matches: Option<usize>,
+    /// Optional maximum number of line matches to return from any single file (prevents monster files from monopolizing results).
+    pub max_per_file: Option<usize>,
+    /// Optional maximum character length of an extracted line before clipping. Defaults to 500.
+    pub max_line_length: Option<usize>,
+    /// Optional number of surrounding context lines to include before and after matching lines (0, 1, or 2). Defaults to 0.
+    pub context_lines: Option<usize>,
 }
 
 /// A single matched line within a file.
@@ -31,6 +37,12 @@ pub struct MatchItem {
     pub line_number: usize,
     /// Text content of the matched line.
     pub line_text: String,
+    /// Preceding context lines (if context_lines > 0).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context_before: Vec<String>,
+    /// Following context lines (if context_lines > 0).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context_after: Vec<String>,
 }
 
 /// Summary cluster of matches within a specific file.
@@ -42,21 +54,36 @@ pub struct FileCluster {
     pub match_count: usize,
 }
 
+/// Macro-level directory cluster summarizing match distribution across the directory tree.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct DirectoryCluster {
+    /// Directory path containing matched files.
+    pub directory: String,
+    /// Number of distinct files with matches in this directory.
+    pub file_count: usize,
+    /// Total number of matches across all files in this directory.
+    pub match_count: usize,
+}
+
 /// Response returned by a search operation.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchResponse {
     /// Total number of matches encountered across all searched files.
     pub total_matches: usize,
-    /// List of matched items (capped at max_matches).
+    /// Total number of distinct files containing matches.
+    pub total_files: usize,
+    /// List of matched items (capped at max_matches with diversity guarantees).
     pub matches: Vec<MatchItem>,
-    /// Macro-level distribution of matches across files.
+    /// File-level distribution of matches (sorted by density).
     pub clusters: Vec<FileCluster>,
+    /// Macro-level directory distribution of matches (sorted by density).
+    pub directory_clusters: Vec<DirectoryCluster>,
     /// Whether individual line matches were capped due to the match budget.
     pub truncated: bool,
 }
 
 /// Request parameters for file discovery.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindRequest {
     /// Glob or name pattern to match filenames against.
     pub pattern: String,
@@ -67,7 +94,7 @@ pub struct FindRequest {
 }
 
 /// Response returned by a file discovery operation.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindResponse {
     /// Total number of matched files/directories.
     pub total_count: usize,
@@ -76,7 +103,7 @@ pub struct FindResponse {
 }
 
 /// Request parameters for AST code outlining.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutlineRequest {
     /// Path to the source file to outline.
     pub file_path: String,

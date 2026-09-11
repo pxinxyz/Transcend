@@ -81,6 +81,7 @@ mod tests {
                 file_pattern: Some("*.rs".to_string()),
                 case_sensitive: Some(true),
                 max_matches: Some(10),
+                ..Default::default()
             }))
             .await
             .expect("tool call should succeed");
