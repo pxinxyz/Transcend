@@ -66,11 +66,11 @@ impl Engine for NativeEngine {
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
         // Skeleton placeholder implementation
-        tracing::debug!(file = %req.file_path, "Executing skeleton outline");
+        tracing::debug!(path = ?req.path, "Executing skeleton outline");
         Ok(OutlineResponse {
-            file_path: req.file_path.clone(),
-            language: "unknown".to_string(),
-            symbols: vec![],
+            summary: Default::default(),
+            files: vec![],
+            truncated: false,
         })
     }
 }

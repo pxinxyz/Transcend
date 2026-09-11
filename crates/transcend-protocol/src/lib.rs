@@ -147,35 +147,150 @@ pub struct FindResponse {
     pub truncated: bool,
 }
 
-/// Request parameters for AST code outlining.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-pub struct OutlineRequest {
-    /// Path to the source file to outline.
-    pub file_path: String,
+/// Strongly-typed canonical symbol kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+    Module,
+    Namespace,
+    Struct,
+    Enum,
+    Trait,
+    Interface,
+    Class,
+    Function,
+    Method,
+    Constructor,
+    Constant,
+    Static,
+    TypeAlias,
+    Field,
+    Property,
+    Variable,
+    Macro,
+    Import,
+    Implementation,
 }
 
-/// A structural code symbol extracted from an AST.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SymbolOutline {
-    /// Name of the symbol (e.g., function, struct, class, interface name).
-    pub name: String,
-    /// Kind of symbol (e.g., "function", "struct", "enum", "method", "class").
-    pub kind: String,
+/// Exact source code coordinates for surgical follow-up.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SourceSpan {
     /// 1-based start line.
     pub start_line: usize,
+    /// 1-based start column (character offset in line).
+    pub start_col: usize,
     /// 1-based end line.
     pub end_line: usize,
-    /// Signature or declaration snippet.
+    /// 1-based end column (character offset in line).
+    pub end_col: usize,
+    /// 0-based byte offset where symbol begins.
+    pub start_byte: usize,
+    /// 0-based byte offset where symbol ends.
+    pub end_byte: usize,
+}
+
+/// Structural relationship between symbols.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SymbolRelationship {
+    /// Relationship type (e.g. "implements", "extends", "receiver", "targets").
+    pub relation: String,
+    /// Target type, interface, or trait name.
+    pub target: String,
+}
+
+/// A semantic code symbol with hierarchy and relationship links.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct Symbol {
+    /// Identifier or declaration name.
+    pub name: String,
+    /// Canonical symbol kind.
+    pub kind: SymbolKind,
+    /// Exact source location span.
+    pub span: SourceSpan,
+    /// Declaration signature (excluding implementation body).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub signature: Option<String>,
+    /// First line / summary of doc comments or docstring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_comment: Option<String>,
+    /// Symbol visibility (e.g. "public", "private", "crate").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    /// Structural relationships (implements, extends, receiver).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub relationships: Vec<SymbolRelationship>,
+    /// Child symbols representing structural ownership.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub children: Vec<Symbol>,
+}
+
+/// Parse fidelity status of a source file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ParseStatus {
+    Complete,
+    Partial,
+    SyntaxErrors,
+}
+
+/// Outlines for an individual source file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FileOutline {
+    /// Relative path to file.
+    pub file: String,
+    /// Detected language.
+    pub language: String,
+    /// Parse fidelity status.
+    pub parse_status: ParseStatus,
+    /// Root symbols in document order.
+    pub symbols: Vec<Symbol>,
+}
+
+/// High-level architectural census across all outlined files.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct OutlineSummary {
+    pub total_files: usize,
+    pub total_symbols: usize,
+    pub kind_breakdown: BTreeMap<String, usize>,
+    pub language_breakdown: BTreeMap<String, usize>,
+}
+
+/// Request parameters for code outlining.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct OutlineRequest {
+    /// File path or directory to outline. If a directory, traverses respecting ignore rules.
+    #[serde(alias = "file_path")]
+    pub path: Option<String>,
+    /// Optional direct code content (for in-memory buffer / unsaved code inspection).
+    pub content: Option<String>,
+    /// Optional tuning and budgeting options.
+    pub options: Option<OutlineOptions>,
+}
+
+/// Optional configuration and budget options for outlining.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct OutlineOptions {
+    /// Only include public / exported symbols. Defaults to false.
+    pub exported_only: Option<bool>,
+    /// Filter to specific symbol kinds (e.g. ["struct", "function", "trait"]).
+    pub symbol_kinds: Option<Vec<SymbolKind>>,
+    /// Maximum depth of symbol hierarchy to return.
+    pub max_depth: Option<usize>,
+    /// Maximum number of symbols to return across the response. Defaults to 500.
+    pub max_symbols: Option<usize>,
+    /// Maximum number of files to process if path is a directory. Defaults to 20.
+    pub max_files: Option<usize>,
+    /// Whether to extract doc comment summaries. Defaults to true.
+    pub include_doc_comments: Option<bool>,
 }
 
 /// Response returned by an outline operation.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct OutlineResponse {
-    /// Path of the outlined file.
-    pub file_path: String,
-    /// Detected programming language.
-    pub language: String,
-    /// Extracted symbols in document order.
-    pub symbols: Vec<SymbolOutline>,
+    /// High-level architectural census.
+    pub summary: OutlineSummary,
+    /// Outlines per file.
+    pub files: Vec<FileOutline>,
+    /// Whether results were capped by symbol or file budget.
+    pub truncated: bool,
 }
