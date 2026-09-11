@@ -5,17 +5,19 @@
 
 pub mod find;
 pub mod outline;
+pub mod patch;
 pub mod search;
 
 use thiserror::Error;
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, ReadSymbolRequest,
-    ReadSymbolResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, OutlineRequest, OutlineResponse, PatchRequest, PatchResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse,
 };
 
 use crate::find::FindScanner;
 use crate::outline::scanner::OutlineScanner;
 use crate::outline::symbol_reader::SymbolReader;
+use crate::patch::Patcher;
 use crate::search::SearchScanner;
 
 /// Core engine errors.
@@ -50,6 +52,9 @@ pub trait Engine: Send + Sync {
 
     /// Surgically extract a specific symbol by name or qualified locator.
     fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse>;
+
+    /// Surgically patch code with in-memory AST validation.
+    fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse>;
 }
 
 /// Default in-process engine implementation.
@@ -78,6 +83,10 @@ impl Engine for NativeEngine {
     fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
         SymbolReader::read(req)
     }
+
+    fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse> {
+        Patcher::patch(req)
+    }
 }
 
 #[cfg(test)]
@@ -86,8 +95,8 @@ mod tests {
     use std::path::PathBuf;
     use super::*;
     use transcend_protocol::{
-        FindOptions, OutlineFormat, OutlineOptions, OutlineRequest, ParseStatus, SearchOptions,
-        SymbolKind,
+        FindOptions, OutlineFormat, OutlineOptions, OutlineRequest, ParseStatus, PatchRequest,
+        SearchOptions, SymbolKind,
     };
 
     struct TestSandbox {
@@ -1762,6 +1771,118 @@ int add(int a, int b) {
             .expect("C skeleton should be present");
         assert!(c_skel.contains("struct Point {"));
         assert!(c_skel.contains("int add(int a, int b) { ... }"));
+    }
+
+    #[test]
+    fn test_patch_by_target_symbol() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let file_path = sandbox.dir.join("calc.rs");
+        let initial_code = r#"
+pub struct Calculator;
+
+impl Calculator {
+    pub fn add(&self, a: i32, b: i32) -> i32 {
+        a + b
+    }
+}
+"#;
+        fs::write(&file_path, initial_code).unwrap();
+
+        let patch_req = PatchRequest {
+            path: file_path.to_string_lossy().to_string(),
+            target_symbol: Some("Calculator::add".to_string()),
+            replacement: "    pub fn add(&self, a: i32, b: i32) -> i32 {\n        // Optimized add\n        a.wrapping_add(b)\n    }".to_string(),
+            ..Default::default()
+        };
+
+        let res = engine.patch(&patch_req).unwrap();
+        assert!(res.success);
+        assert!(res.ast_valid);
+        assert!(res.diff.is_some());
+        assert!(res.diff.as_ref().unwrap().contains("+    pub fn add"));
+
+        let updated_code = fs::read_to_string(&file_path).unwrap();
+        assert!(updated_code.contains("wrapping_add"));
+        assert!(!updated_code.contains("a + b"));
+    }
+
+    #[test]
+    fn test_patch_ast_preflight_rejection() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let file_path = sandbox.dir.join("broken.rs");
+        let initial_code = r#"
+pub fn greet() {
+    println!("hello");
+}
+"#;
+        fs::write(&file_path, initial_code).unwrap();
+
+        // Deliberately introduce broken syntax with missing closing brace and invalid token
+        let patch_req = PatchRequest {
+            path: file_path.to_string_lossy().to_string(),
+            target_symbol: Some("greet".to_string()),
+            replacement: "pub fn greet( { let = ;".to_string(),
+            ..Default::default()
+        };
+
+        let res = engine.patch(&patch_req).unwrap();
+        assert!(!res.success, "Patch should fail AST preflight check");
+        assert!(!res.ast_valid, "AST should be marked invalid");
+        assert!(!res.syntax_errors.is_empty(), "Should report syntax errors");
+        assert!(res.message.contains("AST preflight verification failed"));
+
+        // Crucial guarantee: disk MUST NOT be modified!
+        let untouched_code = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(untouched_code, initial_code, "Disk contents must remain untouched on AST failure");
+    }
+
+    #[test]
+    fn test_patch_target_text_and_dry_run() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let file_path = sandbox.dir.join("text.rs");
+        let initial_code = r#"
+pub fn run() {
+    let flag = false;
+    let mode = false;
+}
+"#;
+        fs::write(&file_path, initial_code).unwrap();
+
+        // 1. Dry run targeting text
+        let dry_req = PatchRequest {
+            path: file_path.to_string_lossy().to_string(),
+            target_text: Some("false".to_string()),
+            target_occurrence: Some(1), // Second "false"
+            replacement: "true".to_string(),
+            dry_run: Some(true),
+            ..Default::default()
+        };
+
+        let dry_res = engine.patch(&dry_req).unwrap();
+        assert!(dry_res.success);
+        assert!(dry_res.ast_valid);
+        assert!(dry_res.diff.as_ref().unwrap().contains("-    let mode = false;"));
+        assert!(dry_res.diff.as_ref().unwrap().contains("+    let mode = true;"));
+
+        // Confirm file on disk is unchanged after dry_run
+        let unchanged = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(unchanged, initial_code);
+
+        // 2. Real apply
+        let mut apply_req = dry_req;
+        apply_req.dry_run = Some(false);
+        let apply_res = engine.patch(&apply_req).unwrap();
+        assert!(apply_res.success);
+
+        let modified = fs::read_to_string(&file_path).unwrap();
+        assert!(modified.contains("let flag = false;"));
+        assert!(modified.contains("let mode = true;"));
     }
 }
 

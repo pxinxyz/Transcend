@@ -6,8 +6,8 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, ReadSymbolRequest,
-    ReadSymbolResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, OutlineRequest, OutlineResponse, PatchRequest, PatchResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -77,6 +77,18 @@ impl TranscendServer {
         Parameters(req): Parameters<ReadSymbolRequest>,
     ) -> Result<Json<ReadSymbolResponse>, String> {
         self.engine.read_symbol(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Surgically modify code with AST preflight validation before touching disk.
+    #[tool(
+        name = "patch",
+        description = "Surgically modify code targeting a symbol, span, or text with AST syntax validation before touching disk"
+    )]
+    pub async fn patch(
+        &self,
+        Parameters(req): Parameters<PatchRequest>,
+    ) -> Result<Json<PatchResponse>, String> {
+        self.engine.patch(&req).map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -160,6 +172,7 @@ mod tests {
         assert!(tool_impl.children.iter().any(|c| c.name == "find"));
         assert!(tool_impl.children.iter().any(|c| c.name == "outline"));
         assert!(tool_impl.children.iter().any(|c| c.name == "read_symbol"));
+        assert!(tool_impl.children.iter().any(|c| c.name == "patch"));
     }
 
     #[tokio::test]
@@ -177,6 +190,31 @@ mod tests {
         assert!(res.0.found);
         assert_eq!(res.0.symbol.unwrap().name, "new");
         assert!(res.0.source_code.unwrap().contains("pub fn new"));
+    }
+
+    #[tokio::test]
+    async fn test_server_patch_tool_execution() {
+        let server = TranscendServer::default();
+        let snippet = r#"
+pub fn compute() -> i32 {
+    10
+}
+"#;
+        let res = server
+            .patch(Parameters(PatchRequest {
+                path: "compute.rs".to_string(),
+                content: Some(snippet.to_string()),
+                target_symbol: Some("compute".to_string()),
+                replacement: "pub fn compute() -> i32 {\n    42\n}".to_string(),
+                dry_run: Some(true),
+                ..Default::default()
+            }))
+            .await
+            .expect("patch tool call should succeed");
+
+        assert!(res.0.success);
+        assert!(res.0.ast_valid);
+        assert!(res.0.diff.unwrap().contains("+    42"));
     }
 }
 

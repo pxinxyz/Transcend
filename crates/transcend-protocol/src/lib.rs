@@ -363,3 +363,70 @@ pub struct ReadSymbolResponse {
     pub message: Option<String>,
 }
 
+/// Detailed syntax error detected during AST preflight verification.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PatchSyntaxError {
+    /// 1-based line where syntax error occurred.
+    pub line: usize,
+    /// 1-based column where syntax error occurred.
+    pub column: usize,
+    /// Error description.
+    pub message: String,
+    /// Snippet of the erroneous code or token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unexpected_token: Option<String>,
+}
+
+/// Request parameters for AST-guarded surgical patching.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct PatchRequest {
+    /// File path to patch.
+    #[serde(alias = "file_path")]
+    pub path: String,
+    /// Target locator: symbol name (e.g. "Heartbeat::poll" or "SetupVmcsForProcessor").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_symbol: Option<String>,
+    /// Occurrence index if multiple symbols share the name (0-based, default: 0).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_occurrence: Option<usize>,
+    /// Explicit source coordinate span to replace.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_span: Option<SourceSpan>,
+    /// Literal needle string to find and replace (if not targeting symbol or span).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_text: Option<String>,
+    /// Optional in-memory code buffer (for unsaved buffer testing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// New replacement code for the target.
+    pub replacement: String,
+    /// Validate AST with Tree-sitter before modifying disk (defaults to true).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate_ast: Option<bool>,
+    /// If true, performs validation and diff calculation without writing to disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+}
+
+/// Response returned by a patch operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct PatchResponse {
+    /// Whether the patch was successfully applied (or successfully validated if dry_run).
+    pub success: bool,
+    /// Target file path.
+    pub file: String,
+    /// Exact coordinates replaced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_span: Option<SourceSpan>,
+    /// Whether the syntax tree is valid after splicing.
+    pub ast_valid: bool,
+    /// Syntax errors detected during AST preflight.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub syntax_errors: Vec<PatchSyntaxError>,
+    /// Unified diff showing the applied change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Human-readable explanation / diagnostic message.
+    pub message: String,
+}
+

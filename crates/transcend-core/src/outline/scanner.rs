@@ -112,7 +112,7 @@ impl SupportedLang {
         }
     }
 
-    fn language(&self) -> Language {
+    pub(crate) fn language(&self) -> Language {
         match self {
             SupportedLang::Rust => Language::from(tree_sitter_rust::LANGUAGE),
             SupportedLang::TypeScript | SupportedLang::JavaScript => {
