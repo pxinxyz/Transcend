@@ -1120,6 +1120,24 @@ struct Point {
         assert!(c_res.files[0].symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
         assert!(c_res.files[0].symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
 
+        let header_code = r#"
+#define MAX_BUFFER 1024
+typedef struct _ENTRY {
+    int id;
+} ENTRY, *PENTRY;
+
+int process_data(ENTRY *e);
+"#;
+        let h_res = engine.outline(&OutlineRequest {
+            path: Some("header.h".to_string()),
+            content: Some(header_code.to_string()),
+            options: None,
+        }).expect("C header outline should succeed");
+        assert_eq!(h_res.files[0].language, "c");
+        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "MAX_BUFFER" && s.kind == SymbolKind::Macro));
+        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "ENTRY" && s.kind == SymbolKind::Struct));
+        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "process_data" && s.kind == SymbolKind::Function));
+
         // 2. Test C++
         let cpp_code = r#"
 class Animal {

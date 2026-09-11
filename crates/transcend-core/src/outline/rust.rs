@@ -422,6 +422,60 @@ impl RustOutline {
         })
     }
 
+    fn extract_const(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+        let name_node = node.child_by_field_name("name")?;
+        let name = node_text(&name_node, source).to_string();
+        let visibility = Self::extract_visibility(node, source);
+
+        if options.exported_only == Some(true) && visibility.is_none() {
+            return None;
+        }
+
+        if let Some(ref allowed) = options.symbol_kinds {
+            if !allowed.contains(&SymbolKind::Constant) {
+                return None;
+            }
+        }
+
+        Some(Symbol {
+            name,
+            kind: SymbolKind::Constant,
+            span: node_span(node),
+            signature: Some(clean_signature(node_text(node, source).trim_end_matches(';'))),
+            doc_comment: Self::extract_doc_comment(node, source),
+            visibility,
+            relationships: vec![],
+            children: vec![],
+        })
+    }
+
+    fn extract_static(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+        let name_node = node.child_by_field_name("name")?;
+        let name = node_text(&name_node, source).to_string();
+        let visibility = Self::extract_visibility(node, source);
+
+        if options.exported_only == Some(true) && visibility.is_none() {
+            return None;
+        }
+
+        if let Some(ref allowed) = options.symbol_kinds {
+            if !allowed.contains(&SymbolKind::Static) {
+                return None;
+            }
+        }
+
+        Some(Symbol {
+            name,
+            kind: SymbolKind::Static,
+            span: node_span(node),
+            signature: Some(clean_signature(node_text(node, source).trim_end_matches(';'))),
+            doc_comment: Self::extract_doc_comment(node, source),
+            visibility,
+            relationships: vec![],
+            children: vec![],
+        })
+    }
+
     fn extract_node(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
         match node.kind() {
             "function_item" => self.extract_function(node, source, false, options),
@@ -430,9 +484,22 @@ impl RustOutline {
             "trait_item" => self.extract_trait(node, source, options),
             "impl_item" => self.extract_impl(node, source, options),
             "type_item" => self.extract_type_alias(node, source, options),
+            "const_item" => self.extract_const(node, source, options),
+            "static_item" => self.extract_static(node, source, options),
             "macro_definition" => self.extract_macro(node, source, options),
             "mod_item" => self.extract_module(node, source, options),
             _ => None,
+        }
+    }
+
+    fn extract_symbols_from_node(&self, node: &Node, source: &[u8], options: &OutlineOptions, symbols: &mut Vec<Symbol>) {
+        if let Some(sym) = self.extract_node(node, source, options) {
+            symbols.push(sym);
+        } else if node.kind() == "macro_invocation" || node.kind() == "token_tree" {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                self.extract_symbols_from_node(&child, source, options, symbols);
+            }
         }
     }
 }
@@ -444,9 +511,7 @@ impl LanguageOutline for RustOutline {
         let mut cursor = root.walk();
 
         for child in root.named_children(&mut cursor) {
-            if let Some(sym) = self.extract_node(&child, source, options) {
-                symbols.push(sym);
-            }
+            self.extract_symbols_from_node(&child, source, options, &mut symbols);
         }
 
         symbols

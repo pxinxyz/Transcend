@@ -431,44 +431,144 @@ fn extract_c_symbol(
             })
         }
 
-        // Declaration (could be a top-level typedef, struct, or member method prototype in a class)
-        "declaration" => {
-            // Check if it's a type definition (typedef)
-            let text = node_text(node, source);
-            if text.starts_with("typedef") {
-                let name = find_identifier(node, source).unwrap_or("TypeDef");
-                return Some(Symbol {
-                    name: name.to_string(),
-                    kind: SymbolKind::TypeAlias,
-                    span: node_span(node),
-                    signature: Some(text.trim().trim_end_matches(';').trim().to_string()),
-                    doc_comment: if options.include_doc_comments != Some(false) {
-                        extract_doc_comment(node, source)
-                    } else {
-                        None
-                    },
-                    visibility: current_visibility.map(|s| s.to_string()),
-                    relationships: Vec::new(),
-                    children: Vec::new(),
-                });
+        // Union
+        "union_specifier" => {
+            let name = node.child_by_field_name("name")
+                .map(|n| node_text(&n, source).trim().to_string())
+                .unwrap_or_else(|| "AnonymousUnion".to_string());
+
+            let span = node_span(node);
+            let signature = extract_signature(node, source);
+            let doc_comment = if options.include_doc_comments != Some(false) {
+                extract_doc_comment(node, source)
+            } else {
+                None
+            };
+
+            let mut children = Vec::new();
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for child in body.children(&mut cursor) {
+                    if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, current_visibility) {
+                        children.push(sym);
+                    }
+                }
             }
 
-            // Check if it wraps a struct/enum/class specifier
+            Some(Symbol {
+                name,
+                kind: SymbolKind::Struct,
+                span,
+                signature,
+                doc_comment,
+                visibility: current_visibility.map(|s| s.to_string()),
+                relationships: Vec::new(),
+                children,
+            })
+        }
+
+        // C Typedef / Type definition
+        "type_definition" => {
+            // A typedef may wrap a struct/enum/union or a primitive type alias
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.kind() == "struct_specifier" || child.kind() == "class_specifier" || child.kind() == "enum_specifier" {
+                if child.kind() == "struct_specifier" || child.kind() == "class_specifier" || child.kind() == "enum_specifier" || child.kind() == "union_specifier" {
+                    if let Some(mut sym) = extract_c_symbol(&child, source, depth, options, is_cpp, current_visibility) {
+                        if let Some(declarator) = node.child_by_field_name("declarator") {
+                            if let Some(alias_name) = find_identifier(&declarator, source) {
+                                if sym.name.starts_with('_') || sym.name.starts_with("Anonymous") {
+                                    sym.name = alias_name.to_string();
+                                }
+                            }
+                        }
+                        return Some(sym);
+                    }
+                }
+            }
+            let name = node.child_by_field_name("declarator")
+                .and_then(|d| find_identifier(&d, source))
+                .or_else(|| find_identifier(node, source))
+                .unwrap_or("TypeDef");
+            let text = node_text(node, source);
+            let kind = SymbolKind::TypeAlias;
+            if let Some(ref allowed) = options.symbol_kinds {
+                if !allowed.contains(&kind) {
+                    return None;
+                }
+            }
+            Some(Symbol {
+                name: name.to_string(),
+                kind,
+                span: node_span(node),
+                signature: Some(clean_signature(text.trim().trim_end_matches(';').trim())),
+                doc_comment: if options.include_doc_comments != Some(false) {
+                    extract_doc_comment(node, source)
+                } else {
+                    None
+                },
+                visibility: current_visibility.map(|s| s.to_string()),
+                relationships: Vec::new(),
+                children: Vec::new(),
+            })
+        }
+
+        // Preprocessor definitions (#define)
+        "preproc_def" | "preproc_function_def" => {
+            let name = node.child_by_field_name("name")
+                .map(|n| node_text(&n, source).trim().to_string())?;
+            let kind = SymbolKind::Macro;
+            if let Some(ref allowed) = options.symbol_kinds {
+                if !allowed.contains(&kind) {
+                    return None;
+                }
+            }
+            let text = node_text(node, source);
+            let first_line = text.lines().next().unwrap_or("").trim();
+            Some(Symbol {
+                name,
+                kind,
+                span: node_span(node),
+                signature: Some(clean_signature(first_line)),
+                doc_comment: if options.include_doc_comments != Some(false) {
+                    extract_doc_comment(node, source)
+                } else {
+                    None
+                },
+                visibility: current_visibility.map(|s| s.to_string()),
+                relationships: Vec::new(),
+                children: Vec::new(),
+            })
+        }
+
+        // Declaration (could be a top-level struct/enum/union, function prototype, or member method prototype in a class)
+        "declaration" => {
+            // Check if it wraps a struct/enum/class/union specifier
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "struct_specifier" || child.kind() == "class_specifier" || child.kind() == "enum_specifier" || child.kind() == "union_specifier" {
                     return extract_c_symbol(&child, source, depth, options, is_cpp, current_visibility);
                 }
             }
 
-            // If inside a class body and has a function declarator, it's a method declaration!
-            if depth > 0 && text.contains('(') && text.contains(')') {
+            // Function prototype or member method prototype
+            let text = node_text(node, source);
+            if text.contains('(') && text.contains(')') {
                 if let Some(name) = find_identifier(node, source) {
+                    let kind = if depth > 0 {
+                        SymbolKind::Method
+                    } else {
+                        SymbolKind::Function
+                    };
+                    if let Some(ref allowed) = options.symbol_kinds {
+                        if !allowed.contains(&kind) {
+                            return None;
+                        }
+                    }
                     return Some(Symbol {
                         name: name.to_string(),
-                        kind: SymbolKind::Method,
+                        kind,
                         span: node_span(node),
-                        signature: Some(text.trim().trim_end_matches(';').trim().to_string()),
+                        signature: Some(clean_signature(text.trim().trim_end_matches(';').trim())),
                         doc_comment: if options.include_doc_comments != Some(false) {
                             extract_doc_comment(node, source)
                         } else {
