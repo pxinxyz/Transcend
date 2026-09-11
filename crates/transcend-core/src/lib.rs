@@ -1021,6 +1021,78 @@ pub fn broken_function( {
         assert!(!res.summary.kind_breakdown.is_empty());
         assert!(res.truncated);
     }
+
+    #[test]
+    fn test_outline_max_output_bytes_budget() {
+        let engine = NativeEngine::new();
+        let code = r#"
+pub struct Alpha { pub a: u32, pub b: u32 }
+pub struct Beta { pub c: u32, pub d: u32 }
+pub struct Gamma { pub e: u32, pub f: u32 }
+pub struct Delta { pub g: u32, pub h: u32 }
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("budget_test.rs".to_string()),
+                content: Some(code.to_string()),
+                options: Some(OutlineOptions {
+                    max_output_bytes: Some(450),
+                    ..Default::default()
+                }),
+            })
+            .expect("outline should succeed");
+
+        assert!(res.truncated, "Should be truncated by byte budget");
+        let json_size = serde_json::to_vec(&res.files).unwrap().len();
+        assert!(json_size <= 600, "Output size {} should be capped", json_size);
+    }
+
+    #[test]
+    fn test_outline_include_relationships_toggle_and_single_line_docs() {
+        let engine = NativeEngine::new();
+        let code = r#"
+/// First line summary of contract.
+///
+/// Long extensive paragraph that should never be dumped into agent context.
+/// Multiple lines of prose here.
+pub struct Contract;
+
+impl Contract {
+    pub fn execute(&self) {}
+}
+"#;
+
+        // 1. Single line doc summary check
+        let res_docs = engine
+            .outline(&OutlineRequest {
+                path: Some("doc_test.rs".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .unwrap();
+
+        let contract_sym = res_docs.files[0].symbols.iter().find(|s| s.name == "Contract").unwrap();
+        assert_eq!(
+            contract_sym.doc_comment.as_deref(),
+            Some("First line summary of contract.")
+        );
+
+        // 2. Relationships toggle check
+        let res_no_rels = engine
+            .outline(&OutlineRequest {
+                path: Some("doc_test.rs".to_string()),
+                content: Some(code.to_string()),
+                options: Some(OutlineOptions {
+                    include_relationships: Some(false),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        let impl_sym = res_no_rels.files[0].symbols.iter().find(|s| s.name == "impl Contract").unwrap();
+        assert!(impl_sym.relationships.is_empty(), "Relationships should be empty when include_relationships is false");
+    }
 }
 
 

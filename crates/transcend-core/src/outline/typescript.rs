@@ -48,7 +48,7 @@ impl TypeScriptOutline {
             None
         } else {
             doc_lines.reverse();
-            Some(doc_lines.join(" "))
+            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
         }
     }
 
@@ -140,34 +140,36 @@ impl TypeScriptOutline {
         }
 
         let mut relationships = Vec::new();
-        // Check heritage (extends / implements)
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            match child.kind() {
-                "class_heritage" => {
-                    let mut h_cursor = child.walk();
-                    for h_child in child.named_children(&mut h_cursor) {
-                        if h_child.kind() == "extends_clause" {
-                            if let Some(val) = h_child.child_by_field_name("value") {
-                                relationships.push(SymbolRelationship {
-                                    relation: "extends".to_string(),
-                                    target: node_text(&val, source).to_string(),
-                                });
-                            }
-                        } else if h_child.kind() == "implements_clause" {
-                            let mut t_cursor = h_child.walk();
-                            for t in h_child.named_children(&mut t_cursor) {
-                                if t.kind() == "type_identifier" {
+        if options.include_relationships != Some(false) {
+            // Check heritage (extends / implements)
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "class_heritage" => {
+                        let mut h_cursor = child.walk();
+                        for h_child in child.named_children(&mut h_cursor) {
+                            if h_child.kind() == "extends_clause" {
+                                if let Some(val) = h_child.child_by_field_name("value") {
                                     relationships.push(SymbolRelationship {
-                                        relation: "implements".to_string(),
-                                        target: node_text(&t, source).to_string(),
+                                        relation: "extends".to_string(),
+                                        target: node_text(&val, source).to_string(),
                                     });
+                                }
+                            } else if h_child.kind() == "implements_clause" {
+                                let mut t_cursor = h_child.walk();
+                                for t in h_child.named_children(&mut t_cursor) {
+                                    if t.kind() == "type_identifier" {
+                                        relationships.push(SymbolRelationship {
+                                            relation: "implements".to_string(),
+                                            target: node_text(&t, source).to_string(),
+                                        });
+                                    }
                                 }
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -255,16 +257,18 @@ impl TypeScriptOutline {
         }
 
         let mut relationships = Vec::new();
-        let mut cursor = node.walk();
-        for child in node.named_children(&mut cursor) {
-            if child.kind() == "extends_type_clause" {
-                let mut h_cursor = child.walk();
-                for t in child.named_children(&mut h_cursor) {
-                    if t.kind() == "type_identifier" {
-                        relationships.push(SymbolRelationship {
-                            relation: "extends".to_string(),
-                            target: node_text(&t, source).to_string(),
-                        });
+        if options.include_relationships != Some(false) {
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "extends_type_clause" {
+                    let mut h_cursor = child.walk();
+                    for t in child.named_children(&mut h_cursor) {
+                        if t.kind() == "type_identifier" {
+                            relationships.push(SymbolRelationship {
+                                relation: "extends".to_string(),
+                                target: node_text(&t, source).to_string(),
+                            });
+                        }
                     }
                 }
             }

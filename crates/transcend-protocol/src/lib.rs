@@ -280,8 +280,12 @@ pub struct OutlineOptions {
     pub max_symbols: Option<usize>,
     /// Maximum number of files to process if path is a directory. Defaults to 20.
     pub max_files: Option<usize>,
-    /// Whether to extract doc comment summaries. Defaults to true.
+    /// Maximum number of bytes in the serialized symbol payload before truncation.
+    pub max_output_bytes: Option<usize>,
+    /// Whether to extract doc comment summaries (first line only). Defaults to true.
     pub include_doc_comments: Option<bool>,
+    /// Whether to extract structural relationships (e.g. implements, extends, receiver). Defaults to true.
+    pub include_relationships: Option<bool>,
 }
 
 /// Response returned by an outline operation.

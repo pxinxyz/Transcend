@@ -33,7 +33,7 @@ impl GoOutline {
             None
         } else {
             doc_lines.reverse();
-            Some(doc_lines.join(" "))
+            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
         }
     }
 
@@ -106,22 +106,24 @@ impl GoOutline {
         }
 
         let mut relationships = Vec::new();
-        if let Some(recv) = node.child_by_field_name("receiver") {
-            let recv_text = clean_signature(node_text(&recv, source));
-            let clean_target = recv_text
-                .trim_start_matches('(')
-                .trim_end_matches(')')
-                .split_whitespace()
-                .last()
-                .unwrap_or("")
-                .trim_start_matches('*')
-                .to_string();
+        if options.include_relationships != Some(false) {
+            if let Some(recv) = node.child_by_field_name("receiver") {
+                let recv_text = clean_signature(node_text(&recv, source));
+                let clean_target = recv_text
+                    .trim_start_matches('(')
+                    .trim_end_matches(')')
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("")
+                    .trim_start_matches('*')
+                    .to_string();
 
-            if !clean_target.is_empty() {
-                relationships.push(SymbolRelationship {
-                    relation: "receiver".to_string(),
-                    target: clean_target,
-                });
+                if !clean_target.is_empty() {
+                    relationships.push(SymbolRelationship {
+                        relation: "receiver".to_string(),
+                        target: clean_target,
+                    });
+                }
             }
         }
 

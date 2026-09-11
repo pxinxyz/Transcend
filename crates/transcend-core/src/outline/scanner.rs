@@ -111,7 +111,7 @@ impl OutlineScanner {
             };
             Self::accumulate_summary(&file_outline, &mut summary);
 
-            let (files, truncated) = Self::apply_budget(vec![file_outline], max_symbols);
+            let (files, truncated) = Self::apply_budget(vec![file_outline], max_symbols, options.max_output_bytes);
 
             return Ok(OutlineResponse {
                 summary,
@@ -216,7 +216,7 @@ impl OutlineScanner {
 
         summary.total_symbols = total_discovered_symbols;
 
-        let (files, truncated) = Self::apply_budget(file_outlines, max_symbols);
+        let (files, truncated) = Self::apply_budget(file_outlines, max_symbols, options.max_output_bytes);
 
         Ok(OutlineResponse {
             summary,
@@ -304,42 +304,58 @@ impl OutlineScanner {
     fn apply_budget(
         outlines: Vec<FileOutline>,
         max_symbols: usize,
+        max_output_bytes: Option<usize>,
     ) -> (Vec<FileOutline>, bool) {
-        let mut budget_remaining = max_symbols;
+        let mut symbols_remaining = max_symbols;
+        let mut bytes_remaining = max_output_bytes.unwrap_or(usize::MAX);
         let mut budgeted_outlines = Vec::new();
         let mut truncated = false;
 
-        for mut outline in outlines {
-            if budget_remaining == 0 {
+        for outline in outlines {
+            if symbols_remaining == 0 || bytes_remaining == 0 {
                 truncated = true;
                 break;
             }
 
-            let sym_count = Self::count_symbols(&outline.symbols);
-            if sym_count <= budget_remaining {
-                budget_remaining -= sym_count;
-                budgeted_outlines.push(outline);
-            } else {
-                // Truncate symbols within this file
-                truncated = true;
-                let mut kept_symbols = Vec::new();
-                for sym in outline.symbols {
-                    let cost = 1 + Self::count_symbols(&sym.children);
-                    if cost <= budget_remaining {
-                        budget_remaining -= cost;
-                        kept_symbols.push(sym);
-                    } else if budget_remaining > 0 {
-                        // Keep parent symbol without children
-                        let mut trimmed_sym = sym;
-                        trimmed_sym.children.clear();
-                        kept_symbols.push(trimmed_sym);
-                        break;
-                    } else {
-                        break;
-                    }
+            let mut kept_symbols = Vec::new();
+            for sym in outline.symbols {
+                if symbols_remaining == 0 || bytes_remaining == 0 {
+                    truncated = true;
+                    break;
                 }
-                outline.symbols = kept_symbols;
-                budgeted_outlines.push(outline);
+
+                let cost = 1 + Self::count_symbols(&sym.children);
+                let sym_bytes = serde_json::to_vec(&sym).map(|v| v.len()).unwrap_or(150);
+
+                if cost <= symbols_remaining && sym_bytes <= bytes_remaining {
+                    symbols_remaining -= cost;
+                    bytes_remaining = bytes_remaining.saturating_sub(sym_bytes);
+                    kept_symbols.push(sym);
+                } else {
+                    truncated = true;
+                    if symbols_remaining > 0 {
+                        let mut trimmed = sym;
+                        trimmed.children.clear();
+                        let trimmed_bytes = serde_json::to_vec(&trimmed).map(|v| v.len()).unwrap_or(80);
+                        if trimmed_bytes <= bytes_remaining {
+                            symbols_remaining -= 1;
+                            bytes_remaining = bytes_remaining.saturating_sub(trimmed_bytes);
+                            kept_symbols.push(trimmed);
+                        }
+                    }
+                    break;
+                }
+            }
+
+            let was_empty = kept_symbols.is_empty();
+            budgeted_outlines.push(FileOutline {
+                file: outline.file,
+                language: outline.language,
+                parse_status: outline.parse_status,
+                symbols: kept_symbols,
+            });
+
+            if was_empty && truncated {
                 break;
             }
         }

@@ -144,15 +144,17 @@ impl PythonOutline {
         }
 
         let mut relationships = Vec::new();
-        if let Some(superclasses) = node.child_by_field_name("superclasses") {
-            let mut cursor = superclasses.walk();
-            for arg in superclasses.named_children(&mut cursor) {
-                let target = node_text(&arg, source).to_string();
-                if !target.is_empty() {
-                    relationships.push(SymbolRelationship {
-                        relation: "extends".to_string(),
-                        target,
-                    });
+        if options.include_relationships != Some(false) {
+            if let Some(superclasses) = node.child_by_field_name("superclasses") {
+                let mut cursor = superclasses.walk();
+                for arg in superclasses.named_children(&mut cursor) {
+                    let target = node_text(&arg, source).to_string();
+                    if !target.is_empty() {
+                        relationships.push(SymbolRelationship {
+                            relation: "extends".to_string(),
+                            target,
+                        });
+                    }
                 }
             }
         }

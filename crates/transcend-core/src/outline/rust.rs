@@ -35,7 +35,7 @@ impl RustOutline {
             None
         } else {
             doc_lines.reverse();
-            Some(doc_lines.join(" "))
+            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
         }
     }
 
@@ -277,17 +277,21 @@ impl RustOutline {
             format!("impl {}", target_type)
         };
 
-        let mut relationships = vec![SymbolRelationship {
-            relation: "targets".to_string(),
-            target: target_type.clone(),
-        }];
-
-        if let Some(ref tr) = trait_name {
-            relationships.push(SymbolRelationship {
-                relation: "implements".to_string(),
-                target: tr.clone(),
-            });
-        }
+        let relationships = if options.include_relationships != Some(false) {
+            let mut rels = vec![SymbolRelationship {
+                relation: "targets".to_string(),
+                target: target_type.clone(),
+            }];
+            if let Some(ref tr) = trait_name {
+                rels.push(SymbolRelationship {
+                    relation: "implements".to_string(),
+                    target: tr.clone(),
+                });
+            }
+            rels
+        } else {
+            vec![]
+        };
 
         let mut children = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
