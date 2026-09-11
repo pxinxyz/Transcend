@@ -70,6 +70,7 @@ impl TranscendServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use transcend_protocol::SearchOptions;
 
     #[tokio::test]
     async fn test_server_search_tool_execution() {
@@ -78,17 +79,20 @@ mod tests {
             .search(Parameters(SearchRequest {
                 pattern: "TranscendServer".to_string(),
                 path: Some(".".to_string()),
-                file_pattern: Some("*.rs".to_string()),
-                case_sensitive: Some(true),
-                max_matches: Some(10),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    file_pattern: Some("*.rs".to_string()),
+                    case_sensitive: Some(true),
+                    max_matches: Some(10),
+                    ..Default::default()
+                }),
             }))
             .await
             .expect("tool call should succeed");
 
         assert!(res.0.total_matches > 0);
-        assert!(!res.0.matches.is_empty());
-        assert!(res.0.matches[0].line_text.contains("TranscendServer"));
+        assert!(!res.0.files.is_empty());
+        assert!(!res.0.files[0].matches.is_empty());
+        assert!(res.0.files[0].matches[0].line_text.contains("TranscendServer"));
     }
 }
 

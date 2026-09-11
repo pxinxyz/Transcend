@@ -83,6 +83,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use super::*;
+    use transcend_protocol::SearchOptions;
 
     struct TestSandbox {
         dir: PathBuf,
@@ -150,16 +151,19 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "hello_world".to_string(),
                 path: Some(sandbox.path_str()),
-                case_sensitive: Some(true),
-                max_matches: Some(50),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    case_sensitive: Some(true),
+                    max_matches: Some(50),
+                    ..Default::default()
+                }),
             })
             .expect("search should succeed");
 
         assert_eq!(res.total_matches, 1);
-        assert_eq!(res.matches.len(), 1);
-        assert_eq!(res.matches[0].line_number, 1);
-        assert!(res.matches[0].line_text.contains("fn hello_world()"));
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].matches.len(), 1);
+        assert_eq!(res.files[0].matches[0].line_number, 1);
+        assert!(res.files[0].matches[0].line_text.contains("fn hello_world()"));
         assert!(!res.truncated);
     }
 
@@ -173,8 +177,10 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "HELLO_WORLD".to_string(),
                 path: Some(sandbox.path_str()),
-                case_sensitive: Some(false),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    case_sensitive: Some(false),
+                    ..Default::default()
+                }),
             })
             .unwrap();
         assert_eq!(res_ci.total_matches, 1);
@@ -184,8 +190,10 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "HELLO_WORLD".to_string(),
                 path: Some(sandbox.path_str()),
-                case_sensitive: Some(true),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    case_sensitive: Some(true),
+                    ..Default::default()
+                }),
             })
             .unwrap();
         assert_eq!(res_cs.total_matches, 0);
@@ -201,7 +209,7 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "bin".to_string(),
                 path: Some(sandbox.path_str()),
-                ..Default::default()
+                options: None,
             })
             .unwrap();
 
@@ -219,15 +227,18 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "fn".to_string(),
                 path: Some(sandbox.path_str()),
-                file_pattern: Some("latin1.txt".to_string()),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    file_pattern: Some("latin1.txt".to_string()),
+                    ..Default::default()
+                }),
             })
             .expect("should not panic on invalid UTF-8 bytes");
 
         assert_eq!(res.total_matches, 1);
-        assert_eq!(res.matches.len(), 1);
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].matches.len(), 1);
         // Lossy UTF-8 turns 0xE9 into replacement char 
-        assert!(res.matches[0].line_text.contains("c\u{FFFD}lebre"));
+        assert!(res.files[0].matches[0].line_text.contains("c\u{FFFD}lebre"));
     }
 
     #[test]
@@ -239,19 +250,19 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "target_hit".to_string(),
                 path: Some(sandbox.path_str()),
-                max_matches: Some(3),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    max_matches: Some(3),
+                    ..Default::default()
+                }),
             })
             .unwrap();
 
         // Total matches is 10, but returned items is capped at 3
         assert_eq!(res.total_matches, 10);
-        assert_eq!(res.matches.len(), 3);
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].match_count, 10);
+        assert_eq!(res.files[0].matches.len(), 3);
         assert!(res.truncated);
-
-        // Cluster accurately records all 10 occurrences in budget.txt
-        assert_eq!(res.clusters.len(), 1);
-        assert_eq!(res.clusters[0].match_count, 10);
     }
 
     #[test]
@@ -277,42 +288,42 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "concurrent_needle_marker".to_string(),
                 path: Some(sandbox.path_str()),
-                case_sensitive: Some(true),
-                max_matches: Some(25),
-                ..Default::default()
+                options: Some(SearchOptions {
+                    case_sensitive: Some(true),
+                    max_matches: Some(25),
+                    ..Default::default()
+                }),
             })
             .expect("concurrent search should succeed");
 
         assert_eq!(res.total_matches, expected_total);
-        assert_eq!(res.matches.len(), 25);
         assert!(res.truncated);
 
-        // Verify deterministic match sorting: (file, line_number)
-        for window in res.matches.windows(2) {
-            let a = &window[0];
-            let b = &window[1];
-            assert!(
-                a.file < b.file || (a.file == b.file && a.line_number <= b.line_number),
-                "Matches must be strictly sorted by file and line: {:?} vs {:?}",
-                a,
-                b
-            );
-        }
+        // Verify total matches across files is capped at 25
+        let total_inlined_matches: usize = res.files.iter().map(|f| f.matches.len()).sum();
+        assert_eq!(total_inlined_matches, 25);
 
-        // Verify clusters are sorted by match_count descending
-        assert_eq!(res.clusters.len(), 20);
-        for window in res.clusters.windows(2) {
+        // Verify files are sorted by match_count descending
+        assert_eq!(res.files.len(), 20);
+        for window in res.files.windows(2) {
             let a = &window[0];
             let b = &window[1];
             assert!(
                 a.match_count >= b.match_count,
-                "Clusters must be sorted by match_count descending: {} vs {}",
+                "Files must be sorted by match_count descending: {} vs {}",
                 a.match_count,
                 b.match_count
             );
         }
-        // Top cluster must have 20 matches (from file_20)
-        assert_eq!(res.clusters[0].match_count, 20);
+        // Top file cluster must have 20 matches (from file_20)
+        assert_eq!(res.files[0].match_count, 20);
+
+        // Verify line matches in each file are sorted by line_number ascending
+        for file in &res.files {
+            for window in file.matches.windows(2) {
+                assert!(window[0].line_number <= window[1].line_number);
+            }
+        }
     }
 
     #[test]
@@ -338,24 +349,23 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "diversity_needle".to_string(),
                 path: Some(sandbox.path_str()),
-                file_pattern: None,
-                case_sensitive: None,
-                max_matches: Some(10),
-                max_per_file: Some(3),
-                max_line_length: None,
-                context_lines: None,
+                options: Some(SearchOptions {
+                    max_matches: Some(10),
+                    max_per_file: Some(3),
+                    ..Default::default()
+                }),
             })
             .unwrap();
 
         assert_eq!(res.total_matches, 25);
         assert_eq!(res.total_files, 2);
-        // monster contributed at most 3, regular contributed at most 3 -> total matches 6
-        assert_eq!(res.matches.len(), 6);
 
-        let monster_matches = res.matches.iter().filter(|m| m.file.contains("monster.txt")).count();
-        let regular_matches = res.matches.iter().filter(|m| m.file.contains("regular.txt")).count();
-        assert_eq!(monster_matches, 3);
-        assert_eq!(regular_matches, 3);
+        let monster = res.files.iter().find(|f| f.file.contains("monster.txt")).unwrap();
+        let regular = res.files.iter().find(|f| f.file.contains("regular.txt")).unwrap();
+        assert_eq!(monster.match_count, 20);
+        assert_eq!(monster.matches.len(), 3);
+        assert_eq!(regular.match_count, 5);
+        assert_eq!(regular.matches.len(), 3);
     }
 
     #[test]
@@ -371,17 +381,17 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "long_prefix".to_string(),
                 path: Some(sandbox.path_str()),
-                file_pattern: Some("long.txt".to_string()),
-                case_sensitive: None,
-                max_matches: None,
-                max_per_file: None,
-                max_line_length: Some(40),
-                context_lines: None,
+                options: Some(SearchOptions {
+                    file_pattern: Some("long.txt".to_string()),
+                    max_line_length: Some(40),
+                    ..Default::default()
+                }),
             })
             .unwrap();
 
-        assert_eq!(res.matches.len(), 1);
-        assert!(res.matches[0].line_text.contains("[truncated"));
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].matches.len(), 1);
+        assert!(res.files[0].matches[0].line_text.contains("[truncated"));
     }
 
     #[test]
@@ -402,12 +412,7 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "cluster_radar".to_string(),
                 path: Some(sandbox.path_str()),
-                file_pattern: None,
-                case_sensitive: None,
-                max_matches: None,
-                max_per_file: None,
-                max_line_length: None,
-                context_lines: None,
+                options: None,
             })
             .unwrap();
 
@@ -415,14 +420,22 @@ mod tests {
         assert_eq!(res.total_files, 3);
 
         // billing has 2 files and 3 matches; auth has 1 file and 1 match
-        assert!(res.directory_clusters.len() >= 2);
-        let billing_cluster = res.directory_clusters.iter().find(|d| d.directory.contains("billing")).unwrap();
-        assert_eq!(billing_cluster.file_count, 2);
-        assert_eq!(billing_cluster.match_count, 3);
+        assert!(res.directory_radar.len() >= 2);
+        let billing_radar = res
+            .directory_radar
+            .iter()
+            .find(|d| d.directory.contains("billing"))
+            .unwrap();
+        assert_eq!(billing_radar.file_count, 2);
+        assert_eq!(billing_radar.match_count, 3);
 
-        let auth_cluster = res.directory_clusters.iter().find(|d| d.directory.contains("auth")).unwrap();
-        assert_eq!(auth_cluster.file_count, 1);
-        assert_eq!(auth_cluster.match_count, 1);
+        let auth_radar = res
+            .directory_radar
+            .iter()
+            .find(|d| d.directory.contains("auth"))
+            .unwrap();
+        assert_eq!(auth_radar.file_count, 1);
+        assert_eq!(auth_radar.match_count, 1);
     }
 
     #[test]
@@ -437,17 +450,17 @@ mod tests {
             .search(&SearchRequest {
                 pattern: "matched_needle_target".to_string(),
                 path: Some(sandbox.path_str()),
-                file_pattern: Some("context.txt".to_string()),
-                case_sensitive: None,
-                max_matches: None,
-                max_per_file: None,
-                max_line_length: None,
-                context_lines: Some(2),
+                options: Some(SearchOptions {
+                    file_pattern: Some("context.txt".to_string()),
+                    context_lines: Some(2),
+                    ..Default::default()
+                }),
             })
             .unwrap();
 
-        assert_eq!(res.matches.len(), 1);
-        let m = &res.matches[0];
+        assert_eq!(res.files.len(), 1);
+        assert_eq!(res.files[0].matches.len(), 1);
+        let m = &res.files[0].matches[0];
         assert_eq!(m.context_before, vec!["line 1 before", "line 2 before"]);
         assert_eq!(m.context_after, vec!["line 4 after", "line 5 after"]);
     }
