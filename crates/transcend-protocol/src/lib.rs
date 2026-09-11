@@ -90,21 +90,40 @@ pub struct SearchResponse {
 /// Request parameters for file discovery.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindRequest {
-    /// Glob or name pattern to match filenames against.
-    pub pattern: String,
+    /// Optional filename pattern (e.g. "*.rs", "main", "Cargo.*") or glob. If omitted, lists all files.
+    pub pattern: Option<String>,
     /// Optional root directory to begin search. Defaults to current directory.
     pub path: Option<String>,
-    /// Optional maximum depth of directory traversal.
+    /// Optional discovery tuning options.
+    pub options: Option<FindOptions>,
+}
+
+/// Optional configuration options for file discovery.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct FindOptions {
+    /// Optional maximum depth of directory traversal (e.g. 1 for root items only).
     pub max_depth: Option<usize>,
+    /// Optional maximum number of file paths to return. Defaults to 100.
+    pub max_results: Option<usize>,
+    /// Optional filter by file type: "file", "directory", or "any". Defaults to "file".
+    pub file_type: Option<String>,
+    /// Optional file extension filter (e.g. "rs", "json").
+    pub extension: Option<String>,
+    /// Whether pattern matching should be case-sensitive. Defaults to false.
+    pub case_sensitive: Option<bool>,
 }
 
 /// Response returned by a file discovery operation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindResponse {
-    /// Total number of matched files/directories.
+    /// Total number of matched files/directories before budget capping.
     pub total_count: usize,
-    /// Matched file paths relative to search root.
+    /// Matched file paths relative to search root (capped by max_results).
     pub paths: Vec<String>,
+    /// Macro-level directory radar summarizing match distribution across directories.
+    pub directory_radar: Vec<DirectoryRadar>,
+    /// Whether the returned paths were capped by max_results.
+    pub truncated: bool,
 }
 
 /// Request parameters for AST code outlining.

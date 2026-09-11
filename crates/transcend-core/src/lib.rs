@@ -3,6 +3,7 @@
 //! High-performance, in-process computational primitives for code search,
 //! file discovery, AST outlining, and surgical transformations.
 
+pub mod find;
 pub mod search;
 
 use thiserror::Error;
@@ -10,6 +11,7 @@ use transcend_protocol::{
     FindRequest, FindResponse, OutlineRequest, OutlineResponse, SearchRequest, SearchResponse,
 };
 
+use crate::find::FindScanner;
 use crate::search::SearchScanner;
 
 /// Core engine errors.
@@ -59,12 +61,7 @@ impl Engine for NativeEngine {
     }
 
     fn find(&self, req: &FindRequest) -> CoreResult<FindResponse> {
-        // Skeleton placeholder implementation
-        tracing::debug!(pattern = %req.pattern, "Executing skeleton find");
-        Ok(FindResponse {
-            total_count: 0,
-            paths: vec![],
-        })
+        FindScanner::scan(req)
     }
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
@@ -83,7 +80,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use super::*;
-    use transcend_protocol::SearchOptions;
+    use transcend_protocol::{FindOptions, SearchOptions};
 
     struct TestSandbox {
         dir: PathBuf,
@@ -463,6 +460,127 @@ mod tests {
         let m = &res.files[0].matches[0];
         assert_eq!(m.context_before, vec!["line 1 before", "line 2 before"]);
         assert_eq!(m.context_after, vec!["line 4 after", "line 5 after"]);
+    }
+
+    #[test]
+    fn test_find_all_files() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .expect("find all files should succeed");
+
+        assert_eq!(res.total_count, 4);
+        assert_eq!(res.paths.len(), 4);
+        assert!(!res.truncated);
+        assert!(res.paths.iter().any(|p| p.ends_with("main.rs")));
+        assert!(res.paths.iter().any(|p| p.ends_with("budget.txt")));
+    }
+
+    #[test]
+    fn test_find_glob_pattern() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: Some("*.rs".to_string()),
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .unwrap();
+
+        assert_eq!(res.total_count, 1);
+        assert_eq!(res.paths.len(), 1);
+        assert_eq!(res.paths[0], "src/main.rs");
+    }
+
+    #[test]
+    fn test_find_extension_filter() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    extension: Some("txt".to_string()),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res.total_count, 2);
+        assert!(res.paths.iter().all(|p| p.ends_with(".txt")));
+    }
+
+    #[test]
+    fn test_find_max_depth() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // max_depth 1 should only return files in root sandbox, not in src/main.rs
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    max_depth: Some(1),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res.total_count, 3);
+        assert!(!res.paths.iter().any(|p| p.contains("main.rs")));
+    }
+
+    #[test]
+    fn test_find_directory_type_filter() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    file_type: Some("directory".to_string()),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res.total_count, 1);
+        assert_eq!(res.paths[0], "src");
+    }
+
+    #[test]
+    fn test_find_budget_capping_and_radar() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let res = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    max_results: Some(2),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res.total_count, 4);
+        assert_eq!(res.paths.len(), 2);
+        assert!(res.truncated);
+        assert!(!res.directory_radar.is_empty());
     }
 }
 

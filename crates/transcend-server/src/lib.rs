@@ -94,5 +94,22 @@ mod tests {
         assert!(!res.0.files[0].matches.is_empty());
         assert!(res.0.files[0].matches[0].line_text.contains("TranscendServer"));
     }
+
+    #[tokio::test]
+    async fn test_server_find_tool_execution() {
+        let server = TranscendServer::default();
+        let res = server
+            .find(Parameters(FindRequest {
+                pattern: Some("lib.rs".to_string()),
+                path: Some(".".to_string()),
+                options: None,
+            }))
+            .await
+            .expect("find tool call should succeed");
+
+        assert!(res.0.total_count > 0);
+        assert!(!res.0.paths.is_empty());
+        assert!(res.0.paths.iter().any(|p| p.ends_with("lib.rs")));
+    }
 }
 

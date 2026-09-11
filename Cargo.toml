@@ -33,6 +33,7 @@ grep-searcher = "0.1.17"
 grep-regex = "0.1.14"
 grep-matcher = "0.1.9"
 ignore = "0.4.33"
+globset = "0.4"
 
 # Async & Runtime
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "sync"] }

@@ -927,6 +927,7 @@ dependencies = [
 name = "transcend-core"
 version = "0.1.0"
 dependencies = [
+ "globset",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
