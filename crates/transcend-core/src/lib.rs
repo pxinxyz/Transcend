@@ -1093,6 +1093,401 @@ impl Contract {
         let impl_sym = res_no_rels.files[0].symbols.iter().find(|s| s.name == "impl Contract").unwrap();
         assert!(impl_sym.relationships.is_empty(), "Relationships should be empty when include_relationships is false");
     }
+
+    #[test]
+    fn test_outline_c_and_cpp() {
+        let engine = NativeEngine::new();
+
+        // 1. Test C
+        let c_code = r#"
+/// Adds two numbers
+int add(int a, int b) {
+    return a + b;
+}
+
+struct Point {
+    int x;
+    int y;
+};
+"#;
+        let c_res = engine.outline(&OutlineRequest {
+            path: Some("math.c".to_string()),
+            content: Some(c_code.to_string()),
+            options: None,
+        }).expect("C outline should succeed");
+
+        assert_eq!(c_res.files[0].language, "c");
+        assert!(c_res.files[0].symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
+        assert!(c_res.files[0].symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+
+        // 2. Test C++
+        let cpp_code = r#"
+class Animal {
+public:
+    Animal();
+    virtual void speak();
+private:
+    int age;
+};
+"#;
+        let cpp_res = engine.outline(&OutlineRequest {
+            path: Some("animal.cpp".to_string()),
+            content: Some(cpp_code.to_string()),
+            options: None,
+        }).expect("C++ outline should succeed");
+
+        assert_eq!(cpp_res.files[0].language, "cpp");
+        let class_sym = cpp_res.files[0].symbols.iter().find(|s| s.name == "Animal").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        assert!(class_sym.children.iter().any(|c| c.name == "speak" && c.visibility.as_deref() == Some("public")));
+        assert!(class_sym.children.iter().any(|c| c.name == "age" && c.visibility.as_deref() == Some("private")));
+    }
+
+    #[test]
+    fn test_outline_csharp() {
+        let engine = NativeEngine::new();
+        let cs_code = r#"
+namespace Services {
+    /// <summary>
+    /// Worker contract interface
+    /// </summary>
+    public interface IWorker {
+        void Execute();
+    }
+
+    public class BackgroundWorker : IWorker {
+        public string Name { get; set; }
+        public void Execute() {}
+    }
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("Worker.cs".to_string()),
+            content: Some(cs_code.to_string()),
+            options: None,
+        }).expect("C# outline should succeed");
+
+        assert_eq!(res.files[0].language, "csharp");
+        let ns = &res.files[0].symbols[0];
+        assert_eq!(ns.kind, SymbolKind::Namespace);
+        assert!(ns.children.iter().any(|s| s.name == "IWorker" && s.kind == SymbolKind::Interface));
+        let worker_class = ns.children.iter().find(|s| s.name == "BackgroundWorker").unwrap();
+        assert_eq!(worker_class.kind, SymbolKind::Class);
+        assert!(worker_class.relationships.iter().any(|r| r.relation == "implements" && r.target == "IWorker"));
+        assert!(worker_class.children.iter().any(|c| c.name == "Name" && c.kind == SymbolKind::Property));
+        assert!(worker_class.children.iter().any(|c| c.name == "Execute" && c.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_java() {
+        let engine = NativeEngine::new();
+        let java_code = r#"
+package com.transcend;
+
+/**
+ * Main application service
+ */
+public class ApplicationService implements Runnable {
+    private int counter;
+
+    public ApplicationService() {}
+
+    @Override
+    public void run() {
+        System.out.println("Running");
+    }
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("ApplicationService.java".to_string()),
+            content: Some(java_code.to_string()),
+            options: None,
+        }).expect("Java outline should succeed");
+
+        assert_eq!(res.files[0].language, "java");
+        let app_class = res.files[0].symbols.iter().find(|s| s.name == "ApplicationService").unwrap();
+        assert_eq!(app_class.kind, SymbolKind::Class);
+        assert_eq!(app_class.doc_comment.as_deref(), Some("Main application service"));
+        assert!(app_class.relationships.iter().any(|r| r.relation == "implements" && r.target == "Runnable"));
+        assert!(app_class.children.iter().any(|c| c.name == "run" && c.kind == SymbolKind::Method));
+        assert!(app_class.children.iter().any(|c| c.name == "ApplicationService" && c.kind == SymbolKind::Constructor));
+    }
+
+    #[test]
+    fn test_outline_kotlin() {
+        let engine = NativeEngine::new();
+        let kt_code = r#"
+package com.demo
+
+/**
+ * User account model
+ */
+class User(val id: String) {
+    fun getDisplayName(): String {
+        return id
+    }
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("User.kt".to_string()),
+            content: Some(kt_code.to_string()),
+            options: None,
+        }).expect("Kotlin outline should succeed");
+
+        assert_eq!(res.files[0].language, "kotlin");
+        let user_class = res.files[0].symbols.iter().find(|s| s.name == "User").unwrap();
+        assert_eq!(user_class.kind, SymbolKind::Class);
+        assert_eq!(user_class.doc_comment.as_deref(), Some("User account model"));
+        assert!(user_class.children.iter().any(|c| c.name == "getDisplayName" && c.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_php() {
+        let engine = NativeEngine::new();
+        let php_code = r#"<?php
+namespace App\Controllers;
+
+/**
+ * Controller class
+ */
+class HomeController {
+    public function index() {
+        return "hello";
+    }
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("HomeController.php".to_string()),
+            content: Some(php_code.to_string()),
+            options: None,
+        }).expect("PHP outline should succeed");
+
+        assert_eq!(res.files[0].language, "php");
+        let ns = &res.files[0].symbols[0];
+        assert_eq!(ns.kind, SymbolKind::Namespace);
+        let ctrl = ns.children.iter().find(|s| s.name == "HomeController").unwrap();
+        assert_eq!(ctrl.kind, SymbolKind::Class);
+        assert!(ctrl.children.iter().any(|m| m.name == "index" && m.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_ruby() {
+        let engine = NativeEngine::new();
+        let rb_code = r#"
+# Core authentication module
+module Authentication
+  class SessionManager < BaseManager
+    def create_session(user)
+      # logic
+    end
+  end
+end
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("auth.rb".to_string()),
+            content: Some(rb_code.to_string()),
+            options: None,
+        }).expect("Ruby outline should succeed");
+
+        assert_eq!(res.files[0].language, "ruby");
+        let m = &res.files[0].symbols[0];
+        assert_eq!(m.name, "Authentication");
+        assert_eq!(m.kind, SymbolKind::Module);
+        let cls = m.children.iter().find(|s| s.name == "SessionManager").unwrap();
+        assert_eq!(cls.kind, SymbolKind::Class);
+        assert!(cls.relationships.iter().any(|r| r.relation == "extends" && r.target == "BaseManager"));
+        assert!(cls.children.iter().any(|c| c.name == "create_session" && c.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_swift() {
+        let engine = NativeEngine::new();
+        let swift_code = r#"
+/// High performance vehicle
+public class SportsCar {
+    public init() {}
+    public func accelerate() {}
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("Car.swift".to_string()),
+            content: Some(swift_code.to_string()),
+            options: None,
+        }).expect("Swift outline should succeed");
+
+        assert_eq!(res.files[0].language, "swift");
+        let car = res.files[0].symbols.iter().find(|s| s.name == "SportsCar").unwrap();
+        assert_eq!(car.kind, SymbolKind::Class);
+        assert_eq!(car.doc_comment.as_deref(), Some("High performance vehicle"));
+        assert!(car.children.iter().any(|c| c.name == "init" && c.kind == SymbolKind::Constructor));
+        assert!(car.children.iter().any(|c| c.name == "accelerate" && c.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_bash() {
+        let engine = NativeEngine::new();
+        let bash_code = r#"#!/bin/bash
+# Deployment helper script
+export DEPLOY_ENV="production"
+
+deploy_service() {
+    echo "Deploying..."
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("deploy.sh".to_string()),
+            content: Some(bash_code.to_string()),
+            options: None,
+        }).expect("Bash outline should succeed");
+
+        assert_eq!(res.files[0].language, "bash");
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "deploy_service" && s.kind == SymbolKind::Function));
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "DEPLOY_ENV" && s.kind == SymbolKind::Constant));
+    }
+
+    #[test]
+    fn test_outline_sql() {
+        let engine = NativeEngine::new();
+        let sql_code = r#"
+-- Customer accounts table
+CREATE TABLE customers (
+    id INT PRIMARY KEY,
+    email VARCHAR(255)
+);
+
+CREATE VIEW active_customers AS SELECT * FROM customers;
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("schema.sql".to_string()),
+            content: Some(sql_code.to_string()),
+            options: None,
+        }).expect("SQL outline should succeed");
+
+        assert_eq!(res.files[0].language, "sql");
+        let tbl = res.files[0].symbols.iter().find(|s| s.name == "customers").unwrap();
+        assert_eq!(tbl.kind, SymbolKind::Struct);
+        assert_eq!(tbl.doc_comment.as_deref(), Some("Customer accounts table"));
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "active_customers" && s.kind == SymbolKind::Interface));
+    }
+
+    #[test]
+    fn test_outline_dart() {
+        let engine = NativeEngine::new();
+        let dart_code = r#"
+/// User repository
+class UserRepository {
+    void _internalSync() {}
+    void fetchUser() {}
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("repo.dart".to_string()),
+            content: Some(dart_code.to_string()),
+            options: None,
+        }).expect("Dart outline should succeed");
+
+        assert_eq!(res.files[0].language, "dart");
+        let repo = res.files[0].symbols.iter().find(|s| s.name == "UserRepository").unwrap();
+        assert_eq!(repo.kind, SymbolKind::Class);
+        assert_eq!(repo.doc_comment.as_deref(), Some("User repository"));
+        assert!(repo.children.iter().any(|c| c.name == "fetchUser" && c.visibility.as_deref() == Some("public")));
+        assert!(repo.children.iter().any(|c| c.name == "_internalSync" && c.visibility.as_deref() == Some("private")));
+    }
+
+    #[test]
+    fn test_outline_zig() {
+        let engine = NativeEngine::new();
+        let zig_code = r#"
+/// App configuration
+pub const AppConfig = struct {
+    port: u16,
+};
+
+pub fn startServer() void {
+}
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("main.zig".to_string()),
+            content: Some(zig_code.to_string()),
+            options: None,
+        }).expect("Zig outline should succeed");
+
+        assert_eq!(res.files[0].language, "zig");
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "AppConfig" && s.kind == SymbolKind::Struct));
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "startServer" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_outline_lua() {
+        let engine = NativeEngine::new();
+        let lua_code = r#"
+--- Module documentation
+local M = {}
+
+function M:save()
+end
+
+function M.load()
+end
+
+return M
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("storage.lua".to_string()),
+            content: Some(lua_code.to_string()),
+            options: None,
+        }).expect("Lua outline should succeed");
+
+        assert_eq!(res.files[0].language, "lua");
+        let save_sym = res.files[0].symbols.iter().find(|s| s.name == "M:save").unwrap();
+        assert_eq!(save_sym.kind, SymbolKind::Method);
+        assert!(save_sym.relationships.iter().any(|r| r.relation == "receiver" && r.target == "M"));
+        assert!(res.files[0].symbols.iter().any(|s| s.name == "M.load" && s.kind == SymbolKind::Function));
+    }
+
+    #[test]
+    fn test_outline_markdown() {
+        let engine = NativeEngine::new();
+        let md_code = r#"
+# Transcend Documentation
+
+Universal agent-native cartographer.
+
+## Core Features
+
+Fast in-process primitives.
+
+### Fast Search
+Multi-threaded ripgrep.
+
+### Code Outline
+Hierarchical symbol index.
+
+## Verification
+Automated test suite.
+"#;
+        let res = engine.outline(&OutlineRequest {
+            path: Some("README.md".to_string()),
+            content: Some(md_code.to_string()),
+            options: None,
+        }).expect("Markdown outline should succeed");
+
+        assert_eq!(res.files[0].language, "markdown");
+        let root_h1 = &res.files[0].symbols[0];
+        assert_eq!(root_h1.name, "Transcend Documentation");
+        assert_eq!(root_h1.kind, SymbolKind::Module);
+        assert_eq!(root_h1.doc_comment.as_deref(), Some("Universal agent-native cartographer."));
+
+        // H1 should have two H2 children: "Core Features" and "Verification"
+        assert_eq!(root_h1.children.len(), 2);
+        let core_features = &root_h1.children[0];
+        assert_eq!(core_features.name, "Core Features");
+
+        // "Core Features" should have two H3 children: "Fast Search" and "Code Outline"
+        assert_eq!(core_features.children.len(), 2);
+        assert_eq!(core_features.children[0].name, "Fast Search");
+        assert_eq!(core_features.children[1].name, "Code Outline");
+    }
 }
 
 

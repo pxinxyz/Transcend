@@ -15,10 +15,23 @@ use transcend_protocol::{
 };
 
 use crate::{CoreError, CoreResult};
+use super::bash::BashOutline;
+use super::c_cpp::{COutline, CppOutline};
+use super::csharp::CSharpOutline;
+use super::dart::DartOutline;
 use super::go::GoOutline;
+use super::java::JavaOutline;
+use super::kotlin::KotlinOutline;
+use super::lua::LuaOutline;
+use super::markdown::MarkdownOutline;
+use super::php::PhpOutline;
 use super::python::PythonOutline;
+use super::ruby::RubyOutline;
 use super::rust::RustOutline;
+use super::sql::SqlOutline;
+use super::swift::SwiftOutline;
 use super::typescript::TypeScriptOutline;
+use super::zig::ZigOutline;
 use super::LanguageOutline;
 
 pub struct OutlineScanner;
@@ -30,6 +43,20 @@ enum SupportedLang {
     JavaScript,
     Python,
     Go,
+    C,
+    Cpp,
+    CSharp,
+    Java,
+    Kotlin,
+    Php,
+    Ruby,
+    Swift,
+    Bash,
+    Sql,
+    Dart,
+    Zig,
+    Lua,
+    Markdown,
 }
 
 impl SupportedLang {
@@ -42,6 +69,20 @@ impl SupportedLang {
             "js" | "mjs" | "cjs" | "jsx" => Some(SupportedLang::JavaScript),
             "py" | "pyi" => Some(SupportedLang::Python),
             "go" => Some(SupportedLang::Go),
+            "c" | "h" => Some(SupportedLang::C),
+            "cpp" | "hpp" | "cc" | "cxx" | "hh" | "hxx" | "c++" | "h++" => Some(SupportedLang::Cpp),
+            "cs" => Some(SupportedLang::CSharp),
+            "java" => Some(SupportedLang::Java),
+            "kt" | "kts" => Some(SupportedLang::Kotlin),
+            "php" | "phtml" => Some(SupportedLang::Php),
+            "rb" => Some(SupportedLang::Ruby),
+            "swift" => Some(SupportedLang::Swift),
+            "sh" | "bash" | "zsh" => Some(SupportedLang::Bash),
+            "sql" => Some(SupportedLang::Sql),
+            "dart" => Some(SupportedLang::Dart),
+            "zig" => Some(SupportedLang::Zig),
+            "lua" => Some(SupportedLang::Lua),
+            "md" | "markdown" => Some(SupportedLang::Markdown),
             _ => None,
         }
     }
@@ -54,6 +95,20 @@ impl SupportedLang {
             SupportedLang::JavaScript => "javascript",
             SupportedLang::Python => "python",
             SupportedLang::Go => "go",
+            SupportedLang::C => "c",
+            SupportedLang::Cpp => "cpp",
+            SupportedLang::CSharp => "csharp",
+            SupportedLang::Java => "java",
+            SupportedLang::Kotlin => "kotlin",
+            SupportedLang::Php => "php",
+            SupportedLang::Ruby => "ruby",
+            SupportedLang::Swift => "swift",
+            SupportedLang::Bash => "bash",
+            SupportedLang::Sql => "sql",
+            SupportedLang::Dart => "dart",
+            SupportedLang::Zig => "zig",
+            SupportedLang::Lua => "lua",
+            SupportedLang::Markdown => "markdown",
         }
     }
 
@@ -66,6 +121,20 @@ impl SupportedLang {
             SupportedLang::Tsx => Language::from(tree_sitter_typescript::LANGUAGE_TSX),
             SupportedLang::Python => Language::from(tree_sitter_python::LANGUAGE),
             SupportedLang::Go => Language::from(tree_sitter_go::LANGUAGE),
+            SupportedLang::C => Language::from(tree_sitter_c::LANGUAGE),
+            SupportedLang::Cpp => Language::from(tree_sitter_cpp::LANGUAGE),
+            SupportedLang::CSharp => Language::from(tree_sitter_c_sharp::LANGUAGE),
+            SupportedLang::Java => Language::from(tree_sitter_java::LANGUAGE),
+            SupportedLang::Kotlin => Language::from(tree_sitter_kotlin_ng::LANGUAGE),
+            SupportedLang::Php => Language::from(tree_sitter_php::LANGUAGE_PHP),
+            SupportedLang::Ruby => Language::from(tree_sitter_ruby::LANGUAGE),
+            SupportedLang::Swift => Language::from(tree_sitter_swift::LANGUAGE),
+            SupportedLang::Bash => Language::from(tree_sitter_bash::LANGUAGE),
+            SupportedLang::Sql => Language::from(tree_sitter_sequel::LANGUAGE),
+            SupportedLang::Dart => Language::from(tree_sitter_dart::LANGUAGE),
+            SupportedLang::Zig => Language::from(tree_sitter_zig::LANGUAGE),
+            SupportedLang::Lua => Language::from(tree_sitter_lua::LANGUAGE),
+            SupportedLang::Markdown => Language::from(tree_sitter_md::LANGUAGE),
         }
     }
 
@@ -77,6 +146,20 @@ impl SupportedLang {
             }
             SupportedLang::Python => Box::new(PythonOutline::new()),
             SupportedLang::Go => Box::new(GoOutline::new()),
+            SupportedLang::C => Box::new(COutline::new()),
+            SupportedLang::Cpp => Box::new(CppOutline::new()),
+            SupportedLang::CSharp => Box::new(CSharpOutline::new()),
+            SupportedLang::Java => Box::new(JavaOutline::new()),
+            SupportedLang::Kotlin => Box::new(KotlinOutline::new()),
+            SupportedLang::Php => Box::new(PhpOutline::new()),
+            SupportedLang::Ruby => Box::new(RubyOutline::new()),
+            SupportedLang::Swift => Box::new(SwiftOutline::new()),
+            SupportedLang::Bash => Box::new(BashOutline::new()),
+            SupportedLang::Sql => Box::new(SqlOutline::new()),
+            SupportedLang::Dart => Box::new(DartOutline::new()),
+            SupportedLang::Zig => Box::new(ZigOutline::new()),
+            SupportedLang::Lua => Box::new(LuaOutline::new()),
+            SupportedLang::Markdown => Box::new(MarkdownOutline::new()),
         }
     }
 }
