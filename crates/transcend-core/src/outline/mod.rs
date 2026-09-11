@@ -20,6 +20,7 @@ pub mod zig;
 pub mod lua;
 pub mod markdown;
 pub mod scanner;
+pub mod skeleton;
 pub mod symbol_reader;
 
 use tree_sitter::{Node, Point, Tree};

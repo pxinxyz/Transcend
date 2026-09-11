@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 use tree_sitter::{Language, Parser};
 use transcend_protocol::{
-    FileOutline, OutlineOptions, OutlineRequest, OutlineResponse, OutlineSummary, ParseStatus,
-    Symbol,
+    FileOutline, OutlineFormat, OutlineOptions, OutlineRequest, OutlineResponse, OutlineSummary,
+    ParseStatus, Symbol,
 };
 
 use crate::{CoreError, CoreResult};
@@ -194,6 +194,16 @@ impl OutlineScanner {
             };
             Self::accumulate_summary(&file_outline, &mut summary);
 
+            if options.format == Some(OutlineFormat::Skeleton) {
+                let skel = super::skeleton::SkeletonRenderer::render(
+                    &file_outline.symbols,
+                    &file_outline.language,
+                    options.include_doc_comments != Some(false),
+                );
+                file_outline.skeleton = Some(skel);
+                file_outline.symbols.clear();
+            }
+
             let (files, truncated) = Self::apply_budget(vec![file_outline], max_symbols, options.max_output_bytes);
 
             return Ok(OutlineResponse {
@@ -294,6 +304,16 @@ impl OutlineScanner {
             Self::accumulate_summary(&outline, &mut summary);
             summary.total_files += 1;
 
+            if options.format == Some(OutlineFormat::Skeleton) {
+                let skel = super::skeleton::SkeletonRenderer::render(
+                    &outline.symbols,
+                    &outline.language,
+                    options.include_doc_comments != Some(false),
+                );
+                outline.skeleton = Some(skel);
+                outline.symbols.clear();
+            }
+
             file_outlines.push(outline);
         }
 
@@ -344,6 +364,7 @@ impl OutlineScanner {
             language: lang.name().to_string(),
             parse_status,
             symbols,
+            skeleton: None,
         })
     }
 
@@ -395,9 +416,38 @@ impl OutlineScanner {
         let mut truncated = false;
 
         for outline in outlines {
-            if symbols_remaining == 0 || bytes_remaining == 0 {
+            if bytes_remaining == 0 || (outline.skeleton.is_none() && symbols_remaining == 0) {
                 truncated = true;
                 break;
+            }
+
+            if let Some(mut skel) = outline.skeleton {
+                let skel_bytes = skel.len();
+                if skel_bytes <= bytes_remaining {
+                    bytes_remaining = bytes_remaining.saturating_sub(skel_bytes);
+                    budgeted_outlines.push(FileOutline {
+                        file: outline.file,
+                        language: outline.language,
+                        parse_status: outline.parse_status,
+                        symbols: Vec::new(),
+                        skeleton: Some(skel),
+                    });
+                } else {
+                    truncated = true;
+                    if bytes_remaining > 50 {
+                        skel.truncate(bytes_remaining);
+                        skel.push_str("\n// ... [truncated]");
+                        budgeted_outlines.push(FileOutline {
+                            file: outline.file,
+                            language: outline.language,
+                            parse_status: outline.parse_status,
+                            symbols: Vec::new(),
+                            skeleton: Some(skel),
+                        });
+                    }
+                    break;
+                }
+                continue;
             }
 
             let mut kept_symbols = Vec::new();
@@ -436,6 +486,7 @@ impl OutlineScanner {
                 language: outline.language,
                 parse_status: outline.parse_status,
                 symbols: kept_symbols,
+                skeleton: None,
             });
 
             if was_empty && truncated {

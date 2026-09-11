@@ -86,7 +86,8 @@ mod tests {
     use std::path::PathBuf;
     use super::*;
     use transcend_protocol::{
-        FindOptions, OutlineOptions, OutlineRequest, ParseStatus, SearchOptions, SymbolKind,
+        FindOptions, OutlineFormat, OutlineOptions, OutlineRequest, ParseStatus, SearchOptions,
+        SymbolKind,
     };
 
     struct TestSandbox {
@@ -1659,6 +1660,108 @@ pub fn parse_body() {}
         let msg = res.message.unwrap();
         assert!(msg.contains("parse_header"));
         assert!(msg.contains("parse_body"));
+    }
+
+    #[test]
+    fn test_outline_skeleton_format() {
+        let engine = NativeEngine::new();
+
+        // 1. Rust skeleton
+        let rust_code = r#"
+/// Configuration for the server.
+pub struct Config {
+    pub port: u16,
+    pub host: String,
+}
+
+impl Config {
+    pub fn new(port: u16) -> Self {
+        Self { port, host: "localhost".to_string() }
+    }
+}
+"#;
+        let rust_res = engine
+            .outline(&OutlineRequest {
+                path: Some("config.rs".to_string()),
+                content: Some(rust_code.to_string()),
+                options: Some(OutlineOptions {
+                    format: Some(OutlineFormat::Skeleton),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(rust_res.files.len(), 1);
+        let skel = rust_res.files[0]
+            .skeleton
+            .as_ref()
+            .expect("skeleton should be present");
+        assert!(
+            rust_res.files[0].symbols.is_empty(),
+            "symbols should be cleared when skeleton requested"
+        );
+        assert!(skel.contains("pub struct Config {"));
+        assert!(skel.contains("pub port: u16;"));
+        assert!(skel.contains("impl Config {"));
+        assert!(skel.contains("pub fn new(port: u16) -> Self { ... }"));
+        assert!(skel.contains("/// Configuration for the server."));
+
+        // 2. Python skeleton
+        let py_code = r#"
+class Worker:
+    """Background worker process."""
+    def run(self, job_id: int):
+        print(f"Working on {job_id}")
+        return True
+"#;
+        let py_res = engine
+            .outline(&OutlineRequest {
+                path: Some("worker.py".to_string()),
+                content: Some(py_code.to_string()),
+                options: Some(OutlineOptions {
+                    format: Some(OutlineFormat::Skeleton),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(py_res.files.len(), 1);
+        let py_skel = py_res.files[0]
+            .skeleton
+            .as_ref()
+            .expect("python skeleton should be present");
+        assert!(py_skel.contains("class Worker:"));
+        assert!(py_skel.contains("def run(self, job_id: int): ..."));
+
+        // 3. C skeleton
+        let c_code = r#"
+struct Point {
+    int x;
+    int y;
+};
+
+int add(int a, int b) {
+    return a + b;
+}
+"#;
+        let c_res = engine
+            .outline(&OutlineRequest {
+                path: Some("point.c".to_string()),
+                content: Some(c_code.to_string()),
+                options: Some(OutlineOptions {
+                    format: Some(OutlineFormat::Skeleton),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(c_res.files.len(), 1);
+        let c_skel = c_res.files[0]
+            .skeleton
+            .as_ref()
+            .expect("C skeleton should be present");
+        assert!(c_skel.contains("struct Point {"));
+        assert!(c_skel.contains("int add(int a, int b) { ... }"));
     }
 }
 

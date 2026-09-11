@@ -233,6 +233,17 @@ pub enum ParseStatus {
     SyntaxErrors,
 }
 
+/// Output format for outline results.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutlineFormat {
+    /// Full structured JSON metadata (default).
+    #[default]
+    Json,
+    /// Ultra-compact, syntax-valid code skeleton stubs.
+    Skeleton,
+}
+
 /// Outlines for an individual source file.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct FileOutline {
@@ -243,7 +254,11 @@ pub struct FileOutline {
     /// Parse fidelity status.
     pub parse_status: ParseStatus,
     /// Root symbols in document order.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub symbols: Vec<Symbol>,
+    /// Formatted code skeleton (when format == OutlineFormat::Skeleton).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skeleton: Option<String>,
 }
 
 /// High-level architectural census across all outlined files.
@@ -270,6 +285,8 @@ pub struct OutlineRequest {
 /// Optional configuration and budget options for outlining.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutlineOptions {
+    /// Output representation format: "json" (default) or "skeleton".
+    pub format: Option<OutlineFormat>,
     /// Only include public / exported symbols. Defaults to false.
     pub exported_only: Option<bool>,
     /// Filter to specific symbol kinds (e.g. ["struct", "function", "trait"]).
