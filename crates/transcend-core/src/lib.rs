@@ -4,6 +4,7 @@
 //! file discovery, AST outlining, and surgical transformations.
 
 pub mod find;
+pub mod outline;
 pub mod search;
 
 use thiserror::Error;
@@ -12,6 +13,7 @@ use transcend_protocol::{
 };
 
 use crate::find::FindScanner;
+use crate::outline::scanner::OutlineScanner;
 use crate::search::SearchScanner;
 
 /// Core engine errors.
@@ -65,13 +67,7 @@ impl Engine for NativeEngine {
     }
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
-        // Skeleton placeholder implementation
-        tracing::debug!(path = ?req.path, "Executing skeleton outline");
-        Ok(OutlineResponse {
-            summary: Default::default(),
-            files: vec![],
-            truncated: false,
-        })
+        OutlineScanner::scan(req)
     }
 }
 
@@ -80,7 +76,9 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use super::*;
-    use transcend_protocol::{FindOptions, SearchOptions};
+    use transcend_protocol::{
+        FindOptions, OutlineOptions, OutlineRequest, ParseStatus, SearchOptions, SymbolKind,
+    };
 
     struct TestSandbox {
         dir: PathBuf,
@@ -669,6 +667,359 @@ mod tests {
         assert_eq!(res.entries.len(), 2);
         assert!(res.truncated);
         assert!(!res.directory_radar.is_empty());
+    }
+
+    #[test]
+    fn test_outline_rust_symbols_and_hierarchy() {
+        let engine = NativeEngine::new();
+        let code = r#"
+/// Primary user entity.
+pub struct User {
+    pub id: u64,
+    secret: String,
+}
+
+pub enum Role {
+    Admin,
+    Member,
+}
+
+pub trait Authenticator {
+    fn authenticate(&self) -> bool;
+}
+
+impl Authenticator for User {
+    fn authenticate(&self) -> bool {
+        true
+    }
+}
+
+impl User {
+    pub fn new(id: u64) -> Self {
+        Self { id, secret: "".into() }
+    }
+}
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("user.rs".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "rust");
+        assert_eq!(file.parse_status, ParseStatus::Complete);
+
+        // 1. Struct User
+        let user_struct = file.symbols.iter().find(|s| s.name == "User" && s.kind == SymbolKind::Struct).unwrap();
+        assert_eq!(user_struct.visibility.as_deref(), Some("pub"));
+        assert_eq!(user_struct.doc_comment.as_deref(), Some("Primary user entity."));
+        assert_eq!(user_struct.children.len(), 2);
+        assert_eq!(user_struct.children[0].name, "id");
+        assert_eq!(user_struct.children[0].kind, SymbolKind::Field);
+        assert_eq!(user_struct.children[0].visibility.as_deref(), Some("pub"));
+        assert_eq!(user_struct.children[1].name, "secret");
+        assert_eq!(user_struct.children[1].visibility, None);
+
+        // Check SourceSpan coordinate preservation
+        assert!(user_struct.span.start_line >= 2);
+        assert!(user_struct.span.end_line > user_struct.span.start_line);
+        assert!(user_struct.span.end_byte > user_struct.span.start_byte);
+
+        // 2. Enum Role
+        let role_enum = file.symbols.iter().find(|s| s.name == "Role" && s.kind == SymbolKind::Enum).unwrap();
+        assert_eq!(role_enum.children.len(), 2);
+        assert_eq!(role_enum.children[0].name, "Admin");
+
+        // 3. Trait Authenticator
+        let auth_trait = file.symbols.iter().find(|s| s.name == "Authenticator" && s.kind == SymbolKind::Trait).unwrap();
+        assert_eq!(auth_trait.children.len(), 1);
+        assert_eq!(auth_trait.children[0].name, "authenticate");
+
+        // 4. Impl Authenticator for User
+        let impl_auth = file.symbols.iter().find(|s| s.name.contains("Authenticator for User")).unwrap();
+        assert_eq!(impl_auth.kind, SymbolKind::Implementation);
+        assert_eq!(impl_auth.relationships.len(), 2);
+        assert!(impl_auth.relationships.iter().any(|r| r.relation == "implements" && r.target == "Authenticator"));
+        assert!(impl_auth.relationships.iter().any(|r| r.relation == "targets" && r.target == "User"));
+        assert_eq!(impl_auth.children.len(), 1);
+        assert_eq!(impl_auth.children[0].name, "authenticate");
+
+        // 5. Impl User
+        let impl_user = file.symbols.iter().find(|s| s.name == "impl User").unwrap();
+        assert_eq!(impl_user.children.len(), 1);
+        assert_eq!(impl_user.children[0].name, "new");
+        assert_eq!(impl_user.children[0].visibility.as_deref(), Some("pub"));
+    }
+
+    #[test]
+    fn test_outline_typescript_classes_and_interfaces() {
+        let engine = NativeEngine::new();
+        let code = r#"
+/** Service contract interface */
+export interface IService {
+    port: number;
+    start(): Promise<void>;
+}
+
+export class WebServer implements IService {
+    port: number;
+    private running: boolean;
+
+    constructor(port: number) {
+        this.port = port;
+        this.running = false;
+    }
+
+    async start(): Promise<void> {
+        console.log("Started");
+    }
+}
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("server.ts".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("typescript outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "typescript");
+
+        // Interface IService
+        let iface = file.symbols.iter().find(|s| s.name == "IService").unwrap();
+        assert_eq!(iface.kind, SymbolKind::Interface);
+        assert_eq!(iface.visibility.as_deref(), Some("exported"));
+        assert!(iface.doc_comment.as_deref().unwrap().contains("Service contract"));
+        assert_eq!(iface.children.len(), 2);
+
+        // Class WebServer
+        let cls = file.symbols.iter().find(|s| s.name == "WebServer").unwrap();
+        assert_eq!(cls.kind, SymbolKind::Class);
+        assert_eq!(cls.visibility.as_deref(), Some("exported"));
+        assert!(cls.relationships.iter().any(|r| r.relation == "implements" && r.target == "IService"));
+        assert!(cls.children.iter().any(|c| c.name == "constructor"));
+        assert!(cls.children.iter().any(|c| c.name == "start" && c.kind == SymbolKind::Method));
+    }
+
+    #[test]
+    fn test_outline_python_classes_methods_docstrings() {
+        let engine = NativeEngine::new();
+        let code = r#"
+class SearchPipeline(BasePipeline):
+    """Executes distributed code searches."""
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+
+    def run(self, query: str):
+        pass
+
+    def _internal_clean(self):
+        pass
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("pipeline.py".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("python outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "python");
+
+        let cls = file.symbols.iter().find(|s| s.name == "SearchPipeline").unwrap();
+        assert_eq!(cls.kind, SymbolKind::Class);
+        assert_eq!(cls.doc_comment.as_deref(), Some("Executes distributed code searches."));
+        assert!(cls.relationships.iter().any(|r| r.relation == "extends" && r.target == "BasePipeline"));
+
+        let init_m = cls.children.iter().find(|c| c.name == "__init__").unwrap();
+        assert_eq!(init_m.kind, SymbolKind::Constructor);
+
+        let run_m = cls.children.iter().find(|c| c.name == "run").unwrap();
+        assert_eq!(run_m.kind, SymbolKind::Method);
+        assert_eq!(run_m.visibility.as_deref(), Some("public"));
+
+        let helper_m = cls.children.iter().find(|c| c.name == "_internal_clean").unwrap();
+        assert_eq!(helper_m.visibility.as_deref(), Some("private"));
+    }
+
+    #[test]
+    fn test_outline_go_functions_methods_receivers() {
+        let engine = NativeEngine::new();
+        let code = r#"
+package main
+
+type Engine struct {
+    Workers int
+}
+
+func (e *Engine) Execute(task string) error {
+    return nil
+}
+
+func internalHelper() {}
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("engine.go".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("go outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "go");
+
+        let eng_struct = file.symbols.iter().find(|s| s.name == "Engine").unwrap();
+        assert_eq!(eng_struct.kind, SymbolKind::Struct);
+        assert_eq!(eng_struct.visibility.as_deref(), Some("exported"));
+
+        let exec_method = file.symbols.iter().find(|s| s.name == "Execute").unwrap();
+        assert_eq!(exec_method.kind, SymbolKind::Method);
+        assert_eq!(exec_method.visibility.as_deref(), Some("exported"));
+        assert!(exec_method.relationships.iter().any(|r| r.relation == "receiver" && r.target == "Engine"));
+
+        let helper_fn = file.symbols.iter().find(|s| s.name == "internalHelper").unwrap();
+        assert_eq!(helper_fn.visibility, None);
+    }
+
+    #[test]
+    fn test_outline_filters_and_depth_budget() {
+        let engine = NativeEngine::new();
+        let code = r#"
+pub struct Service {
+    pub id: u64,
+    secret: String,
+}
+
+impl Service {
+    pub fn public_action(&self) {}
+    fn private_action(&self) {}
+}
+
+fn private_toplevel() {}
+pub fn public_toplevel() {}
+"#;
+
+        // 1. Exported only filter
+        let res_exported = engine
+            .outline(&OutlineRequest {
+                path: Some("service.rs".to_string()),
+                content: Some(code.to_string()),
+                options: Some(OutlineOptions {
+                    exported_only: Some(true),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert!(!res_exported.files[0].symbols.iter().any(|s| s.name == "private_toplevel"));
+        assert!(res_exported.files[0].symbols.iter().any(|s| s.name == "public_toplevel"));
+
+        // 2. Symbol kinds filter
+        let res_kinds = engine
+            .outline(&OutlineRequest {
+                path: Some("service.rs".to_string()),
+                content: Some(code.to_string()),
+                options: Some(OutlineOptions {
+                    symbol_kinds: Some(vec![SymbolKind::Struct]),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert_eq!(res_kinds.files[0].symbols.len(), 1);
+        assert_eq!(res_kinds.files[0].symbols[0].kind, SymbolKind::Struct);
+
+        // 3. Max depth pruning (depth 1 strips fields and methods)
+        let res_depth = engine
+            .outline(&OutlineRequest {
+                path: Some("service.rs".to_string()),
+                content: Some(code.to_string()),
+                options: Some(OutlineOptions {
+                    max_depth: Some(1),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        let s = res_depth.files[0].symbols.iter().find(|sym| sym.name == "Service").unwrap();
+        assert!(s.children.is_empty(), "Children should be pruned at depth 1");
+    }
+
+    #[test]
+    fn test_outline_resilient_to_syntax_errors() {
+        let engine = NativeEngine::new();
+        let broken_code = r#"
+pub struct ValidStruct {
+    pub field: u32,
+}
+
+pub fn broken_function( {
+    let incomplete = 
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("broken.rs".to_string()),
+                content: Some(broken_code.to_string()),
+                options: None,
+            })
+            .expect("should not fail even with syntax errors");
+
+        let file = &res.files[0];
+        assert_eq!(file.parse_status, ParseStatus::Partial);
+        // ValidStruct should still be extracted!
+        assert!(file.symbols.iter().any(|s| s.name == "ValidStruct"));
+    }
+
+    #[test]
+    fn test_outline_directory_macro_census_and_budget() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Write multiple multi-language files into sandbox
+        fs::write(
+            sandbox.dir.join("logic.py"),
+            "class PythonModel:\n    def execute(self):\n        pass\n",
+        )
+        .unwrap();
+
+        fs::write(
+            sandbox.dir.join("types.ts"),
+            "export interface TypeScriptContract {\n    id: string;\n}\n",
+        )
+        .unwrap();
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some(sandbox.path_str()),
+                content: None,
+                options: Some(OutlineOptions {
+                    max_symbols: Some(3),
+                    ..Default::default()
+                }),
+            })
+            .expect("directory outline should succeed");
+
+        assert!(res.summary.total_files >= 2);
+        assert!(res.summary.total_symbols > 0);
+        assert!(!res.summary.language_breakdown.is_empty());
+        assert!(!res.summary.kind_breakdown.is_empty());
+        assert!(res.truncated);
     }
 }
 

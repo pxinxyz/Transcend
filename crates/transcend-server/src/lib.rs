@@ -112,5 +112,40 @@ mod tests {
         assert!(res.0.entries.iter().any(|e| e.path.ends_with("lib.rs")));
         assert!(res.0.entries[0].size_bytes > 0);
     }
+
+    #[tokio::test]
+    async fn test_server_outline_tool_execution() {
+        let server = TranscendServer::default();
+        let res = server
+            .outline(Parameters(OutlineRequest {
+                path: Some("src/lib.rs".to_string()),
+                content: None,
+                options: None,
+            }))
+            .await
+            .expect("outline tool call should succeed");
+
+        assert_eq!(res.0.files.len(), 1);
+        let file = &res.0.files[0];
+        assert_eq!(file.language, "rust");
+
+        // Should extract TranscendServer struct
+        assert!(file.symbols.iter().any(|s| s.name == "TranscendServer"));
+
+        // Should extract impl TranscendServer with search, find, outline methods
+        // First impl block has new()
+        assert!(file.symbols.iter().any(|s| s.name == "impl TranscendServer" && s.children.iter().any(|c| c.name == "new")));
+
+        // Second impl block (tool_router) has search(), find(), outline()
+        let tool_impl = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "impl TranscendServer" && s.children.iter().any(|c| c.name == "search"))
+            .expect("tool router impl TranscendServer should be outlined");
+
+        assert!(tool_impl.children.iter().any(|c| c.name == "search"));
+        assert!(tool_impl.children.iter().any(|c| c.name == "find"));
+        assert!(tool_impl.children.iter().any(|c| c.name == "outline"));
+    }
 }
 
