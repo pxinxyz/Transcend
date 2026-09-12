@@ -10,6 +10,7 @@ transcend-protocol = { workspace = true }
 grep-searcher = { workspace = true }
 grep-regex = { workspace = true }
 grep-matcher = { workspace = true }
+regex = { workspace = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 serde = { workspace = true }

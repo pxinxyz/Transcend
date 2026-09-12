@@ -6,8 +6,9 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, PatchRequest, PatchResponse,
-    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, OutlineRequest,
+    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
+    SearchRequest, SearchResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -89,6 +90,18 @@ impl TranscendServer {
         Parameters(req): Parameters<PatchRequest>,
     ) -> Result<Json<PatchResponse>, String> {
         self.engine.patch(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Globally find code symbol definitions across the workspace.
+    #[tool(
+        name = "find_symbol",
+        description = "Globally find code symbol definitions across the workspace by name, qualified path, or kind with exact AST spans"
+    )]
+    pub async fn find_symbol(
+        &self,
+        Parameters(req): Parameters<FindSymbolRequest>,
+    ) -> Result<Json<FindSymbolResponse>, String> {
+        self.engine.find_symbol(&req).map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -216,5 +229,22 @@ pub fn compute() -> i32 {
         assert!(res.0.ast_valid);
         assert!(res.0.diff.unwrap().contains("+    42"));
     }
+
+    #[tokio::test]
+    async fn test_server_find_symbol_tool_execution() {
+        let server = TranscendServer::default();
+        let res = server
+            .find_symbol(Parameters(FindSymbolRequest {
+                name: "TranscendServer".to_string(),
+                path: Some("src".to_string()),
+                ..Default::default()
+            }))
+            .await
+            .expect("find_symbol tool call should succeed");
+
+        assert!(res.0.total_found > 0);
+        assert!(res.0.symbols.iter().any(|s| s.name == "TranscendServer"));
+    }
 }
+
 

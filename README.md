@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="banner.png" alt="Transcend Banner" width="100%">
 </p>
 
@@ -13,7 +13,7 @@
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-Standard%20stdio-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-53%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-57%20passed-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -34,7 +34,7 @@ Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are tr
 
 Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
 
-Transcend replaces blind scraping with **5 typed, AST-aware computational primitives**:
+Transcend replaces blind scraping with **6 typed, AST-aware computational primitives**:
 
 ```
            ┌────────────────────────┐
@@ -43,6 +43,10 @@ Transcend replaces blind scraping with **5 typed, AST-aware computational primit
                        │
            ┌───────────▼────────────┐
            │       search           │  Clustered Ripgrep Heatmaps & Content Search
+           └───────────┬────────────┘
+                       │
+           ┌───────────▼────────────┐
+           │     find_symbol        │  Global Project-Wide Definition Finder
            └───────────┬────────────┘
                        │
            ┌───────────▼────────────┐
@@ -75,19 +79,25 @@ Replaces raw `grep` / `ripgrep` shell invocations.
 - **Line Length Compaction**: Automatically truncates minified lines or SVG paths to prevent context window explosion.
 - **Multi-Threaded Traversal**: In-process parallel scanning using `ignore` and `grep-regex` matching kernels.
 
-### 3. `outline` — AST Symbol Hierarchy & Skeletons
+### 3. `find_symbol` — Global Definition Finder
+Bridges the gap between content search and surgical inspection.
+- **Two-Stage Hybrid Engine**: Parallel ripgrep word-boundary pre-filtering (sub-millisecond across thousands of files) followed by in-process Tree-sitter AST extraction on matching candidate files.
+- **Zero File Guesswork**: Resolves symbols by bare name (`SetupVmcsForProcessor`) or qualified path (`Heartbeat::poll`, `Uart::write_byte`) across entire repositories without knowing which file contains the definition.
+- **Classification & Coordinates**: Returns exact declaration signatures, docstrings, spans, visibility, and symbol kinds (functions, structs, classes, macros, typedefs, methods, traits).
+
+### 4. `outline` — AST Symbol Hierarchy & Skeletons
 Replaces reading full source files just to understand their high-level structure.
 - **Format: `tree`**: Deep semantic symbol hierarchy detailing classes, methods, functions, interfaces, structs, macros, and fields with exact byte and line coordinates.
 - **Format: `skeleton`**: Generates **100% syntax-valid code stubs** where function/class bodies are pruned to `{ ... }` while preserving all signatures, types, and docstrings.
 - **70–90% Token Reduction**: Reduces 1,500-line source files into ~350 tokens of clean, parseable syntax.
 
-### 4. `read_symbol` — Surgical Semantic Extraction
+### 5. `read_symbol` — Surgical Semantic Extraction
 Replaces manual line slicing and coordinate arithmetic (`sed -n 42,88p`).
 - **Qualified Locators**: Inspect symbols by simple name (`login`) or qualified hierarchy (`AuthManager::validate_token`).
 - **Context Preservation**: Automatically extracts leading docstrings, annotations, attributes, and surrounding comments.
 - **Zero Coordinate Math**: The agent never needs to calculate line numbers or offsets to view a function.
 
-### 5. `patch` — AST-Guarded Surgical Code Modifier
+### 6. `patch` — AST-Guarded Surgical Code Modifier
 Replaces brittle regex replacements and unverified diff tools.
 - **In-Memory Preflight AST Verification**: Before writing anything to disk, parses the modified buffer with Tree-sitter. If syntax errors or missing tokens (`ERROR` or `MISSING` nodes) are detected, the patch is **rejected immediately with exact diagnostics**.
 - **Auto-Healing Indentation**: Dynamically calculates surrounding indentation margins, eliminating indentation mismatch errors common in LLM generations.

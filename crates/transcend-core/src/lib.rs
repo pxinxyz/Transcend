@@ -4,17 +4,20 @@
 //! file discovery, AST outlining, and surgical transformations.
 
 pub mod find;
+pub mod find_symbol;
 pub mod outline;
 pub mod patch;
 pub mod search;
 
 use thiserror::Error;
 use transcend_protocol::{
-    FindRequest, FindResponse, OutlineRequest, OutlineResponse, PatchRequest, PatchResponse,
-    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse,
+    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, OutlineRequest,
+    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
+    SearchRequest, SearchResponse,
 };
 
 use crate::find::FindScanner;
+use crate::find_symbol::SymbolFinder;
 use crate::outline::scanner::OutlineScanner;
 use crate::outline::symbol_reader::SymbolReader;
 use crate::patch::Patcher;
@@ -55,6 +58,9 @@ pub trait Engine: Send + Sync {
 
     /// Surgically patch code with in-memory AST validation.
     fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse>;
+
+    /// Globally find code symbol definitions across the workspace.
+    fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse>;
 }
 
 /// Default in-process engine implementation.
@@ -87,6 +93,10 @@ impl Engine for NativeEngine {
     fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse> {
         Patcher::patch(req)
     }
+
+    fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse> {
+        SymbolFinder::find(req)
+    }
 }
 
 #[cfg(test)]
@@ -95,8 +105,8 @@ mod tests {
     use std::path::PathBuf;
     use super::*;
     use transcend_protocol::{
-        FindOptions, OutlineFormat, OutlineOptions, OutlineRequest, ParseStatus, PatchRequest,
-        SearchOptions, SymbolKind,
+        FindOptions, FindSymbolRequest, OutlineFormat, OutlineOptions, OutlineRequest,
+        ParseStatus, PatchRequest, SearchOptions, SymbolKind,
     };
 
     struct TestSandbox {
@@ -1883,6 +1893,153 @@ pub fn run() {
         let modified = fs::read_to_string(&file_path).unwrap();
         assert!(modified.contains("let flag = false;"));
         assert!(modified.contains("let mode = true;"));
+    }
+
+    #[test]
+    fn test_find_symbol_exact_and_qualified() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // 1. Rust file with struct and impl method
+        let rs_path = sandbox.dir.join("src").join("agent.rs");
+        let rs_code = r#"
+pub struct AgentRunner {
+    pub id: u64,
+}
+
+impl AgentRunner {
+    pub fn dispatch(&self) -> bool {
+        true
+    }
+}
+"#;
+        fs::write(&rs_path, rs_code).unwrap();
+
+        // 2. C file with function
+        let c_path = sandbox.dir.join("src").join("vmcs.c");
+        let c_code = r#"
+int SetupVmcsForProcessor(void* ctx) {
+    return 0;
+}
+"#;
+        fs::write(&c_path, c_code).unwrap();
+
+        // Test finding C function by exact name
+        let c_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "SetupVmcsForProcessor".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(c_res.total_found, 1);
+        assert_eq!(c_res.symbols[0].name, "SetupVmcsForProcessor");
+        assert_eq!(c_res.symbols[0].language, "c");
+        assert_eq!(c_res.symbols[0].kind, SymbolKind::Function);
+
+        // Test finding Rust method by qualified name
+        let q_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "AgentRunner::dispatch".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(q_res.total_found, 1);
+        assert_eq!(q_res.symbols[0].name, "dispatch");
+        assert_eq!(q_res.symbols[0].qualified_name, "AgentRunner::dispatch");
+        assert_eq!(q_res.symbols[0].language, "rust");
+    }
+
+    #[test]
+    fn test_find_symbol_kind_filter_and_case_insensitive() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let rs_path = sandbox.dir.join("src").join("models.rs");
+        let rs_code = r#"
+pub struct Config {
+    pub debug: bool,
+}
+
+pub fn config() -> Config {
+    Config { debug: true }
+}
+"#;
+        fs::write(&rs_path, rs_code).unwrap();
+
+        // Filter by Struct
+        let struct_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "Config".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                kind: Some(SymbolKind::Struct),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(struct_res.total_found, 1);
+        assert_eq!(struct_res.symbols[0].kind, SymbolKind::Struct);
+
+        // Case-insensitive search
+        let case_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "config".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                case_sensitive: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Should find both Config (struct) and config (fn)
+        assert!(case_res.total_found >= 2);
+    }
+
+    #[test]
+    fn test_find_symbol_partial_and_limit_budgeting() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let py_path = sandbox.dir.join("src").join("handlers.py");
+        let py_code = r#"
+def handle_alpha():
+    pass
+
+def handle_beta():
+    pass
+
+def handle_gamma():
+    pass
+"#;
+        fs::write(&py_path, py_code).unwrap();
+
+        // Partial match with exact: false
+        let partial_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "handle".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                exact: Some(false),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(partial_res.total_found, 3);
+
+        // Limit budgeting
+        let limit_res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "handle".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                exact: Some(false),
+                limit: Some(2),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert_eq!(limit_res.symbols.len(), 2);
+        assert!(limit_res.truncated);
     }
 }
 

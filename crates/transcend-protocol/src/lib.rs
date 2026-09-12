@@ -430,3 +430,70 @@ pub struct PatchResponse {
     pub message: String,
 }
 
+/// Request parameters for finding code symbol definitions across the workspace.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct FindSymbolRequest {
+    /// Symbol name or identifier pattern (e.g. "SetupVmcsForProcessor", "VmmContext", "poll").
+    pub name: String,
+    /// Optional directory or file path to search within. Defaults to current directory.
+    pub path: Option<String>,
+    /// Optional symbol kind filter (e.g. "function", "struct", "macro", "interface").
+    pub kind: Option<SymbolKind>,
+    /// Whether to require exact symbol name match. Defaults to true. If false, matches prefix/substring.
+    pub exact: Option<bool>,
+    /// Whether matching should be case-sensitive. Defaults to true for exact matches.
+    pub case_sensitive: Option<bool>,
+    /// Maximum number of matching symbols to return across the workspace. Defaults to 20.
+    pub limit: Option<usize>,
+    /// Optional file glob or extension filter (e.g. "*.c", "*.rs").
+    pub file_pattern: Option<String>,
+    /// Whether to search gitignored files. Defaults to false.
+    pub include_ignored: Option<bool>,
+}
+
+/// A code symbol definition located across the workspace.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FoundSymbol {
+    /// Identifier name of the symbol.
+    pub name: String,
+    /// Full qualified name (e.g. "VmmContext::init", "SetupVmcsForProcessor").
+    pub qualified_name: String,
+    /// Symbol kind (function, struct, method, class, macro, etc.).
+    pub kind: SymbolKind,
+    /// Relative path to the file defining this symbol.
+    pub file: String,
+    /// Detected programming language.
+    pub language: String,
+    /// Exact source code location span.
+    pub span: SourceSpan,
+    /// Declaration signature (excluding implementation body).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// First line / summary of doc comments or docstring.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc_comment: Option<String>,
+    /// Symbol visibility (e.g. "public", "private", "pub(crate)").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<String>,
+    /// Whether this is an exact name match.
+    pub is_exact: bool,
+}
+
+/// Response returned by a find_symbol operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FindSymbolResponse {
+    /// The query string searched for.
+    pub query: String,
+    /// Total matching definitions found.
+    pub total_found: usize,
+    /// List of matching symbols found across the workspace.
+    pub symbols: Vec<FoundSymbol>,
+    /// Breakdown of matched symbols by kind.
+    pub kind_breakdown: BTreeMap<String, usize>,
+    /// Breakdown of matched symbols by language.
+    pub language_breakdown: BTreeMap<String, usize>,
+    /// Whether results were capped due to the limit budget.
+    pub truncated: bool,
+}
+
+

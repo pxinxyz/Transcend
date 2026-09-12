@@ -87,7 +87,7 @@ impl SupportedLang {
         }
     }
 
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             SupportedLang::Rust => "rust",
             SupportedLang::TypeScript => "typescript",

@@ -15,14 +15,14 @@ use super::scanner::{OutlineScanner, SupportedLang};
 
 pub struct SymbolReader;
 
-struct SymbolMatch<'a> {
-    symbol: &'a Symbol,
-    qualified_name: String,
-    aliases: Vec<String>,
+pub(crate) struct SymbolMatch<'a> {
+    pub(crate) symbol: &'a Symbol,
+    pub(crate) qualified_name: String,
+    pub(crate) aliases: Vec<String>,
 }
 
 impl<'a> SymbolMatch<'a> {
-    fn matches(&self, query: &str, query_norm: &str, kind_filter: Option<&SymbolKind>) -> bool {
+    pub(crate) fn matches(&self, query: &str, query_norm: &str, kind_filter: Option<&SymbolKind>) -> bool {
         if let Some(kind) = kind_filter {
             if &self.symbol.kind != kind {
                 return false;
@@ -38,7 +38,7 @@ impl<'a> SymbolMatch<'a> {
         false
     }
 
-    fn matches_case_insensitive(&self, query_lower: &str, query_norm_lower: &str, kind_filter: Option<&SymbolKind>) -> bool {
+    pub(crate) fn matches_case_insensitive(&self, query_lower: &str, query_norm_lower: &str, kind_filter: Option<&SymbolKind>) -> bool {
         if let Some(kind) = kind_filter {
             if &self.symbol.kind != kind {
                 return false;
@@ -53,7 +53,23 @@ impl<'a> SymbolMatch<'a> {
         }
         false
     }
+
+    pub(crate) fn matches_partial(&self, query_lower: &str, kind_filter: Option<&SymbolKind>) -> bool {
+        if let Some(kind) = kind_filter {
+            if &self.symbol.kind != kind {
+                return false;
+            }
+        }
+        if self.symbol.name.to_lowercase().contains(query_lower)
+            || self.qualified_name.to_lowercase().contains(query_lower)
+            || self.aliases.iter().any(|a| a.to_lowercase().contains(query_lower))
+        {
+            return true;
+        }
+        false
+    }
 }
+
 
 impl SymbolReader {
     pub fn read(req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
@@ -189,7 +205,7 @@ impl SymbolReader {
         })
     }
 
-    fn collect_symbols<'a>(
+    pub(crate) fn collect_symbols<'a>(
         symbols: &'a [Symbol],
         parent_prefixes: &[String],
         results: &mut Vec<SymbolMatch<'a>>,
