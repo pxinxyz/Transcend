@@ -23,17 +23,51 @@ pub struct PipeTransport {
     pub tree_owner: Arc<tokio::sync::Mutex<ProcessTreeOwner>>,
 }
 
+fn tokenize_command(cmd: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+
+    for ch in cmd.chars() {
+        match ch {
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            ' ' | '\t' if !in_single && !in_double => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 impl PipeTransport {
     pub async fn spawn(
         command: &str,
         cwd: &Path,
         shell_override: Option<&str>,
         buffer: SharedCursorRingBuffer,
+        raw: bool,
     ) -> Result<Self, String> {
-        let spec = resolve_shell(shell_override, command);
+        let (program, args) = if raw {
+            let tokens = tokenize_command(command);
+            if tokens.is_empty() {
+                return Err("Cannot execute empty command in raw mode".to_string());
+            }
+            (std::path::PathBuf::from(&tokens[0]), tokens[1..].to_vec())
+        } else {
+            let spec = resolve_shell(shell_override, command);
+            (spec.program, spec.args)
+        };
 
-        let mut cmd = Command::new(&spec.program);
-        cmd.args(&spec.args)
+        let mut cmd = Command::new(&program);
+        cmd.args(&args)
             .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -41,7 +75,7 @@ impl PipeTransport {
             .kill_on_drop(true);
 
         let mut child = cmd.spawn().map_err(|e| {
-            format!("Failed to spawn pipe command '{}': {e}", spec.program.display())
+            format!("Failed to spawn pipe command '{}': {e}", program.display())
         })?;
 
         let pid = child.id().unwrap_or(0);

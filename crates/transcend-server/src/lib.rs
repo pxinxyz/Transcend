@@ -11,10 +11,10 @@ use transcend_protocol::{
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
-    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, TerminalKillRequest,
-    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
-    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, WriteFileRequest,
-    WriteFileResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, SetWorkspaceRequest,
+    SetWorkspaceResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
+    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
+    TerminalWriteResponse, WriteFileRequest, WriteFileResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -265,6 +265,18 @@ impl TranscendServer {
     ) -> Result<Json<BatchPatchResponse>, String> {
         self.engine.batch_patch(&req).map(Json).map_err(|e| e.to_string())
     }
+
+    /// Configure or update the active project workspace root directory for all path-based operations.
+    #[tool(
+        name = "set_workspace",
+        description = "Configure or update the active project workspace root directory for all path-based operations"
+    )]
+    pub async fn set_workspace(
+        &self,
+        Parameters(req): Parameters<SetWorkspaceRequest>,
+    ) -> Result<Json<SetWorkspaceResponse>, String> {
+        self.engine.set_workspace(&req).map(Json).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -478,6 +490,7 @@ pub fn compute() -> i32 {
                 ("write_file", "Write text content to file atomically with collision guards and parent directory creation", serde_json::to_value(schemars::schema_for!(WriteFileRequest)).unwrap()),
                 ("delete_path", "Delete a file or directory safely within workspace boundaries", serde_json::to_value(schemars::schema_for!(DeletePathRequest)).unwrap()),
                 ("batch_patch", "Transactionally apply multiple patches across files with AST preflight and rollback guarantees", serde_json::to_value(schemars::schema_for!(BatchPatchRequest)).unwrap()),
+                ("set_workspace", "Configure or update the active project workspace root directory for all path-based operations", serde_json::to_value(schemars::schema_for!(SetWorkspaceRequest)).unwrap()),
             ];
 
             for (name, desc, schema) in tools {
@@ -561,6 +574,21 @@ pub fn compute() -> i32 {
 
         assert!(res.0.success);
         assert_eq!(res.0.total_files_patched, 1);
+    }
+
+    #[tokio::test]
+    async fn test_server_set_workspace_tool() {
+        let server = TranscendServer::default();
+        let cur = std::env::current_dir().unwrap();
+        let res = server
+            .set_workspace(Parameters(SetWorkspaceRequest {
+                path: cur.to_string_lossy().to_string(),
+            }))
+            .await
+            .expect("set_workspace should succeed");
+
+        assert!(res.0.success);
+        assert!(!res.0.workspace_root.is_empty());
     }
 }
 

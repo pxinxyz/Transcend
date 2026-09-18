@@ -17,7 +17,11 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 - Deterministic result ordering: matches sorted by `(file, line_number)`, clusters sorted by `match_count` descending.
 - Binary skipping via NUL byte detection (`BinaryDetection::quit(0x00)`).
 - Lossy UTF-8 decoding with CRLF normalization; searching non-UTF-8 text files must never panic.
-- Match budget capping (`max_matches`) with `FileCluster` aggregation to prevent context window overflow.
+- Match budget capping (`max_matches`) with `FileCluster` aggregation and optional empty cluster pruning (`max_empty_clusters`).
+- Workspace root management (`workspace_root`, `set_workspace`) with anchor detection (`Cargo.toml`, `.git`) and automatic relative path resolution across all operations.
+- Transactional cumulative batch patching with in-memory buffer threading and single-write disk commits.
+- Indentation-aware splicing for `prepend_to_symbol` and `append_to_symbol`.
+- Streaming line reader in `read_file` with $O(1)$ memory overhead.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
 - Terminal subsystem (`terminal::TerminalEngine`):

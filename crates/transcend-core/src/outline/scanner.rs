@@ -229,10 +229,11 @@ impl OutlineScanner {
         if target_path.is_file() {
             candidate_files.push(target_path.to_path_buf());
         } else {
-            // Traverse directory respecting .gitignore
+            // Traverse directory respecting .gitignore and include_hidden option
+            let include_hidden = options.include_hidden.unwrap_or(false);
             let walker = WalkBuilder::new(target_path)
                 .standard_filters(true)
-                .hidden(true)
+                .hidden(!include_hidden)
                 .build();
 
             for entry in walker.filter_map(Result::ok) {

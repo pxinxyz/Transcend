@@ -4,7 +4,7 @@
 //! with sibling temp files and collision guards, and path-contained workspace deletion.
 
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -79,13 +79,56 @@ impl FileOps {
             });
         }
 
-        // 2. Read full content (or lossy string)
-        let raw_bytes = fs::read(path).map_err(|e| {
-            CoreError::General(format!("Failed to read file {}: {e}", path.display()))
+        // 2. Stream file content line-by-line via BufReader with O(1) memory overhead
+        file.seek(SeekFrom::Start(0)).map_err(|e| {
+            CoreError::General(format!("Failed to rewind file {}: {e}", path.display()))
         })?;
-        let text = String::from_utf8_lossy(&raw_bytes);
-        let all_lines: Vec<&str> = text.lines().collect();
-        let total_lines = all_lines.len();
+
+        let mut reader = BufReader::new(file);
+        let mut line_buf = Vec::new();
+        let start_line = req.start_line.unwrap_or(1).max(1);
+        let end_line_req = req.end_line;
+        let max_bytes = req.max_bytes.unwrap_or(DEFAULT_MAX_READ_BYTES);
+        let line_numbers = req.line_numbers.unwrap_or(false);
+
+        let mut content = String::new();
+        let mut truncated = false;
+        let mut total_lines = 0usize;
+        let mut actual_end_line = start_line;
+        let mut collected_any = false;
+
+        while reader.read_until(b'\n', &mut line_buf).map_err(|e| {
+            CoreError::General(format!("Failed to read line from {}: {e}", path.display()))
+        })? > 0 {
+            total_lines += 1;
+            let line_no = total_lines;
+
+            let within_window = line_no >= start_line && match end_line_req {
+                Some(end) => line_no <= end,
+                None => true,
+            };
+
+            if within_window && !truncated {
+                let s = String::from_utf8_lossy(&line_buf);
+                let line_text = s.trim_end_matches(['\r', '\n']);
+
+                let formatted_line = if line_numbers {
+                    format!("{:>5} | {}\n", line_no, line_text)
+                } else {
+                    format!("{}\n", line_text)
+                };
+
+                if content.len() + formatted_line.len() > max_bytes && !content.is_empty() {
+                    truncated = true;
+                } else {
+                    content.push_str(&formatted_line);
+                    actual_end_line = line_no;
+                    collected_any = true;
+                }
+            }
+
+            line_buf.clear();
+        }
 
         if total_lines == 0 {
             return Ok(ReadFileResponse {
@@ -101,7 +144,6 @@ impl FileOps {
             });
         }
 
-        let start_line = req.start_line.unwrap_or(1).max(1);
         if start_line > total_lines {
             return Ok(ReadFileResponse {
                 file: req.path.clone(),
@@ -119,37 +161,13 @@ impl FileOps {
             });
         }
 
-        let end_line = req.end_line.unwrap_or(total_lines).min(total_lines).max(start_line);
-        let max_bytes = req.max_bytes.unwrap_or(DEFAULT_MAX_READ_BYTES);
-        let line_numbers = req.line_numbers.unwrap_or(false);
-
-        let mut content = String::new();
-        let mut truncated = false;
-        let mut actual_end_line = start_line;
-
-        for line_no in start_line..=end_line {
-            let line_idx = line_no - 1;
-            let line_text = all_lines[line_idx];
-
-            let formatted_line = if line_numbers {
-                format!("{:>5} | {}\n", line_no, line_text)
-            } else {
-                format!("{}\n", line_text)
-            };
-
-            if content.len() + formatted_line.len() > max_bytes && !content.is_empty() {
-                truncated = true;
-                break;
-            }
-
-            content.push_str(&formatted_line);
-            actual_end_line = line_no;
+        let target_end_line = end_line_req.unwrap_or(total_lines).min(total_lines).max(start_line);
+        if actual_end_line < target_end_line {
+            truncated = true;
         }
 
-        if actual_end_line < total_lines || start_line > 1 {
-            if actual_end_line < end_line {
-                truncated = true;
-            }
+        if !collected_any {
+            actual_end_line = start_line.min(total_lines);
         }
 
         Ok(ReadFileResponse {

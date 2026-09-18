@@ -101,6 +101,7 @@ impl TerminalEngine {
                 &cwd,
                 req.shell.as_deref(),
                 Arc::clone(&buffer),
+                req.raw.unwrap_or(false),
             )
             .await
             .map_err(CoreError::General)?;
@@ -204,8 +205,18 @@ impl TerminalEngine {
         let max_bytes = req.max_bytes.unwrap_or(16_384);
         let from_cursor = req.cursor.unwrap_or(0);
 
-        // Optional wait if requested and buffer has no new data
-        if let Some(wait_ms) = req.timeout_ms {
+        // Optional wait if requested: either for pattern match or for any new data
+        if let Some(ref pattern) = req.wait_for_pattern {
+            let wait_ms = req.timeout_ms.unwrap_or(5_000);
+            let deadline = Instant::now() + Duration::from_millis(wait_ms);
+            while Instant::now() < deadline {
+                let (peek_output, _, _, _) = session.read(from_cursor, max_bytes);
+                if peek_output.contains(pattern) || !session.is_running() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        } else if let Some(wait_ms) = req.timeout_ms {
             let deadline = Instant::now() + Duration::from_millis(wait_ms);
             while Instant::now() < deadline {
                 let current_cursor = session.buffer.lock().unwrap().write_cursor();

@@ -23,50 +23,68 @@ static ATOMIC_PATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub struct Patcher;
 
 impl Patcher {
-    pub fn patch(req: &PatchRequest) -> CoreResult<PatchResponse> {
-        let (display_path, source) = if let Some(ref content) = req.content {
-            (req.path.clone(), content.as_bytes().to_vec())
-        } else {
-            let p = Path::new(&req.path);
-            if !p.exists() {
-                return Ok(PatchResponse {
-                    success: false,
-                    file: req.path.clone(),
-                    target_span: None,
-                    ast_valid: false,
-                    syntax_errors: vec![],
-                    diff: None,
-                    message: format!("File does not exist: {}", p.display()),
-                });
+    fn detect_indentation(source: &[u8], byte_pos: usize) -> String {
+        let line_start = source[..byte_pos]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let mut indent = String::new();
+        for &b in &source[line_start..byte_pos] {
+            if b == b' ' || b == b'\t' {
+                indent.push(b as char);
+            } else {
+                break;
             }
-            let bytes = fs::read(p).map_err(|e| {
-                CoreError::General(format!("Failed to read file {}: {e}", p.display()))
-            })?;
-            (req.path.clone(), bytes)
-        };
+        }
+        indent
+    }
 
+    fn indent_multiline(text: &str, target_indent: &str) -> String {
+        let mut lines = Vec::new();
+        for line in text.split('\n') {
+            if line.trim().is_empty() {
+                lines.push(line.to_string());
+            } else if line.starts_with(target_indent) {
+                lines.push(line.to_string());
+            } else {
+                lines.push(format!("{target_indent}{line}"));
+            }
+        }
+        lines.join("\n")
+    }
+
+    /// Surgically modify code in-memory, returning the PatchResponse and the modified byte buffer.
+    pub fn patch_bytes(
+        display_path: &str,
+        source: &[u8],
+        req: &PatchRequest,
+    ) -> CoreResult<(PatchResponse, Vec<u8>)> {
         // 1. Resolve target span
         let target_span = if let Some(ref sym_name) = req.target_symbol {
             let read_req = ReadSymbolRequest {
                 path: Some(req.path.clone()),
-                content: req.content.clone(),
+                content: Some(String::from_utf8_lossy(source).to_string()),
                 symbol: sym_name.clone(),
                 occurrence: req.target_occurrence,
                 ..Default::default()
             };
             let sym_res = SymbolReader::read(&read_req)?;
             if !sym_res.found {
-                return Ok(PatchResponse {
-                    success: false,
-                    file: display_path,
-                    target_span: None,
-                    ast_valid: false,
-                    syntax_errors: vec![],
-                    diff: None,
-                    message: sym_res.message.unwrap_or_else(|| {
-                        format!("Target symbol '{}' not found in file", sym_name)
-                    }),
-                });
+                return Ok((
+                    PatchResponse {
+                        success: false,
+                        file: display_path.to_string(),
+                        target_span: None,
+                        ast_valid: false,
+                        syntax_errors: vec![],
+                        diff: None,
+                        message: sym_res.message.unwrap_or_else(|| {
+                            format!("Target symbol '{}' not found in file", sym_name)
+                        }),
+                    },
+                    source.to_vec(),
+                ));
             }
             sym_res.symbol.unwrap().span
         } else if let Some(ref span) = req.target_span {
@@ -85,64 +103,76 @@ impl Patcher {
             }
 
             if matches.is_empty() {
-                return Ok(PatchResponse {
-                    success: false,
-                    file: display_path,
-                    target_span: None,
-                    ast_valid: false,
-                    syntax_errors: vec![],
-                    diff: None,
-                    message: format!("Target text needle '{}' not found in file", needle),
-                });
+                return Ok((
+                    PatchResponse {
+                        success: false,
+                        file: display_path.to_string(),
+                        target_span: None,
+                        ast_valid: false,
+                        syntax_errors: vec![],
+                        diff: None,
+                        message: format!("Target text needle '{}' not found in file", needle),
+                    },
+                    source.to_vec(),
+                ));
             }
 
             if matches.len() > 1 && req.target_occurrence.is_none() {
-                return Ok(PatchResponse {
-                    success: false,
-                    file: display_path,
-                    target_span: None,
-                    ast_valid: false,
-                    syntax_errors: vec![],
-                    diff: None,
-                    message: format!(
-                        "Found {} ambiguous occurrences of target text. Specify target_occurrence (0 to {}) to disambiguate.",
-                        matches.len(),
-                        matches.len() - 1
-                    ),
-                });
+                return Ok((
+                    PatchResponse {
+                        success: false,
+                        file: display_path.to_string(),
+                        target_span: None,
+                        ast_valid: false,
+                        syntax_errors: vec![],
+                        diff: None,
+                        message: format!(
+                            "Found {} ambiguous occurrences of target text. Specify target_occurrence (0 to {}) to disambiguate.",
+                            matches.len(),
+                            matches.len() - 1
+                        ),
+                    },
+                    source.to_vec(),
+                ));
             }
 
             let occ = req.target_occurrence.unwrap_or(0);
             if occ >= matches.len() {
-                return Ok(PatchResponse {
-                    success: false,
-                    file: display_path,
-                    target_span: None,
-                    ast_valid: false,
-                    syntax_errors: vec![],
-                    diff: None,
-                    message: format!(
-                        "Target occurrence {} out of range (found {} match{})",
-                        occ,
-                        matches.len(),
-                        if matches.len() == 1 { "" } else { "es" }
-                    ),
-                });
+                return Ok((
+                    PatchResponse {
+                        success: false,
+                        file: display_path.to_string(),
+                        target_span: None,
+                        ast_valid: false,
+                        syntax_errors: vec![],
+                        diff: None,
+                        message: format!(
+                            "Target occurrence {} out of range (found {} match{})",
+                            occ,
+                            matches.len(),
+                            if matches.len() == 1 { "" } else { "es" }
+                        ),
+                    },
+                    source.to_vec(),
+                ));
             }
 
             let start_byte = matches[occ];
             let end_byte = start_byte + needle_bytes.len();
-            Self::compute_source_span(&source, start_byte, end_byte)
+            Self::compute_source_span(source, start_byte, end_byte)
         } else {
-            return Ok(PatchResponse {
-                success: false,
-                file: display_path,
-                target_span: None,
-                ast_valid: false,
-                syntax_errors: vec![],
-                diff: None,
-                message: "Must specify one of 'target_symbol', 'target_span', or 'target_text'".to_string(),
-            });
+            return Ok((
+                PatchResponse {
+                    success: false,
+                    file: display_path.to_string(),
+                    target_span: None,
+                    ast_valid: false,
+                    syntax_errors: vec![],
+                    diff: None,
+                    message: "Must specify one of 'target_symbol', 'target_span', or 'target_text'".to_string(),
+                },
+                source.to_vec(),
+            ));
         };
 
         let mode = req.mode.unwrap_or(PatchMode::Replace);
@@ -151,20 +181,23 @@ impl Patcher {
         let end_byte = target_span.end_byte;
 
         if start_byte > end_byte || end_byte > source.len() {
-            return Ok(PatchResponse {
-                success: false,
-                file: display_path,
-                target_span: Some(target_span),
-                ast_valid: false,
-                syntax_errors: vec![],
-                diff: None,
-                message: format!(
-                    "Invalid byte range ({}..{}) for file of size {} bytes",
-                    start_byte,
-                    end_byte,
-                    source.len()
-                ),
-            });
+            return Ok((
+                PatchResponse {
+                    success: false,
+                    file: display_path.to_string(),
+                    target_span: Some(target_span),
+                    ast_valid: false,
+                    syntax_errors: vec![],
+                    diff: None,
+                    message: format!(
+                        "Invalid byte range ({}..{}) for file of size {} bytes",
+                        start_byte,
+                        end_byte,
+                        source.len()
+                    ),
+                },
+                source.to_vec(),
+            ));
         }
 
         // Calculate splice range and text according to PatchMode
@@ -204,6 +237,10 @@ impl Patcher {
             }
             PatchMode::PrependToSymbol => {
                 let sym_slice = &source[start_byte..end_byte];
+                let base_indent = Self::detect_indentation(source, start_byte);
+                let extra_indent = if base_indent.contains('\t') { "\t" } else { "    " };
+                let body_indent = format!("{base_indent}{extra_indent}");
+
                 let insert_pos = if let Some(open_idx) = sym_slice.iter().position(|&b| b == b'{') {
                     let next_pos = start_byte + open_idx + 1;
                     if next_pos < source.len() && source[next_pos] == b'\n' {
@@ -221,26 +258,43 @@ impl Patcher {
                 } else {
                     start_byte
                 };
-                let text = if !req.replacement.ends_with('\n') {
-                    format!("{}\n", req.replacement)
+
+                let indented = Self::indent_multiline(&req.replacement, &body_indent);
+                let text = if !indented.ends_with('\n') {
+                    format!("{}\n", indented)
                 } else {
-                    req.replacement.clone()
+                    indented
                 };
                 (insert_pos, insert_pos, text)
             }
             PatchMode::AppendToSymbol => {
                 let sym_slice = &source[start_byte..end_byte];
-                let insert_pos = if let Some(close_idx) = sym_slice.iter().rposition(|&b| b == b'}') {
-                    start_byte + close_idx
+                let base_indent = Self::detect_indentation(source, start_byte);
+                let extra_indent = if base_indent.contains('\t') { "\t" } else { "    " };
+                let body_indent = format!("{base_indent}{extra_indent}");
+
+                if let Some(close_idx) = sym_slice.iter().rposition(|&b| b == b'}') {
+                    let insert_pos = start_byte + close_idx;
+                    let indented = Self::indent_multiline(&req.replacement, &body_indent);
+                    let text = if !indented.ends_with('\n') {
+                        format!("{}\n", indented)
+                    } else {
+                        indented
+                    };
+                    (insert_pos, insert_pos, text)
                 } else {
-                    end_byte
-                };
-                let text = if !req.replacement.ends_with('\n') {
-                    format!("{}\n", req.replacement)
-                } else {
-                    req.replacement.clone()
-                };
-                (insert_pos, insert_pos, text)
+                    // Non-brace language (e.g. Python): insert at end of symbol block
+                    let mut insert_pos = end_byte;
+                    if insert_pos > start_byte && source[insert_pos - 1] == b'\n' {
+                        insert_pos -= 1;
+                        if insert_pos > start_byte && source[insert_pos - 1] == b'\r' {
+                            insert_pos -= 1;
+                        }
+                    }
+                    let indented = Self::indent_multiline(&req.replacement, &body_indent);
+                    let text = format!("\n{}", if indented.ends_with('\n') { indented } else { format!("{indented}\n") });
+                    (insert_pos, insert_pos, text)
+                }
             }
         };
 
@@ -253,10 +307,10 @@ impl Patcher {
         new_source.extend_from_slice(&source[splice_end..]);
 
         // 3. Generate unified diff
-        let orig_str = String::from_utf8_lossy(&source);
+        let orig_str = String::from_utf8_lossy(source);
         let new_str = String::from_utf8_lossy(&new_source);
         let diff = Self::generate_diff(
-            &display_path,
+            display_path,
             &orig_str,
             &new_str,
             splice_start,
@@ -279,15 +333,18 @@ impl Patcher {
                             let mut errors = Vec::new();
                             Self::collect_syntax_errors(&root, &new_source, &mut errors, 10);
                             if !errors.is_empty() {
-                                return Ok(PatchResponse {
-                                    success: false,
-                                    file: display_path,
-                                    target_span: Some(target_span),
-                                    ast_valid: false,
-                                    syntax_errors: errors,
-                                    diff: Some(diff),
-                                    message: "AST preflight verification failed: syntax errors detected in spliced code. Disk was not modified.".to_string(),
-                                });
+                                return Ok((
+                                    PatchResponse {
+                                        success: false,
+                                        file: display_path.to_string(),
+                                        target_span: Some(target_span),
+                                        ast_valid: false,
+                                        syntax_errors: errors,
+                                        diff: Some(diff),
+                                        message: "AST preflight verification failed: syntax errors detected in spliced code. Disk was not modified.".to_string(),
+                                    },
+                                    new_source,
+                                ));
                             }
                         }
                     }
@@ -295,68 +352,83 @@ impl Patcher {
             }
         }
 
+        let msg = if req.dry_run == Some(true) {
+            "Dry run: patch successfully validated. No changes written to disk.".to_string()
+        } else if req.content.is_some() {
+            "Patch successfully applied in-memory.".to_string()
+        } else {
+            "Patch applied successfully.".to_string()
+        };
+
+        Ok((
+            PatchResponse {
+                success: true,
+                file: display_path.to_string(),
+                target_span: Some(target_span),
+                ast_valid: true,
+                syntax_errors: vec![],
+                diff: Some(diff),
+                message: msg,
+            },
+            new_source,
+        ))
+    }
+
+    pub fn patch(req: &PatchRequest) -> CoreResult<PatchResponse> {
+        let (display_path, source) = if let Some(ref content) = req.content {
+            (req.path.clone(), content.as_bytes().to_vec())
+        } else {
+            let p = Path::new(&req.path);
+            if !p.exists() {
+                return Ok(PatchResponse {
+                    success: false,
+                    file: req.path.clone(),
+                    target_span: None,
+                    ast_valid: false,
+                    syntax_errors: vec![],
+                    diff: None,
+                    message: format!("File does not exist: {}", p.display()),
+                });
+            }
+            let bytes = fs::read(p).map_err(|e| {
+                CoreError::General(format!("Failed to read file {}: {e}", p.display()))
+            })?;
+            (req.path.clone(), bytes)
+        };
+
+        let (res, new_source) = Self::patch_bytes(&display_path, &source, req)?;
+
         // 5. Atomic Disk Write (if not dry_run and not in-memory)
-        if req.dry_run == Some(true) {
-            return Ok(PatchResponse {
-                success: true,
-                file: display_path,
-                target_span: Some(target_span),
-                ast_valid: true,
-                syntax_errors: vec![],
-                diff: Some(diff),
-                message: "Dry run: patch successfully validated. No changes written to disk."
-                    .to_string(),
-            });
+        if req.dry_run != Some(true) && req.content.is_none() && res.success && res.ast_valid {
+            let target_path = Path::new(&req.path);
+            let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
+            let file_stem = target_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("patch");
+            let pid = std::process::id();
+            let counter = ATOMIC_PATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let tmp_path = parent.join(format!(".{}.transcend_tmp_{}_{}", file_stem, pid, counter));
+
+            let write_res = (|| -> std::io::Result<()> {
+                let mut tmp_file = fs::File::create(&tmp_path)?;
+                tmp_file.write_all(&new_source)?;
+                tmp_file.sync_all()?;
+                drop(tmp_file);
+                fs::rename(&tmp_path, target_path)?;
+                Ok(())
+            })();
+
+            if let Err(e) = write_res {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(CoreError::General(format!(
+                    "Failed to atomically write patched file {}: {e}",
+                    target_path.display()
+                )));
+            }
         }
 
-        if req.content.is_some() {
-            return Ok(PatchResponse {
-                success: true,
-                file: display_path,
-                target_span: Some(target_span),
-                ast_valid: true,
-                syntax_errors: vec![],
-                diff: Some(diff),
-                message: "Patch successfully applied in-memory.".to_string(),
-            });
-        }
-
-        let target_path = Path::new(&req.path);
-        let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
-        let file_stem = target_path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("patch");
-        let pid = std::process::id();
-        let counter = ATOMIC_PATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp_path = parent.join(format!(".{}.transcend_tmp_{}_{}", file_stem, pid, counter));
-
-        let write_res = (|| -> std::io::Result<()> {
-            let mut tmp_file = fs::File::create(&tmp_path)?;
-            tmp_file.write_all(&new_source)?;
-            tmp_file.sync_all()?;
-            drop(tmp_file);
-            fs::rename(&tmp_path, target_path)?;
-            Ok(())
-        })();
-
-        if let Err(e) = write_res {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(CoreError::General(format!(
-                "Failed to atomically write patched file {}: {e}",
-                target_path.display()
-            )));
-        }
-
-        Ok(PatchResponse {
-            success: true,
-            file: display_path,
-            target_span: Some(target_span),
-            ast_valid: true,
-            syntax_errors: vec![],
-            diff: Some(diff),
-            message: "Patch applied successfully.".to_string(),
-        })
+        Ok(res)
     }
 
     /// Transactionally apply multiple patches across files with AST preflight and rollback guarantees.
@@ -376,28 +448,81 @@ impl Patcher {
         let validate_ast = req.validate_ast.unwrap_or(true);
         let dry_run = req.dry_run.unwrap_or(false);
 
-        // Phase 1: Dry run / simulation across all patches
+        // Phase 1: In-Memory Sequential Simulation & AST Preflight
+        let mut working_buffers: std::collections::HashMap<std::path::PathBuf, Vec<u8>> =
+            std::collections::HashMap::new();
+        let mut original_contents: std::collections::HashMap<std::path::PathBuf, Vec<u8>> =
+            std::collections::HashMap::new();
         let mut simulated_results = Vec::with_capacity(req.patches.len());
         let mut accumulated_syntax_errors = Vec::new();
         let mut combined_diff = String::new();
         let mut any_failed = false;
 
         for patch_req in &req.patches {
-            let mut dry_req = patch_req.clone();
-            dry_req.dry_run = Some(true);
-            dry_req.validate_ast = Some(validate_ast);
+            let path_buf = Path::new(&patch_req.path).to_path_buf();
 
-            let res = Self::patch(&dry_req)?;
+            // Load initial file bytes into working_buffers & original_contents if not present
+            if !working_buffers.contains_key(&path_buf) {
+                let initial_bytes = if let Some(ref content) = patch_req.content {
+                    content.as_bytes().to_vec()
+                } else {
+                    if !path_buf.exists() {
+                        any_failed = true;
+                        simulated_results.push(PatchResponse {
+                            success: false,
+                            file: patch_req.path.clone(),
+                            target_span: None,
+                            ast_valid: false,
+                            syntax_errors: vec![],
+                            diff: None,
+                            message: format!("File does not exist: {}", path_buf.display()),
+                        });
+                        continue;
+                    }
+                    match fs::read(&path_buf) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            any_failed = true;
+                            simulated_results.push(PatchResponse {
+                                success: false,
+                                file: patch_req.path.clone(),
+                                target_span: None,
+                                ast_valid: false,
+                                syntax_errors: vec![],
+                                diff: None,
+                                message: format!("Failed to read file {}: {e}", path_buf.display()),
+                            });
+                            continue;
+                        }
+                    }
+                };
+
+                original_contents.insert(path_buf.clone(), initial_bytes.clone());
+                working_buffers.insert(path_buf.clone(), initial_bytes);
+            }
+
+            let current_source = working_buffers.get(&path_buf).unwrap().clone();
+            let mut step_req = patch_req.clone();
+            step_req.validate_ast = Some(validate_ast);
+            step_req.dry_run = Some(true); // Don't write to disk during Phase 1 simulation
+
+            let (res, new_bytes) = Self::patch_bytes(&patch_req.path, &current_source, &step_req)?;
+
             if !res.success || !res.ast_valid {
                 any_failed = true;
                 accumulated_syntax_errors.extend(res.syntax_errors.clone());
+            } else {
+                // Update working buffer with the patched bytes for subsequent patches on this file!
+                working_buffers.insert(path_buf.clone(), new_bytes);
             }
+
             if let Some(ref d) = res.diff {
                 if !d.is_empty() {
                     combined_diff.push_str(d);
                     combined_diff.push('\n');
                 }
             }
+
             simulated_results.push(res);
         }
 
@@ -427,66 +552,59 @@ impl Patcher {
             });
         }
 
-        // Phase 2: Atomic Execution with Multi-File Rollback Safety
-        // 1. Back up original file contents in memory
-        let mut original_contents: std::collections::HashMap<std::path::PathBuf, Vec<u8>> = std::collections::HashMap::new();
-        for file_path_str in &distinct_files {
-            let p = Path::new(file_path_str);
-            if p.exists() {
-                if let Ok(bytes) = fs::read(p) {
-                    original_contents.insert(p.to_path_buf(), bytes);
-                }
+        // Phase 2: Atomic Disk Writes with Rollback Safety
+        let mut written_files: Vec<std::path::PathBuf> = Vec::new();
+        let mut write_error = None;
+
+        for (target_path, final_bytes) in &working_buffers {
+            let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
+            let file_stem = target_path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("batch_patch");
+            let pid = std::process::id();
+            let counter = ATOMIC_PATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let tmp_path = parent.join(format!(".{}.transcend_batch_tmp_{}_{}", file_stem, pid, counter));
+
+            let write_res = (|| -> std::io::Result<()> {
+                let mut tmp_file = fs::File::create(&tmp_path)?;
+                tmp_file.write_all(final_bytes)?;
+                tmp_file.sync_all()?;
+                drop(tmp_file);
+                fs::rename(&tmp_path, target_path)?;
+                Ok(())
+            })();
+
+            if let Err(e) = write_res {
+                let _ = fs::remove_file(&tmp_path);
+                write_error = Some(format!("Failed to write {}: {e}", target_path.display()));
+                break;
             }
+
+            written_files.push(target_path.clone());
         }
 
-        // 2. Apply patches on disk
-        let mut final_results = Vec::with_capacity(req.patches.len());
-        let mut applied_files: Vec<std::path::PathBuf> = Vec::new();
-        let mut apply_error = None;
-
-        for patch_req in &req.patches {
-            let mut live_req = patch_req.clone();
-            live_req.dry_run = Some(false);
-            live_req.validate_ast = Some(validate_ast);
-
-            match Self::patch(&live_req) {
-                Ok(res) => {
-                    if !res.success {
-                        apply_error = Some(res.message.clone());
-                        final_results.push(res);
-                        break;
-                    }
-                    applied_files.push(Path::new(&patch_req.path).to_path_buf());
-                    final_results.push(res);
-                }
-                Err(e) => {
-                    apply_error = Some(e.to_string());
-                    break;
-                }
-            }
-        }
-
-        if let Some(err_msg) = apply_error {
+        if let Some(err_msg) = write_error {
             // Rollback all previously modified files!
-            for p in &applied_files {
+            for p in &written_files {
                 if let Some(orig_bytes) = original_contents.get(p) {
                     let _ = fs::write(p, orig_bytes);
                 }
             }
             return Ok(BatchPatchResponse {
                 success: false,
-                results: final_results,
+                results: simulated_results,
                 total_files_patched: 0,
                 all_ast_valid: false,
                 syntax_errors: vec![],
                 diff: None,
-                message: format!("Batch patch failed during execution and was rolled back: {err_msg}"),
+                message: format!("Batch patch failed during disk write and was rolled back: {err_msg}"),
             });
         }
 
         Ok(BatchPatchResponse {
             success: true,
-            results: final_results,
+            results: simulated_results,
             total_files_patched: distinct_files.len(),
             all_ast_valid: true,
             syntax_errors: vec![],

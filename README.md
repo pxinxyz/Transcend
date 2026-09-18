@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-19%20Tools-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-96%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-20%20Tools-8A2BE2" alt="MCP Compatible"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-101%20passed-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -34,7 +34,7 @@ Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are tr
 
 Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
 
-Transcend replaces blind scraping with **19 typed, AST-aware, LSP-native, and terminal execution primitives** organized across three computational tiers:
+Transcend replaces blind scraping with **20 typed, AST-aware, LSP-native, and terminal execution primitives** organized across three computational tiers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -56,6 +56,7 @@ Transcend replaces blind scraping with **19 typed, AST-aware, LSP-native, and te
 │    delete_path        Workspace-Contained File & Recursive Directory Deletion          │
 │    patch              AST-Guarded Patching with Splicing Modes (Insert/Prepend/Append) │
 │    batch_patch        Multi-File Transactional Atomic Changeset with Rollback          │
+│    set_workspace      Dynamic Workspace Root Anchor & Auto-Resolution                  │
 │                                                                                        │
 │  [ Tier 2: Language Server Protocol (LSP) ]                                            │
 │    lsp_definition     Exact Cross-File Definition Navigation (Tree-sitter Bridge)      │
@@ -138,6 +139,11 @@ Solves the danger of multi-file refactorings leaving repositories in half-broken
 - **All-or-Nothing Disk Atomicity**: If any single file in the batch fails AST validation or encounter conflicts, zero files are modified on disk.
 - **Automated Rollback**: If an I/O error occurs mid-application, automatically restores all previously modified files from in-memory backups.
 
+### 11. `set_workspace` — Workspace Root Configuration & Auto-Resolution
+Dynamically sets or anchors the active project directory for all operations.
+- **Anchor Detection**: Auto-detects workspace root via `Cargo.toml`, `.git`, or `package.json` boundaries when unset.
+- **Seamless Path Resolution**: All path-based tools (`search`, `find`, `outline`, `patch`, `read_file`, `exec`) resolve relative paths against the active workspace root.
+
 ---
 
 ## Tier 2: Language Server Protocol (LSP) Subsystem
@@ -163,20 +169,20 @@ Transcend integrates official, standardized language servers over asynchronous s
    [ rust-analyzer ]              [ gopls ]                  [ clangd ]
 ```
 
-### 11. `lsp_definition` — Cross-File Semantic Definition Navigation
+### 12. `lsp_definition` — Cross-File Semantic Definition Navigation
 - **Tree-sitter Coordinate Bridge**: Accepts symbol queries (`"TerminalEngine::exec"`) and maps them to 0-based `(line, col)` coordinates in microseconds before querying the language server.
 - **Semantic Resolution**: Accurately resolves type aliases, trait implementations, macros, and imports across modular boundaries.
 - **Zero Crashes via Heuristics**: If a language server binary is not installed locally, Transcend gracefully falls back to Tree-sitter heuristics.
 
-### 12. `lsp_references` — Multi-File Semantic Usages
+### 13. `lsp_references` — Multi-File Semantic Usages
 - **True References**: Distinguishes semantic references from substring collisions, variable shadows, or commented-out code.
 - **Clustered Preview**: Returns occurrences grouped by file path with snippet previews and exact line/character coordinates.
 
-### 13. `lsp_hover` — Distilled Type Signatures & Docstrings
+### 14. `lsp_hover` — Distilled Type Signatures & Docstrings
 - **Distilled Intelligence**: Strips raw HTML, unformatted markdown, and verbose JSON protocol wrappers into clean function signatures, type bounds, and docstrings.
 - **Immediate Context**: Inspect complex generic signatures and traits without having to navigate away to the source definition.
 
-### 14. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
+### 15. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
 - **Live Background Stream**: Subscribes to `textDocument/publishDiagnostics` published by language servers during session edits.
 - **Precise Filtering**: Filters diagnostics by file path and severity (`Error`, `Warning`, `Information`, `Hint`).
 
@@ -221,24 +227,26 @@ Transcend solves the fundamental dilemma of agent shell execution by decoupling 
            output, exit_code, cursor                        Return status: "detached", session_id
 ```
 
-### 15. `exec` — Hybrid Execution with Auto-Detach
+### 16. `exec` — Hybrid Execution with Auto-Detach
 - **Fast Path (Single Turn)**: Routine commands that exit within `timeout_ms` (e.g. `cargo check`, `git status`) return immediate exit codes and output in a single tool turn without multi-turn polling overhead.
 - **Auto-Detach (Long-Running Tasks)**: Long-running servers (`npm run dev`, `cargo watch`, Python REPLs) automatically detach without hanging the turn, returning a persistent `session_id`.
 - **Decoupled Transport**: Automatically uses `pipe` for quiet batch utilities and `pty` (ConPTY / openpty) for TTY-aware tools.
+- **Direct Raw Mode**: Supports `raw: true` for direct binary execution avoiding shell interpretation.
 
-### 16. `terminal_read` — Cursor-Based Incremental Output Streaming
+### 17. `terminal_read` — Cursor-Based Incremental Output Streaming
 - **Monotonic Cursor**: Accepts `cursor: usize` and returns `next_cursor: usize`. Subsequent turns read only new output, eliminating repetitive context-wasteful re-reads.
+- **Pattern Await**: Optional `wait_for_pattern` waits for specific terminal prompts (e.g. `Ready on http://localhost`) before returning.
 - **CR (`\r`) Line Folding**: Interactive CLI progress bars, spinners, and download counters are folded to their final state in-place, slashing token usage by up to 90%.
 - **ANSI Sanitization**: In-process terminal escape sequence stripping via `strip-ansi-escapes`.
 - **Ring Buffer Bounds**: 1 MB bounded circular buffer with head/tail slicing protects against out-of-memory crashes on runaway output.
 
-### 17. `terminal_write` — Interactive Stdin Delivery
+### 18. `terminal_write` — Interactive Stdin Delivery
 - Injects keystrokes, commands, and interactive responses (`y\n`, Ctrl+C `\x03`) into active detached sessions and REPLs.
 
-### 18. `terminal_resize` — PTY Dimension Control
+### 19. `terminal_resize` — PTY Dimension Control
 - Adjusts pseudo terminal column and row geometry (`cols`, `rows`) to adapt output layouts for CLI dashboards and TUIs.
 
-### 19. `terminal_kill` — Process Tree Termination
+### 20. `terminal_kill` — Process Tree Termination
 - **Windows Job Objects**: Binds process trees to kernel Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring that complex child/grandchild processes (`node.exe`, `vite.exe`) are killed atomically without port leaks.
 - **Asynchronous PTY Disposal**: Cleans up ConPTY pseudo console handles on dedicated background worker threads to prevent Win32 synchronous pipe-drain deadlocks.
 

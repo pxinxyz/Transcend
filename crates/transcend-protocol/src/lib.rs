@@ -36,6 +36,8 @@ pub struct SearchOptions {
     pub context_lines: Option<usize>,
     /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
     pub include_hidden: Option<bool>,
+    /// Optional maximum number of file clusters with empty matches to return before pruning (default: 10).
+    pub max_empty_clusters: Option<usize>,
 }
 
 /// A single matched line within a file.
@@ -307,6 +309,8 @@ pub struct OutlineOptions {
     pub include_doc_comments: Option<bool>,
     /// Whether to extract structural relationships (e.g. implements, extends, receiver). Defaults to true.
     pub include_relationships: Option<bool>,
+    /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
+    pub include_hidden: Option<bool>,
 }
 
 /// Response returned by an outline operation.
@@ -789,6 +793,9 @@ pub struct ExecRequest {
     /// Maximum bytes of output to return in the response (default: 32,768 bytes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<usize>,
+    /// If true, executes the command binary directly without shell wrapping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<bool>,
 }
 
 /// Response returned from an execution request.
@@ -839,6 +846,9 @@ pub struct TerminalReadRequest {
     /// Optional timeout in milliseconds to wait for new output if buffer has no new data.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
+    /// Optional pattern to await in the terminal output stream before returning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait_for_pattern: Option<String>,
 }
 
 /// Response containing incremental terminal output.
@@ -1024,6 +1034,20 @@ pub struct DeletePathResponse {
     pub message: String,
 }
 
+/// Request parameters to configure the active project workspace root directory.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SetWorkspaceRequest {
+    /// Workspace root directory path.
+    pub path: String,
+}
 
-
-
+/// Response returned by a set_workspace operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct SetWorkspaceResponse {
+    /// Whether the workspace root was successfully set.
+    pub success: bool,
+    /// Canonical path of the active workspace root directory.
+    pub workspace_root: String,
+    /// Status or diagnostic message.
+    pub message: String,
+}

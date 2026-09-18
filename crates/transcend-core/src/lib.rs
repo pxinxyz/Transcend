@@ -12,8 +12,9 @@ pub mod patch;
 pub mod search;
 pub mod terminal;
 
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
@@ -21,10 +22,10 @@ use transcend_protocol::{
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
-    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, TerminalKillRequest,
-    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
-    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, WriteFileRequest,
-    WriteFileResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, SetWorkspaceRequest,
+    SetWorkspaceResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
+    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
+    TerminalWriteResponse, WriteFileRequest, WriteFileResponse,
 };
 
 use crate::file_ops::FileOps;
@@ -115,6 +116,12 @@ pub trait Engine: Send + Sync {
 
     /// Terminate an active terminal session and its process tree.
     fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>>;
+
+    /// Configure or update the active workspace root path.
+    fn set_workspace(&self, req: &SetWorkspaceRequest) -> CoreResult<SetWorkspaceResponse>;
+
+    /// Retrieve the currently active or auto-detected workspace root.
+    fn get_workspace(&self) -> PathBuf;
 }
 
 /// Default in-process engine implementation.
@@ -122,6 +129,7 @@ pub trait Engine: Send + Sync {
 pub struct NativeEngine {
     lsp: Arc<lsp::LspEngine>,
     terminal: Arc<terminal::TerminalEngine>,
+    workspace_root: Arc<RwLock<Option<PathBuf>>>,
 }
 
 impl Default for NativeEngine {
@@ -135,78 +143,189 @@ impl NativeEngine {
         Self {
             lsp: Arc::new(lsp::LspEngine::new()),
             terminal: Arc::new(terminal::TerminalEngine::new()),
+            workspace_root: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Retrieve the current workspace root, consulting explicit config, environment, or root anchors.
+    pub fn get_workspace(&self) -> PathBuf {
+        if let Ok(guard) = self.workspace_root.read() {
+            if let Some(ref root) = *guard {
+                return root.clone();
+            }
+        }
+        if let Ok(env_root) = std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT")) {
+            let p = PathBuf::from(env_root);
+            if p.exists() {
+                return p;
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            let mut curr = Some(cwd.as_path());
+            while let Some(dir) = curr {
+                if dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("package.json").exists() {
+                    return dir.to_path_buf();
+                }
+                curr = dir.parent();
+            }
+            return cwd;
+        }
+        PathBuf::from(".")
+    }
+
+    /// Resolve an optional or relative path against the active workspace root.
+    pub fn resolve_path(&self, raw: Option<&str>) -> PathBuf {
+        let root = self.get_workspace();
+        match raw {
+            None => root,
+            Some(p) => {
+                let s = p.trim();
+                if s.is_empty() || s == "." {
+                    root
+                } else {
+                    let path = Path::new(s);
+                    if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        root.join(path)
+                    }
+                }
+            }
         }
     }
 }
 
 impl Engine for NativeEngine {
+    fn set_workspace(&self, req: &SetWorkspaceRequest) -> CoreResult<SetWorkspaceResponse> {
+        let p = Path::new(&req.path);
+        if !p.exists() {
+            return Err(CoreError::General(format!(
+                "Workspace directory does not exist: {}",
+                p.display()
+            )));
+        }
+        if !p.is_dir() {
+            return Err(CoreError::General(format!(
+                "Workspace path is not a directory: {}",
+                p.display()
+            )));
+        }
+        let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        if let Ok(mut guard) = self.workspace_root.write() {
+            *guard = Some(canonical.clone());
+        }
+        Ok(SetWorkspaceResponse {
+            success: true,
+            workspace_root: canonical.to_string_lossy().to_string(),
+            message: format!("Workspace root configured to {}", canonical.display()),
+        })
+    }
+
+    fn get_workspace(&self) -> PathBuf {
+        NativeEngine::get_workspace(self)
+    }
+
     fn search(&self, req: &SearchRequest) -> CoreResult<SearchResponse> {
-        SearchScanner::scan(req)
+        let mut resolved = req.clone();
+        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        SearchScanner::scan(&resolved)
     }
 
     fn find(&self, req: &FindRequest) -> CoreResult<FindResponse> {
-        FindScanner::scan(req)
+        let mut resolved = req.clone();
+        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        FindScanner::scan(&resolved)
     }
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
-        OutlineScanner::scan(req)
+        let mut resolved = req.clone();
+        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        OutlineScanner::scan(&resolved)
     }
 
     fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
-        SymbolReader::read(req)
+        let mut resolved = req.clone();
+        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        SymbolReader::read(&resolved)
     }
 
     fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse> {
-        Patcher::patch(req)
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        Patcher::patch(&resolved)
     }
 
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse> {
-        SymbolFinder::find(req)
+        let mut resolved = req.clone();
+        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        SymbolFinder::find(&resolved)
     }
 
     fn read_file(&self, req: &ReadFileRequest) -> CoreResult<ReadFileResponse> {
-        FileOps::read_file(req)
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        FileOps::read_file(&resolved)
     }
 
     fn write_file(&self, req: &WriteFileRequest) -> CoreResult<WriteFileResponse> {
-        FileOps::write_file(req)
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        FileOps::write_file(&resolved)
     }
 
     fn delete_path(&self, req: &DeletePathRequest) -> CoreResult<DeletePathResponse> {
-        FileOps::delete_path(req)
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        FileOps::delete_path(&resolved)
     }
 
     fn batch_patch(&self, req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse> {
-        Patcher::batch_patch(req)
+        let mut resolved = req.clone();
+        for p in &mut resolved.patches {
+            p.path = self.resolve_path(Some(&p.path)).to_string_lossy().to_string();
+        }
+        Patcher::batch_patch(&resolved)
     }
 
     fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>> {
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
         Box::pin(async move {
-            self.lsp.goto_definition(self, req).await
+            self.lsp.goto_definition(self, &resolved).await
         })
     }
 
     fn lsp_references<'a>(&'a self, req: &'a LspReferencesRequest) -> BoxFuture<'a, CoreResult<LspReferencesResponse>> {
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
         Box::pin(async move {
-            self.lsp.find_references(self, req).await
+            self.lsp.find_references(self, &resolved).await
         })
     }
 
     fn lsp_hover<'a>(&'a self, req: &'a LspHoverRequest) -> BoxFuture<'a, CoreResult<LspHoverResponse>> {
+        let mut resolved = req.clone();
+        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
         Box::pin(async move {
-            self.lsp.hover(self, req).await
+            self.lsp.hover(self, &resolved).await
         })
     }
 
     fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>> {
+        let mut resolved = req.clone();
+        if let Some(ref p) = req.path {
+            resolved.path = Some(self.resolve_path(Some(p)).to_string_lossy().to_string());
+        }
         Box::pin(async move {
-            self.lsp.diagnostics(self, req).await
+            self.lsp.diagnostics(self, &resolved).await
         })
     }
 
     fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>> {
+        let mut resolved = req.clone();
+        resolved.cwd = Some(self.resolve_path(req.cwd.as_deref()).to_string_lossy().to_string());
         Box::pin(async move {
-            self.terminal.exec(req).await
+            self.terminal.exec(&resolved).await
         })
     }
 
@@ -2828,6 +2947,128 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert_eq!(batch_ok.total_files_patched, 2);
         assert_eq!(fs::read_to_string(&file1).unwrap(), "fn first() -> i32 { 100 }\n");
         assert_eq!(fs::read_to_string(&file2).unwrap(), "fn second() -> i32 { 200 }\n");
+    }
+
+    #[test]
+    fn test_batch_patch_cumulative_same_file() {
+        let sandbox = TestSandbox::create();
+        let target = sandbox.dir.join("target.rs");
+        fs::write(&target, "fn alpha() -> i32 {\n    1\n}\n\nfn beta() -> i32 {\n    2\n}\n").unwrap();
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .batch_patch(&transcend_protocol::BatchPatchRequest {
+                patches: vec![
+                    transcend_protocol::PatchRequest {
+                        path: target.to_string_lossy().to_string(),
+                        target_symbol: Some("alpha".to_string()),
+                        replacement: "fn alpha() -> i32 {\n    10\n}".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                    transcend_protocol::PatchRequest {
+                        path: target.to_string_lossy().to_string(),
+                        target_symbol: Some("beta".to_string()),
+                        replacement: "fn beta() -> i32 {\n    20\n}".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                ],
+                validate_ast: Some(true),
+                dry_run: Some(false),
+            })
+            .expect("batch_patch should succeed");
+
+        assert!(res.success);
+        assert_eq!(res.results.len(), 2);
+        assert_eq!(res.total_files_patched, 1);
+
+        let final_code = fs::read_to_string(&target).unwrap();
+        assert!(final_code.contains("10"));
+        assert!(final_code.contains("20"));
+    }
+
+    #[test]
+    fn test_set_workspace_and_relative_resolution() {
+        let sandbox = TestSandbox::create();
+        let subfile = sandbox.dir.join("sub").join("test.txt");
+        fs::create_dir_all(subfile.parent().unwrap()).unwrap();
+        fs::write(&subfile, "workspace file content\n").unwrap();
+
+        let engine = NativeEngine::new();
+        // Set workspace to sandbox
+        let set_res = engine
+            .set_workspace(&SetWorkspaceRequest {
+                path: sandbox.path_str(),
+            })
+            .expect("set_workspace should succeed");
+        assert!(set_res.success);
+
+        // Read using relative path
+        let read_res = engine
+            .read_file(&ReadFileRequest {
+                path: "sub/test.txt".to_string(),
+                ..Default::default()
+            })
+            .expect("read_file should succeed via workspace resolution");
+
+        assert_eq!(read_res.content.trim(), "workspace file content");
+
+        // Error on non-existent directory
+        let err_res = engine.set_workspace(&SetWorkspaceRequest {
+            path: sandbox.dir.join("non_existent_folder_xyz").to_string_lossy().to_string(),
+        });
+        assert!(err_res.is_err());
+    }
+
+    #[test]
+    fn test_patch_auto_indentation_modes() {
+        let sandbox = TestSandbox::create();
+        let target = sandbox.dir.join("indent.rs");
+        fs::write(&target, "fn compute() {\n    let a = 1;\n    let b = 2;\n}\n").unwrap();
+
+        let engine = NativeEngine::new();
+        let patch_res = engine
+            .patch(&PatchRequest {
+                path: target.to_string_lossy().to_string(),
+                target_symbol: Some("compute".to_string()),
+                mode: Some(transcend_protocol::PatchMode::AppendToSymbol),
+                replacement: "let c = 3;".to_string(),
+                validate_ast: Some(true),
+                dry_run: Some(false),
+                ..Default::default()
+            })
+            .expect("append_to_symbol should succeed");
+
+        assert!(patch_res.success);
+        let content = fs::read_to_string(&target).unwrap();
+        // The appended line should have 4 spaces indentation
+        assert!(content.contains("    let c = 3;"));
+    }
+
+    #[test]
+    fn test_search_max_empty_clusters_pruning() {
+        let sandbox = TestSandbox::create();
+        for i in 1..=5 {
+            fs::write(sandbox.dir.join(format!("file_{i}.txt")), "needle\n").unwrap();
+        }
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "needle".to_string(),
+                path: Some(sandbox.path_str()),
+                options: Some(SearchOptions {
+                    max_matches: Some(2), // File 1 and 2 take the 2 matches
+                    max_empty_clusters: Some(1), // Retain only 1 empty cluster
+                    ..Default::default()
+                }),
+            })
+            .expect("search should succeed");
+
+        assert_eq!(res.total_matches, 5);
+        // 2 matched files + 1 empty cluster = 3 files retained
+        assert_eq!(res.files.len(), 3);
     }
 }
 

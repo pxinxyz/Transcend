@@ -227,6 +227,23 @@ impl SearchScanner {
         let total_files = files.len();
         let truncated = total > max_matches;
 
+        // Prune excess empty file clusters when max_empty_clusters is specified
+        if let Some(max_empty_clusters) = opts.max_empty_clusters {
+            let mut empty_count = 0usize;
+            files.retain(|f| {
+                if f.matches.is_empty() {
+                    if empty_count < max_empty_clusters {
+                        empty_count += 1;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    true
+                }
+            });
+        }
+
         Ok(SearchResponse {
             total_matches: total,
             total_files,

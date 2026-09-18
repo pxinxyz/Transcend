@@ -3,7 +3,7 @@
 //! Manages an asynchronous child process session communicating over stdio
 //! using standard LSP JSON-RPC 2.0 framing and document synchronization.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,7 +31,7 @@ pub struct LspSession {
     outgoing_tx: mpsc::UnboundedSender<Vec<u8>>,
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
     diagnostics_cache: Arc<RwLock<HashMap<String, Vec<LspDiagnosticItem>>>>,
-    open_documents: Arc<Mutex<HashSet<String>>>,
+    open_documents: Arc<Mutex<HashMap<String, (std::time::SystemTime, i32)>>>,
     req_counter: AtomicU64,
     _child: Arc<Mutex<Child>>,
 }
@@ -62,7 +62,7 @@ impl LspSession {
         let pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let diagnostics_cache = Arc::new(RwLock::new(HashMap::new()));
-        let open_documents = Arc::new(Mutex::new(HashSet::new()));
+        let open_documents = Arc::new(Mutex::new(HashMap::new()));
 
         // Background stdin writer task
         tokio::spawn(async move {
@@ -233,11 +233,45 @@ impl LspSession {
         Ok(())
     }
 
-    /// Ensure the document is open in the language server session via `textDocument/didOpen`.
+    /// Ensure the document is open and up-to-date in the language server session.
     pub async fn ensure_document_open(&self, file_path: &Path) -> Result<(), String> {
         let uri = path_to_uri(file_path);
+        let current_mtime = std::fs::metadata(file_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
         let mut docs = self.open_documents.lock().await;
-        if docs.contains(&uri) {
+        if let Some((last_mtime, version)) = docs.get_mut(&uri) {
+            if *last_mtime == current_mtime {
+                return Ok(());
+            }
+
+            // Document on disk has changed: read updated text and notify LSP via didChange
+            let text = std::fs::read_to_string(file_path).map_err(|e| {
+                format!("Failed to read file {}: {e}", file_path.display())
+            })?;
+
+            *version += 1;
+            let next_version = *version;
+            *last_mtime = current_mtime;
+
+            let change_params = serde_json::json!({
+                "textDocument": {
+                    "uri": uri.clone(),
+                    "version": next_version
+                },
+                "contentChanges": [
+                    { "text": text }
+                ]
+            });
+
+            self.send_notification("textDocument/didChange", change_params)?;
+
+            let save_params = serde_json::json!({
+                "textDocument": { "uri": uri }
+            });
+            let _ = self.send_notification("textDocument/didSave", save_params);
+
             return Ok(());
         }
 
@@ -247,7 +281,7 @@ impl LspSession {
 
         let params = serde_json::json!({
             "textDocument": {
-                "uri": uri,
+                "uri": uri.clone(),
                 "languageId": self.language_id,
                 "version": 1,
                 "text": text
@@ -255,7 +289,7 @@ impl LspSession {
         });
 
         self.send_notification("textDocument/didOpen", params)?;
-        docs.insert(uri);
+        docs.insert(uri, (current_mtime, 1));
 
         Ok(())
     }

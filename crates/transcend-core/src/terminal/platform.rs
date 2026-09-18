@@ -47,17 +47,39 @@ pub fn resolve_shell(shell_override: Option<&str>, command: &str) -> ShellSpec {
                 }
             }
             Some("powershell") | None => {
-                let pwsh = find_executable_on_path("pwsh.exe")
-                    .or_else(|| find_executable_on_path("powershell.exe"))
-                    .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"));
-                ShellSpec {
-                    program: pwsh,
-                    args: vec![
-                        "-NoProfile".to_string(),
-                        "-NonInteractive".to_string(),
-                        "-Command".to_string(),
-                        command.to_string(),
-                    ],
+                if let Some(pwsh) = find_executable_on_path("pwsh.exe") {
+                    ShellSpec {
+                        program: pwsh,
+                        args: vec![
+                            "-NoProfile".to_string(),
+                            "-NonInteractive".to_string(),
+                            "-Command".to_string(),
+                            command.to_string(),
+                        ],
+                    }
+                } else {
+                    let has_chaining = command.contains("&&") || command.contains("||");
+                    if has_chaining {
+                        let cmd_path = std::env::var_os("COMSPEC")
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\cmd.exe"));
+                        ShellSpec {
+                            program: cmd_path,
+                            args: vec!["/C".to_string(), command.to_string()],
+                        }
+                    } else {
+                        let ps_path = find_executable_on_path("powershell.exe")
+                            .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"));
+                        ShellSpec {
+                            program: ps_path,
+                            args: vec![
+                                "-NoProfile".to_string(),
+                                "-NonInteractive".to_string(),
+                                "-Command".to_string(),
+                                command.to_string(),
+                            ],
+                        }
+                    }
                 }
             }
             Some(custom) => ShellSpec {
