@@ -381,12 +381,32 @@ pub struct PatchSyntaxError {
     pub unexpected_token: Option<String>,
 }
 
+/// Splicing mode for applying patch changes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PatchMode {
+    /// Replace the target symbol, span, or needle text (default).
+    #[default]
+    Replace,
+    /// Insert replacement immediately before target symbol, span, or needle text.
+    InsertBefore,
+    /// Insert replacement immediately after target symbol, span, or needle text.
+    InsertAfter,
+    /// Insert replacement at the beginning of the target symbol's body.
+    PrependToSymbol,
+    /// Insert replacement at the end of the target symbol's body.
+    AppendToSymbol,
+}
+
 /// Request parameters for AST-guarded surgical patching.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PatchRequest {
     /// File path to patch.
     #[serde(alias = "file_path")]
     pub path: String,
+    /// Splicing mode: "replace" (default), "insert_before", "insert_after", "prepend_to_symbol", or "append_to_symbol".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<PatchMode>,
     /// Target locator: symbol name (e.g. "Heartbeat::poll" or "SetupVmcsForProcessor").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_symbol: Option<String>,
@@ -431,6 +451,40 @@ pub struct PatchResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<String>,
     /// Human-readable explanation / diagnostic message.
+    pub message: String,
+}
+
+/// Request parameters for multi-file atomic batch patching.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct BatchPatchRequest {
+    /// Ordered list of patch requests across files.
+    pub patches: Vec<PatchRequest>,
+    /// Validate all modified ASTs with Tree-sitter before modifying any file on disk. Defaults to true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub validate_ast: Option<bool>,
+    /// If true, performs validation and diff calculation without writing to disk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
+}
+
+/// Response returned by a batch patch operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct BatchPatchResponse {
+    /// Whether all patches in the batch succeeded and passed AST validation.
+    pub success: bool,
+    /// Individual patch responses corresponding to each patch request.
+    pub results: Vec<PatchResponse>,
+    /// Number of distinct files patched.
+    pub total_files_patched: usize,
+    /// Whether all resulting files have valid ASTs.
+    pub all_ast_valid: bool,
+    /// Accumulated syntax errors across any files that failed AST preflight.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub syntax_errors: Vec<PatchSyntaxError>,
+    /// Combined unified diff across all touched files.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<String>,
+    /// Summary status message.
     pub message: String,
 }
 
@@ -863,6 +917,111 @@ pub struct TerminalKillResponse {
     /// Remaining unread output before process termination.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_output: Option<String>,
+}
+
+// =========================================================================
+// File Lifecycle & Content Operation Contracts
+// =========================================================================
+
+/// Request parameters for structured, token-bounded file reading.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ReadFileRequest {
+    /// Path to file on disk.
+    pub path: String,
+    /// Optional 1-based start line (inclusive). Defaults to 1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    /// Optional 1-based end line (inclusive).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    /// Maximum bytes of content to return before clipping (default: 65,536 bytes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+    /// Whether to prefix returned lines with 1-based line numbers (e.g. "   1 | fn main() {"). Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_numbers: Option<bool>,
+}
+
+/// Response returned by a read_file operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ReadFileResponse {
+    /// Target file path.
+    pub file: String,
+    /// Extracted text content.
+    pub content: String,
+    /// 1-based start line actually returned.
+    pub start_line: usize,
+    /// 1-based end line actually returned.
+    pub end_line: usize,
+    /// Total number of lines in the file.
+    pub total_lines: usize,
+    /// Total size of the file on disk in bytes.
+    pub size_bytes: u64,
+    /// Whether content was truncated by line range or max_bytes budget.
+    pub truncated: bool,
+    /// Whether file was identified as binary (containing NUL bytes).
+    pub is_binary: bool,
+    /// Optional status or diagnostic message.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Request parameters for atomic file writing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct WriteFileRequest {
+    /// Destination file path.
+    pub path: String,
+    /// Text content to write.
+    pub content: String,
+    /// Whether to overwrite if the file already exists. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overwrite: Option<bool>,
+    /// Whether to automatically create missing parent directories. Defaults to true.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_parents: Option<bool>,
+}
+
+/// Response returned by a write_file operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct WriteFileResponse {
+    /// Destination file path.
+    pub file: String,
+    /// Whether the write succeeded.
+    pub success: bool,
+    /// Number of bytes written to disk.
+    pub bytes_written: usize,
+    /// Whether this write created a new file (true) or updated an existing file (false).
+    pub created_new: bool,
+    /// Status or diagnostic message.
+    pub message: String,
+}
+
+/// Request parameters for safe workspace path deletion.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct DeletePathRequest {
+    /// File or directory path to delete.
+    pub path: String,
+    /// Whether to recursively delete non-empty directories. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recursive: Option<bool>,
+    /// Optional workspace root boundary to guard against path traversal escape. Defaults to current directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
+}
+
+/// Response returned by a delete_path operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct DeletePathResponse {
+    /// Deleted path.
+    pub path: String,
+    /// Whether the deletion succeeded.
+    pub success: bool,
+    /// Whether the deleted target was a directory.
+    pub is_directory: bool,
+    /// Number of items deleted (1 for single file, or count of deleted entries for recursive dir).
+    pub deleted_count: usize,
+    /// Status or diagnostic message.
+    pub message: String,
 }
 
 

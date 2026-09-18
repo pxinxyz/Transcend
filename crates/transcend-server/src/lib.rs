@@ -6,13 +6,15 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    ExecRequest, ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
+    ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
-    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
-    SearchRequest, SearchResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
-    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
-    TerminalWriteResponse,
+    OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, TerminalKillRequest,
+    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
+    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, WriteFileRequest,
+    WriteFileResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -214,6 +216,54 @@ impl TranscendServer {
         Parameters(req): Parameters<TerminalKillRequest>,
     ) -> Result<Json<TerminalKillResponse>, String> {
         self.engine.terminal_kill(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Read file content with line/byte boundaries, line numbers, and binary safety checks.
+    #[tool(
+        name = "read_file",
+        description = "Read file content with line/byte boundaries, line numbers, and binary safety checks"
+    )]
+    pub async fn read_file(
+        &self,
+        Parameters(req): Parameters<ReadFileRequest>,
+    ) -> Result<Json<ReadFileResponse>, String> {
+        self.engine.read_file(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Write text content to file atomically with collision guards and parent directory creation.
+    #[tool(
+        name = "write_file",
+        description = "Write text content to file atomically with collision guards and parent directory creation"
+    )]
+    pub async fn write_file(
+        &self,
+        Parameters(req): Parameters<WriteFileRequest>,
+    ) -> Result<Json<WriteFileResponse>, String> {
+        self.engine.write_file(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Delete a file or directory safely within workspace boundaries.
+    #[tool(
+        name = "delete_path",
+        description = "Delete a file or directory safely within workspace boundaries"
+    )]
+    pub async fn delete_path(
+        &self,
+        Parameters(req): Parameters<DeletePathRequest>,
+    ) -> Result<Json<DeletePathResponse>, String> {
+        self.engine.delete_path(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Transactionally apply multiple patches across files with AST preflight and rollback guarantees.
+    #[tool(
+        name = "batch_patch",
+        description = "Transactionally apply multiple patches across files with AST preflight and rollback guarantees"
+    )]
+    pub async fn batch_patch(
+        &self,
+        Parameters(req): Parameters<BatchPatchRequest>,
+    ) -> Result<Json<BatchPatchResponse>, String> {
+        self.engine.batch_patch(&req).map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -424,6 +474,10 @@ pub fn compute() -> i32 {
                 ("terminal_write", "Send input, keystrokes, or signals to a running terminal session", serde_json::to_value(schemars::schema_for!(TerminalWriteRequest)).unwrap()),
                 ("terminal_resize", "Resize a PTY terminal session's columns and rows", serde_json::to_value(schemars::schema_for!(TerminalResizeRequest)).unwrap()),
                 ("terminal_kill", "Forcibly terminate a running terminal session and its entire process tree", serde_json::to_value(schemars::schema_for!(TerminalKillRequest)).unwrap()),
+                ("read_file", "Read file content with line/byte boundaries, line numbers, and binary safety checks", serde_json::to_value(schemars::schema_for!(ReadFileRequest)).unwrap()),
+                ("write_file", "Write text content to file atomically with collision guards and parent directory creation", serde_json::to_value(schemars::schema_for!(WriteFileRequest)).unwrap()),
+                ("delete_path", "Delete a file or directory safely within workspace boundaries", serde_json::to_value(schemars::schema_for!(DeletePathRequest)).unwrap()),
+                ("batch_patch", "Transactionally apply multiple patches across files with AST preflight and rollback guarantees", serde_json::to_value(schemars::schema_for!(BatchPatchRequest)).unwrap()),
             ];
 
             for (name, desc, schema) in tools {
@@ -437,6 +491,76 @@ pub fn compute() -> i32 {
                 std::fs::write(&file_path, json_str).unwrap();
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_server_file_lifecycle_tools() {
+        let server = TranscendServer::default();
+        let tmp_file = format!("target/test_server_file_{}.txt", std::process::id());
+
+        // 1. write_file
+        let write_res = server
+            .write_file(Parameters(WriteFileRequest {
+                path: tmp_file.clone(),
+                content: "line 1\nline 2\nline 3\n".to_string(),
+                overwrite: Some(true),
+                create_parents: Some(true),
+            }))
+            .await
+            .expect("write_file should succeed");
+        assert!(write_res.0.success);
+
+        // 2. read_file
+        let read_res = server
+            .read_file(Parameters(ReadFileRequest {
+                path: tmp_file.clone(),
+                start_line: Some(1),
+                end_line: Some(2),
+                line_numbers: Some(true),
+                max_bytes: None,
+            }))
+            .await
+            .expect("read_file should succeed");
+        assert_eq!(read_res.0.start_line, 1);
+        assert_eq!(read_res.0.end_line, 2);
+        assert!(read_res.0.content.contains("line 1"));
+
+        // 3. delete_path
+        let del_res = server
+            .delete_path(Parameters(DeletePathRequest {
+                path: tmp_file.clone(),
+                recursive: Some(false),
+                workspace_root: None,
+            }))
+            .await
+            .expect("delete_path should succeed");
+        assert!(del_res.0.success);
+    }
+
+    #[tokio::test]
+    async fn test_server_batch_patch_tool() {
+        let server = TranscendServer::default();
+        let res = server
+            .batch_patch(Parameters(BatchPatchRequest {
+                patches: vec![
+                    PatchRequest {
+                        path: "dummy.rs".to_string(),
+                        content: Some("fn main() {}\n".to_string()),
+                        target_symbol: Some("main".to_string()),
+                        replacement: "fn main() { println!(\"patched\"); }".to_string(),
+                        validate_ast: Some(true),
+                        dry_run: Some(true),
+                        ..Default::default()
+                    }
+                ],
+                validate_ast: Some(true),
+                dry_run: Some(true),
+            }))
+            .await
+            .expect("batch_patch should succeed");
+
+        assert!(res.0.success);
+        assert_eq!(res.0.total_files_patched, 1);
     }
 }
 

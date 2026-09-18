@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use tree_sitter::{Node, Parser};
 use transcend_protocol::{
-    PatchRequest, PatchResponse, PatchSyntaxError, ReadSymbolRequest, SourceSpan,
+    BatchPatchRequest, BatchPatchResponse, PatchMode, PatchRequest, PatchResponse,
+    PatchSyntaxError, ReadSymbolRequest, SourceSpan,
 };
 
 use crate::outline::scanner::SupportedLang;
@@ -144,26 +145,10 @@ impl Patcher {
             });
         };
 
+        let mode = req.mode.unwrap_or(PatchMode::Replace);
+
         let mut start_byte = target_span.start_byte;
         let end_byte = target_span.end_byte;
-
-        // Auto-heal double-indentation:
-        // If the line before start_byte consists solely of whitespace,
-        // and the replacement already begins with that same whitespace,
-        // expand start_byte backwards to the beginning of the indentation.
-        let prefix_line_start = source[..start_byte]
-            .iter()
-            .rposition(|&b| b == b'\n')
-            .map(|idx| idx + 1)
-            .unwrap_or(0);
-        let line_prefix = &source[prefix_line_start..start_byte];
-        if line_prefix.iter().all(|&b| b == b' ' || b == b'\t') {
-            if let Ok(indent_str) = std::str::from_utf8(line_prefix) {
-                if !indent_str.is_empty() && req.replacement.starts_with(indent_str) {
-                    start_byte = prefix_line_start;
-                }
-            }
-        }
 
         if start_byte > end_byte || end_byte > source.len() {
             return Ok(PatchResponse {
@@ -182,13 +167,90 @@ impl Patcher {
             });
         }
 
+        // Calculate splice range and text according to PatchMode
+        let (splice_start, splice_end, splice_text) = match mode {
+            PatchMode::Replace => {
+                // Auto-heal double-indentation:
+                let prefix_line_start = source[..start_byte]
+                    .iter()
+                    .rposition(|&b| b == b'\n')
+                    .map(|idx| idx + 1)
+                    .unwrap_or(0);
+                let line_prefix = &source[prefix_line_start..start_byte];
+                if line_prefix.iter().all(|&b| b == b' ' || b == b'\t') {
+                    if let Ok(indent_str) = std::str::from_utf8(line_prefix) {
+                        if !indent_str.is_empty() && req.replacement.starts_with(indent_str) {
+                            start_byte = prefix_line_start;
+                        }
+                    }
+                }
+                (start_byte, end_byte, req.replacement.clone())
+            }
+            PatchMode::InsertBefore => {
+                let text = if !req.replacement.ends_with('\n') {
+                    format!("{}\n", req.replacement)
+                } else {
+                    req.replacement.clone()
+                };
+                (start_byte, start_byte, text)
+            }
+            PatchMode::InsertAfter => {
+                let text = if !req.replacement.starts_with('\n') {
+                    format!("\n{}", req.replacement)
+                } else {
+                    req.replacement.clone()
+                };
+                (end_byte, end_byte, text)
+            }
+            PatchMode::PrependToSymbol => {
+                let sym_slice = &source[start_byte..end_byte];
+                let insert_pos = if let Some(open_idx) = sym_slice.iter().position(|&b| b == b'{') {
+                    let next_pos = start_byte + open_idx + 1;
+                    if next_pos < source.len() && source[next_pos] == b'\n' {
+                        next_pos + 1
+                    } else {
+                        next_pos
+                    }
+                } else if let Some(colon_idx) = sym_slice.iter().position(|&b| b == b':') {
+                    let next_pos = start_byte + colon_idx + 1;
+                    if next_pos < source.len() && source[next_pos] == b'\n' {
+                        next_pos + 1
+                    } else {
+                        next_pos
+                    }
+                } else {
+                    start_byte
+                };
+                let text = if !req.replacement.ends_with('\n') {
+                    format!("{}\n", req.replacement)
+                } else {
+                    req.replacement.clone()
+                };
+                (insert_pos, insert_pos, text)
+            }
+            PatchMode::AppendToSymbol => {
+                let sym_slice = &source[start_byte..end_byte];
+                let insert_pos = if let Some(close_idx) = sym_slice.iter().rposition(|&b| b == b'}') {
+                    start_byte + close_idx
+                } else {
+                    end_byte
+                };
+                let text = if !req.replacement.ends_with('\n') {
+                    format!("{}\n", req.replacement)
+                } else {
+                    req.replacement.clone()
+                };
+                (insert_pos, insert_pos, text)
+            }
+        };
+
         // 2. In-memory splice
         let mut new_source = Vec::with_capacity(
-            source.len() - (end_byte - start_byte) + req.replacement.len(),
+            source.len() - (splice_end - splice_start) + splice_text.len(),
         );
-        new_source.extend_from_slice(&source[..start_byte]);
-        new_source.extend_from_slice(req.replacement.as_bytes());
-        new_source.extend_from_slice(&source[end_byte..]);
+        new_source.extend_from_slice(&source[..splice_start]);
+        new_source.extend_from_slice(splice_text.as_bytes());
+        new_source.extend_from_slice(&source[splice_end..]);
 
         // 3. Generate unified diff
         let orig_str = String::from_utf8_lossy(&source);
@@ -197,9 +259,9 @@ impl Patcher {
             &display_path,
             &orig_str,
             &new_str,
-            start_byte,
-            end_byte,
-            &req.replacement,
+            splice_start,
+            splice_end,
+            &splice_text,
         );
 
         // 4. AST Preflight Verification
@@ -294,6 +356,142 @@ impl Patcher {
             syntax_errors: vec![],
             diff: Some(diff),
             message: "Patch applied successfully.".to_string(),
+        })
+    }
+
+    /// Transactionally apply multiple patches across files with AST preflight and rollback guarantees.
+    pub fn batch_patch(req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse> {
+        if req.patches.is_empty() {
+            return Ok(BatchPatchResponse {
+                success: true,
+                results: vec![],
+                total_files_patched: 0,
+                all_ast_valid: true,
+                syntax_errors: vec![],
+                diff: None,
+                message: "No patches provided in batch.".to_string(),
+            });
+        }
+
+        let validate_ast = req.validate_ast.unwrap_or(true);
+        let dry_run = req.dry_run.unwrap_or(false);
+
+        // Phase 1: Dry run / simulation across all patches
+        let mut simulated_results = Vec::with_capacity(req.patches.len());
+        let mut accumulated_syntax_errors = Vec::new();
+        let mut combined_diff = String::new();
+        let mut any_failed = false;
+
+        for patch_req in &req.patches {
+            let mut dry_req = patch_req.clone();
+            dry_req.dry_run = Some(true);
+            dry_req.validate_ast = Some(validate_ast);
+
+            let res = Self::patch(&dry_req)?;
+            if !res.success || !res.ast_valid {
+                any_failed = true;
+                accumulated_syntax_errors.extend(res.syntax_errors.clone());
+            }
+            if let Some(ref d) = res.diff {
+                if !d.is_empty() {
+                    combined_diff.push_str(d);
+                    combined_diff.push('\n');
+                }
+            }
+            simulated_results.push(res);
+        }
+
+        let distinct_files: std::collections::HashSet<_> = req.patches.iter().map(|p| &p.path).collect();
+
+        if any_failed {
+            return Ok(BatchPatchResponse {
+                success: false,
+                results: simulated_results,
+                total_files_patched: 0,
+                all_ast_valid: false,
+                syntax_errors: accumulated_syntax_errors,
+                diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+                message: "Batch patch aborted: one or more patches failed AST preflight validation or target resolution. No files modified on disk.".to_string(),
+            });
+        }
+
+        if dry_run {
+            return Ok(BatchPatchResponse {
+                success: true,
+                results: simulated_results,
+                total_files_patched: distinct_files.len(),
+                all_ast_valid: true,
+                syntax_errors: vec![],
+                diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+                message: "Dry run: all patches in batch successfully validated. No changes written to disk.".to_string(),
+            });
+        }
+
+        // Phase 2: Atomic Execution with Multi-File Rollback Safety
+        // 1. Back up original file contents in memory
+        let mut original_contents: std::collections::HashMap<std::path::PathBuf, Vec<u8>> = std::collections::HashMap::new();
+        for file_path_str in &distinct_files {
+            let p = Path::new(file_path_str);
+            if p.exists() {
+                if let Ok(bytes) = fs::read(p) {
+                    original_contents.insert(p.to_path_buf(), bytes);
+                }
+            }
+        }
+
+        // 2. Apply patches on disk
+        let mut final_results = Vec::with_capacity(req.patches.len());
+        let mut applied_files: Vec<std::path::PathBuf> = Vec::new();
+        let mut apply_error = None;
+
+        for patch_req in &req.patches {
+            let mut live_req = patch_req.clone();
+            live_req.dry_run = Some(false);
+            live_req.validate_ast = Some(validate_ast);
+
+            match Self::patch(&live_req) {
+                Ok(res) => {
+                    if !res.success {
+                        apply_error = Some(res.message.clone());
+                        final_results.push(res);
+                        break;
+                    }
+                    applied_files.push(Path::new(&patch_req.path).to_path_buf());
+                    final_results.push(res);
+                }
+                Err(e) => {
+                    apply_error = Some(e.to_string());
+                    break;
+                }
+            }
+        }
+
+        if let Some(err_msg) = apply_error {
+            // Rollback all previously modified files!
+            for p in &applied_files {
+                if let Some(orig_bytes) = original_contents.get(p) {
+                    let _ = fs::write(p, orig_bytes);
+                }
+            }
+            return Ok(BatchPatchResponse {
+                success: false,
+                results: final_results,
+                total_files_patched: 0,
+                all_ast_valid: false,
+                syntax_errors: vec![],
+                diff: None,
+                message: format!("Batch patch failed during execution and was rolled back: {err_msg}"),
+            });
+        }
+
+        Ok(BatchPatchResponse {
+            success: true,
+            results: final_results,
+            total_files_patched: distinct_files.len(),
+            all_ast_valid: true,
+            syntax_errors: vec![],
+            diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+            message: format!("Successfully applied batch patch across {} files.", distinct_files.len()),
         })
     }
 

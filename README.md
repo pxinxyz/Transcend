@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-15%20Tools-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-88%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-19%20Tools-8A2BE2" alt="MCP Compatible"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-96%20passed-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -34,7 +34,7 @@ Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are tr
 
 Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
 
-Transcend replaces blind scraping with **15 typed, AST-aware, LSP-native, and terminal execution primitives** organized across three computational tiers:
+Transcend replaces blind scraping with **19 typed, AST-aware, LSP-native, and terminal execution primitives** organized across three computational tiers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -45,13 +45,17 @@ Transcend replaces blind scraping with **15 typed, AST-aware, LSP-native, and te
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
 │                                    TRANSCEND ENGINE                                    │
 │                                                                                        │
-│  [ Tier 1: Codebase Intelligence ]                                                     │
+│  [ Tier 1: Codebase Intelligence & File Lifecycle ]                                    │
 │    find               Topological Radar & Extension Census                             │
 │    search             Clustered Ripgrep Heatmaps & Content Search                      │
 │    find_symbol        Global Project-Wide Definition Finder                            │
 │    outline            AST Structural Tree or Syntax-Valid Skeletons                     │
 │    read_symbol        Surgical Semantic Symbol Extraction                              │
-│    patch              AST-Guarded Indentation-Healed Patching                          │
+│    read_file          Line-Bounded Token-Budgeted Reader with Binary-Safety            │
+│    write_file         Atomic File Creator with Overwrite & Parent Directory Guards     │
+│    delete_path        Workspace-Contained File & Recursive Directory Deletion          │
+│    patch              AST-Guarded Patching with Splicing Modes (Insert/Prepend/Append) │
+│    batch_patch        Multi-File Transactional Atomic Changeset with Rollback          │
 │                                                                                        │
 │  [ Tier 2: Language Server Protocol (LSP) ]                                            │
 │    lsp_definition     Exact Cross-File Definition Navigation (Tree-sitter Bridge)      │
@@ -103,12 +107,36 @@ Replaces manual line slicing and coordinate arithmetic (`sed -n 42,88p`).
 - **Context Preservation**: Automatically extracts leading docstrings, annotations, attributes, and surrounding comments.
 - **Zero Coordinate Math**: The agent never needs to calculate line numbers or offsets to view a function.
 
-### 6. `patch` — AST-Guarded Surgical Code Modifier
+### 6. `read_file` — Structured Bounded Line/Byte Reader
+Provides safe, token-bounded inspection of arbitrary non-code and configuration assets (`.env`, `.toml`, `.json`, logs).
+- **Line-Bounded Slicing**: Requests specific slices (`start_line`, `end_line`) with 1-based line numbering.
+- **Binary Detection Safety**: Probes initial bytes for NUL bytes, omitting raw binary blobs to protect agent context.
+- **Strict Byte Caps**: Enforces hard byte budgets (`max_bytes`) to prevent catastrophic multi-megabyte prompt dumps.
+
+### 7. `write_file` — Atomic File Creator
+Replaces unverified shell file redirects (`cat << 'EOF' > ...` or `Set-Content`).
+- **Atomic Disk Swaps**: Writes to a sibling temporary file, flushes to disk with `sync_all()`, and executes an atomic filesystem rename.
+- **Collision Protection**: Default `overwrite: false` fails cleanly if a file already exists, preventing accidental overwrites.
+- **Directory Provisioning**: Automatically provisions nested parent directories (`mkdir -p`) when `create_parents: true`.
+
+### 8. `delete_path` — Workspace-Contained File & Directory Deletion
+Replaces dangerous `rm -rf` commands with safety-governed workspace deletion.
+- **Path-Traversal Containment**: Canonicalizes target paths and verifies they remain strictly within the workspace boundary, blocking any `..` escape attacks.
+- **Recursion Guard**: Requires explicit `recursive: true` to delete non-empty directory trees.
+
+### 9. `patch` — AST-Guarded Surgical Code Modifier
 Replaces brittle regex replacements and unverified diff tools.
 - **In-Memory Preflight AST Verification**: Before writing anything to disk, parses the modified buffer with Tree-sitter. If syntax errors or missing tokens (`ERROR` or `MISSING` nodes) are detected, the patch is **rejected immediately with exact diagnostics**.
 - **Auto-Healing Indentation**: Dynamically calculates surrounding indentation margins, eliminating indentation mismatch errors common in LLM generations.
+- **Splicing Modes**: Supports `replace`, `insert_before`, `insert_after`, `prepend_to_symbol` (injecting into symbol body), and `append_to_symbol` (adding methods/items right before the closing delimiter).
 - **Multi-Modal Targeting**: Target changes via `target_symbol` (AST node replacement), `target_span` (precise coordinates), or `target_text` (guarded substring).
 - **Unified Diff Output & Dry Runs**: Generates clean unified diffs and supports safe simulation via `dry_run: true`.
+
+### 10. `batch_patch` — Multi-File Transactional Atomic Changesets
+Solves the danger of multi-file refactorings leaving repositories in half-broken intermediate states.
+- **Workspace-Wide Preflight**: Validates Tree-sitter AST syntax for **all** target files simultaneously before committing any changes.
+- **All-or-Nothing Disk Atomicity**: If any single file in the batch fails AST validation or encounter conflicts, zero files are modified on disk.
+- **Automated Rollback**: If an I/O error occurs mid-application, automatically restores all previously modified files from in-memory backups.
 
 ---
 
@@ -135,20 +163,20 @@ Transcend integrates official, standardized language servers over asynchronous s
    [ rust-analyzer ]              [ gopls ]                  [ clangd ]
 ```
 
-### 7. `lsp_definition` — Cross-File Semantic Definition Navigation
+### 11. `lsp_definition` — Cross-File Semantic Definition Navigation
 - **Tree-sitter Coordinate Bridge**: Accepts symbol queries (`"TerminalEngine::exec"`) and maps them to 0-based `(line, col)` coordinates in microseconds before querying the language server.
 - **Semantic Resolution**: Accurately resolves type aliases, trait implementations, macros, and imports across modular boundaries.
 - **Zero Crashes via Heuristics**: If a language server binary is not installed locally, Transcend gracefully falls back to Tree-sitter heuristics.
 
-### 8. `lsp_references` — Multi-File Semantic Usages
+### 12. `lsp_references` — Multi-File Semantic Usages
 - **True References**: Distinguishes semantic references from substring collisions, variable shadows, or commented-out code.
 - **Clustered Preview**: Returns occurrences grouped by file path with snippet previews and exact line/character coordinates.
 
-### 9. `lsp_hover` — Distilled Type Signatures & Docstrings
+### 13. `lsp_hover` — Distilled Type Signatures & Docstrings
 - **Distilled Intelligence**: Strips raw HTML, unformatted markdown, and verbose JSON protocol wrappers into clean function signatures, type bounds, and docstrings.
 - **Immediate Context**: Inspect complex generic signatures and traits without having to navigate away to the source definition.
 
-### 10. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
+### 14. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
 - **Live Background Stream**: Subscribes to `textDocument/publishDiagnostics` published by language servers during session edits.
 - **Precise Filtering**: Filters diagnostics by file path and severity (`Error`, `Warning`, `Information`, `Hint`).
 
@@ -193,24 +221,24 @@ Transcend solves the fundamental dilemma of agent shell execution by decoupling 
            output, exit_code, cursor                        Return status: "detached", session_id
 ```
 
-### 11. `exec` — Hybrid Execution with Auto-Detach
+### 15. `exec` — Hybrid Execution with Auto-Detach
 - **Fast Path (Single Turn)**: Routine commands that exit within `timeout_ms` (e.g. `cargo check`, `git status`) return immediate exit codes and output in a single tool turn without multi-turn polling overhead.
 - **Auto-Detach (Long-Running Tasks)**: Long-running servers (`npm run dev`, `cargo watch`, Python REPLs) automatically detach without hanging the turn, returning a persistent `session_id`.
 - **Decoupled Transport**: Automatically uses `pipe` for quiet batch utilities and `pty` (ConPTY / openpty) for TTY-aware tools.
 
-### 12. `terminal_read` — Cursor-Based Incremental Output Streaming
+### 16. `terminal_read` — Cursor-Based Incremental Output Streaming
 - **Monotonic Cursor**: Accepts `cursor: usize` and returns `next_cursor: usize`. Subsequent turns read only new output, eliminating repetitive context-wasteful re-reads.
 - **CR (`\r`) Line Folding**: Interactive CLI progress bars, spinners, and download counters are folded to their final state in-place, slashing token usage by up to 90%.
 - **ANSI Sanitization**: In-process terminal escape sequence stripping via `strip-ansi-escapes`.
 - **Ring Buffer Bounds**: 1 MB bounded circular buffer with head/tail slicing protects against out-of-memory crashes on runaway output.
 
-### 13. `terminal_write` — Interactive Stdin Delivery
+### 17. `terminal_write` — Interactive Stdin Delivery
 - Injects keystrokes, commands, and interactive responses (`y\n`, Ctrl+C `\x03`) into active detached sessions and REPLs.
 
-### 14. `terminal_resize` — PTY Dimension Control
+### 18. `terminal_resize` — PTY Dimension Control
 - Adjusts pseudo terminal column and row geometry (`cols`, `rows`) to adapt output layouts for CLI dashboards and TUIs.
 
-### 15. `terminal_kill` — Process Tree Termination
+### 19. `terminal_kill` — Process Tree Termination
 - **Windows Job Objects**: Binds process trees to kernel Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring that complex child/grandchild processes (`node.exe`, `vite.exe`) are killed atomically without port leaks.
 - **Asynchronous PTY Disposal**: Cleans up ConPTY pseudo console handles on dedicated background worker threads to prevent Win32 synchronous pipe-drain deadlocks.
 
@@ -338,10 +366,11 @@ Transcend/
 │   ├── transcend-core/       # Core computational engines:
 │   │   ├── find.rs / search.rs  # Ripgrep-grade search, directory radar, and diversity sampling
 │   │   ├── outline/             # 18 Tree-sitter parsers, semantic hierarchy, and syntax skeletonizer
-│   │   ├── patch.rs             # In-memory preflight AST verification and indentation healing
+│   │   ├── patch.rs             # In-memory preflight AST verification, splicing, and batch changesets
+│   │   ├── file_ops.rs          # Bounded line/byte reader, atomic file creator, and contained deletion
 │   │   ├── lsp/                 # LSP stdio JSON-RPC pool, coordinate bridge, and token distillation
 │   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
-│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (15 tools)
+│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (19 tools)
 │   └── transcend-cli/        # Binary entry point and CLI runner
 ├── banner.png                # Transcend visual identity
 └── Cargo.toml                # Workspace definition

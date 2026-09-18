@@ -3,6 +3,7 @@
 //! High-performance, in-process computational primitives for code search,
 //! file discovery, AST outlining, and surgical transformations.
 
+pub mod file_ops;
 pub mod find;
 pub mod find_symbol;
 pub mod lsp;
@@ -15,15 +16,18 @@ use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 use transcend_protocol::{
-    ExecRequest, ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
+    ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
-    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
-    SearchRequest, SearchResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
-    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
-    TerminalWriteResponse,
+    OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
+    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, TerminalKillRequest,
+    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
+    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, WriteFileRequest,
+    WriteFileResponse,
 };
 
+use crate::file_ops::FileOps;
 use crate::find::FindScanner;
 use crate::find_symbol::SymbolFinder;
 use crate::outline::scanner::OutlineScanner;
@@ -72,6 +76,18 @@ pub trait Engine: Send + Sync {
 
     /// Globally find code symbol definitions across the workspace.
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse>;
+
+    /// Read file content with line/byte boundaries and binary safety checks.
+    fn read_file(&self, req: &ReadFileRequest) -> CoreResult<ReadFileResponse>;
+
+    /// Write text content to file atomically, with collision and parent directory guards.
+    fn write_file(&self, req: &WriteFileRequest) -> CoreResult<WriteFileResponse>;
+
+    /// Delete file or directory within workspace safety boundaries.
+    fn delete_path(&self, req: &DeletePathRequest) -> CoreResult<DeletePathResponse>;
+
+    /// Transactionally apply multiple patches across files with AST preflight and rollback guarantees.
+    fn batch_patch(&self, req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse>;
 
     /// Go to compiler-resolved definition of a symbol or position.
     fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>>;
@@ -146,6 +162,22 @@ impl Engine for NativeEngine {
 
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse> {
         SymbolFinder::find(req)
+    }
+
+    fn read_file(&self, req: &ReadFileRequest) -> CoreResult<ReadFileResponse> {
+        FileOps::read_file(req)
+    }
+
+    fn write_file(&self, req: &WriteFileRequest) -> CoreResult<WriteFileResponse> {
+        FileOps::write_file(req)
+    }
+
+    fn delete_path(&self, req: &DeletePathRequest) -> CoreResult<DeletePathResponse> {
+        FileOps::delete_path(req)
+    }
+
+    fn batch_patch(&self, req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse> {
+        Patcher::batch_patch(req)
     }
 
     fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>> {
@@ -2544,6 +2576,260 @@ pub fn compute_checksum(val: u32) -> u32 {
 
         assert_eq!(res.total_count, res.diagnostics.len());
     }
+
+    #[test]
+    fn test_read_file_slicing_and_line_numbers() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let target = sandbox.dir.join("src").join("main.rs");
+        let res = engine
+            .read_file(&transcend_protocol::ReadFileRequest {
+                path: target.to_string_lossy().to_string(),
+                start_line: Some(1),
+                end_line: Some(2),
+                line_numbers: Some(true),
+                max_bytes: None,
+            })
+            .expect("read_file should succeed");
+
+        assert_eq!(res.start_line, 1);
+        assert_eq!(res.end_line, 2);
+        assert_eq!(res.total_lines, 3);
+        assert!(!res.is_binary);
+        assert!(res.content.contains("    1 | fn hello_world() {"));
+        assert!(res.content.contains("    2 |     println!(\"Hello\");"));
+    }
+
+    #[test]
+    fn test_read_file_binary_detection() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let bin_path = sandbox.dir.join("image.bin");
+        let res = engine
+            .read_file(&transcend_protocol::ReadFileRequest {
+                path: bin_path.to_string_lossy().to_string(),
+                ..Default::default()
+            })
+            .expect("read_file binary probe should succeed");
+
+        assert!(res.is_binary);
+        assert!(res.content.contains("[Binary file omitted"));
+    }
+
+    #[test]
+    fn test_write_file_and_collision_guard() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let new_path = sandbox.dir.join("deep").join("nested").join("module.rs");
+        let path_str = new_path.to_string_lossy().to_string();
+
+        // 1. Create net-new file with parent directories
+        let create_res = engine
+            .write_file(&transcend_protocol::WriteFileRequest {
+                path: path_str.clone(),
+                content: "pub fn add(a: i32, b: i32) -> i32 { a + b }\n".to_string(),
+                overwrite: Some(false),
+                create_parents: Some(true),
+            })
+            .expect("write_file create should succeed");
+
+        assert!(create_res.success);
+        assert!(create_res.created_new);
+        assert!(new_path.exists());
+
+        // 2. Collision guard: attempt overwrite without overwrite flag
+        let collision_res = engine
+            .write_file(&transcend_protocol::WriteFileRequest {
+                path: path_str.clone(),
+                content: "corrupt".to_string(),
+                overwrite: Some(false),
+                create_parents: Some(true),
+            })
+            .expect("write_file should return result without panic");
+
+        assert!(!collision_res.success);
+        assert!(!collision_res.created_new);
+        assert!(collision_res.message.contains("already exists"));
+
+        // 3. Overwrite with overwrite: true
+        let overwrite_res = engine
+            .write_file(&transcend_protocol::WriteFileRequest {
+                path: path_str.clone(),
+                content: "pub fn updated() {}\n".to_string(),
+                overwrite: Some(true),
+                create_parents: Some(true),
+            })
+            .expect("write_file overwrite should succeed");
+
+        assert!(overwrite_res.success);
+        assert!(!overwrite_res.created_new);
+        let read_back = fs::read_to_string(&new_path).unwrap();
+        assert_eq!(read_back, "pub fn updated() {}\n");
+    }
+
+    #[test]
+    fn test_delete_path_file_and_dir_guards() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // 1. Delete single file
+        let file_to_del = sandbox.dir.join("budget.txt");
+        let del_file_res = engine
+            .delete_path(&transcend_protocol::DeletePathRequest {
+                path: file_to_del.to_string_lossy().to_string(),
+                recursive: Some(false),
+                workspace_root: Some(sandbox.path_str()),
+            })
+            .expect("delete_path on file should succeed");
+
+        assert!(del_file_res.success);
+        assert!(!del_file_res.is_directory);
+        assert!(!file_to_del.exists());
+
+        // 2. Delete non-empty dir without recursive (should fail safely)
+        let dir_to_del = sandbox.dir.join("src");
+        let non_rec_res = engine
+            .delete_path(&transcend_protocol::DeletePathRequest {
+                path: dir_to_del.to_string_lossy().to_string(),
+                recursive: Some(false),
+                workspace_root: Some(sandbox.path_str()),
+            })
+            .expect("delete_path on dir should handle non-recursive safely");
+
+        assert!(!non_rec_res.success);
+        assert!(non_rec_res.is_directory);
+        assert!(non_rec_res.message.contains("Directory is not empty"));
+        assert!(dir_to_del.exists());
+
+        // 3. Delete non-empty dir with recursive: true
+        let rec_res = engine
+            .delete_path(&transcend_protocol::DeletePathRequest {
+                path: dir_to_del.to_string_lossy().to_string(),
+                recursive: Some(true),
+                workspace_root: Some(sandbox.path_str()),
+            })
+            .expect("recursive delete_path should succeed");
+
+        assert!(rec_res.success);
+        assert!(rec_res.is_directory);
+        assert!(!dir_to_del.exists());
+    }
+
+    #[test]
+    fn test_patch_splicing_modes() {
+        let engine = NativeEngine::new();
+        let source = "struct Point {\n    x: i32,\n}\n";
+
+        // InsertBefore
+        let before_res = engine
+            .patch(&transcend_protocol::PatchRequest {
+                path: "test.rs".to_string(),
+                content: Some(source.to_string()),
+                target_symbol: Some("Point".to_string()),
+                mode: Some(transcend_protocol::PatchMode::InsertBefore),
+                replacement: "#[derive(Debug, Clone)]".to_string(),
+                validate_ast: Some(true),
+                dry_run: Some(true),
+                ..Default::default()
+            })
+            .expect("patch InsertBefore should succeed");
+
+        assert!(before_res.success);
+        assert!(before_res.ast_valid);
+        assert!(before_res.diff.unwrap().contains("#[derive(Debug, Clone)]"));
+
+        // PrependToSymbol
+        let prepend_res = engine
+            .patch(&transcend_protocol::PatchRequest {
+                path: "test.rs".to_string(),
+                content: Some(source.to_string()),
+                target_symbol: Some("Point".to_string()),
+                mode: Some(transcend_protocol::PatchMode::PrependToSymbol),
+                replacement: "    id: u64,".to_string(),
+                validate_ast: Some(true),
+                dry_run: Some(true),
+                ..Default::default()
+            })
+            .expect("patch PrependToSymbol should succeed");
+
+        assert!(prepend_res.success);
+        assert!(prepend_res.ast_valid);
+        assert!(prepend_res.diff.unwrap().contains("id: u64,"));
+    }
+
+    #[test]
+    fn test_batch_patch_transactional_rollback() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let file1 = sandbox.dir.join("f1.rs");
+        let file2 = sandbox.dir.join("f2.rs");
+        fs::write(&file1, "fn first() -> i32 { 1 }\n").unwrap();
+        fs::write(&file2, "fn second() -> i32 { 2 }\n").unwrap();
+
+        // 1. Batch patch where second file has invalid AST syntax
+        let batch_fail = engine
+            .batch_patch(&transcend_protocol::BatchPatchRequest {
+                patches: vec![
+                    transcend_protocol::PatchRequest {
+                        path: file1.to_string_lossy().to_string(),
+                        target_symbol: Some("first".to_string()),
+                        replacement: "fn first() -> i32 { 100 }".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                    transcend_protocol::PatchRequest {
+                        path: file2.to_string_lossy().to_string(),
+                        target_symbol: Some("second".to_string()),
+                        replacement: "fn second( { invalid syntax @@".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                ],
+                validate_ast: Some(true),
+                dry_run: Some(false),
+            })
+            .expect("batch_patch should return response");
+
+        assert!(!batch_fail.success);
+        assert!(!batch_fail.all_ast_valid);
+        assert!(!batch_fail.syntax_errors.is_empty());
+        // Verify file1 was NOT changed on disk due to transaction abort
+        assert_eq!(fs::read_to_string(&file1).unwrap(), "fn first() -> i32 { 1 }\n");
+
+        // 2. Successful batch patch across multiple files
+        let batch_ok = engine
+            .batch_patch(&transcend_protocol::BatchPatchRequest {
+                patches: vec![
+                    transcend_protocol::PatchRequest {
+                        path: file1.to_string_lossy().to_string(),
+                        target_symbol: Some("first".to_string()),
+                        replacement: "fn first() -> i32 { 100 }".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                    transcend_protocol::PatchRequest {
+                        path: file2.to_string_lossy().to_string(),
+                        target_symbol: Some("second".to_string()),
+                        replacement: "fn second() -> i32 { 200 }".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                ],
+                validate_ast: Some(true),
+                dry_run: Some(false),
+            })
+            .expect("batch_patch should succeed");
+
+        assert!(batch_ok.success);
+        assert_eq!(batch_ok.total_files_patched, 2);
+        assert_eq!(fs::read_to_string(&file1).unwrap(), "fn first() -> i32 { 100 }\n");
+        assert_eq!(fs::read_to_string(&file2).unwrap(), "fn second() -> i32 { 200 }\n");
+    }
 }
+
 
 
