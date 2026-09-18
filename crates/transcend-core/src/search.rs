@@ -57,9 +57,10 @@ impl SearchScanner {
         );
 
         // Build file walker
+        let include_hidden = opts.include_hidden.unwrap_or(false);
         let mut walk_builder = WalkBuilder::new(root_path);
         walk_builder
-            .hidden(true)
+            .hidden(!include_hidden)
             .git_ignore(true)
             .git_global(true)
             .git_exclude(true)

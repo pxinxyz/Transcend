@@ -19,11 +19,26 @@ impl RustOutline {
     fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         let prefix = std::str::from_utf8(&source[..node.start_byte()]).ok()?;
         let mut doc_lines = Vec::new();
+        let mut in_attributes = true;
 
         for line in prefix.lines().rev() {
             let trimmed = line.trim();
             if trimmed.starts_with("///") {
                 doc_lines.push(trimmed.trim_start_matches("///").trim());
+                in_attributes = false;
+            } else if trimmed.starts_with("//!") {
+                // Inner doc comments on modules
+                doc_lines.push(trimmed.trim_start_matches("//!").trim());
+                in_attributes = false;
+            } else if trimmed.starts_with("/**") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+                let clean = trimmed.trim_start_matches("/**").trim_end_matches("*/").trim_start_matches('*').trim();
+                if !clean.is_empty() {
+                    doc_lines.push(clean);
+                }
+                in_attributes = false;
+            } else if in_attributes && (trimmed.starts_with("#[") || trimmed.starts_with('#') || trimmed.ends_with(']') || trimmed.is_empty()) {
+                // Skip outer attributes sitting between doc comment and item
+                continue;
             } else if trimmed.is_empty() && doc_lines.is_empty() {
                 continue;
             } else {

@@ -98,9 +98,10 @@ impl SymbolFinder {
         );
 
         let include_ignored = req.include_ignored.unwrap_or(false);
+        let include_hidden = req.include_hidden.unwrap_or(false);
         let mut walk_builder = WalkBuilder::new(root_path);
         walk_builder
-            .hidden(true)
+            .hidden(!include_hidden)
             .git_ignore(!include_ignored)
             .git_global(!include_ignored)
             .git_exclude(!include_ignored)
@@ -177,17 +178,13 @@ impl SymbolFinder {
         let mut found_symbols = Vec::new();
         let mut kind_breakdown: BTreeMap<String, usize> = BTreeMap::new();
         let mut language_breakdown: BTreeMap<String, usize> = BTreeMap::new();
-        let mut truncated = false;
+        let mut total_matches = 0;
 
         let query_lower = query.to_lowercase();
         let query_norm_lower = query_normalized.to_lowercase();
+        let max_candidates_limit = (limit * 10).max(200);
 
         for file_path in &files {
-            if found_symbols.len() >= limit {
-                truncated = true;
-                break;
-            }
-
             let lang = match SupportedLang::from_path(file_path) {
                 Some(l) => l,
                 None => continue,
@@ -222,6 +219,7 @@ impl SymbolFinder {
                 let is_partial_match = !exact && sym_match.matches_partial(&query_lower, req.kind.as_ref());
 
                 if is_exact_match || is_partial_match {
+                    total_matches += 1;
                     let sym = sym_match.symbol;
                     let kind_str = format!("{:?}", sym.kind).to_lowercase();
                     let lang_str = lang.name().to_string();
@@ -229,28 +227,25 @@ impl SymbolFinder {
                     *kind_breakdown.entry(kind_str).or_insert(0) += 1;
                     *language_breakdown.entry(lang_str.clone()).or_insert(0) += 1;
 
-                    found_symbols.push(FoundSymbol {
-                        name: sym.name.clone(),
-                        qualified_name: sym_match.qualified_name.clone(),
-                        kind: sym.kind,
-                        file: display_path.clone(),
-                        language: lang_str,
-                        span: sym.span.clone(),
-                        signature: sym.signature.clone(),
-                        doc_comment: sym.doc_comment.clone(),
-                        visibility: sym.visibility.clone(),
-                        is_exact: is_exact_match,
-                    });
-
-                    if found_symbols.len() >= limit {
-                        truncated = true;
-                        break;
+                    if found_symbols.len() < max_candidates_limit {
+                        found_symbols.push(FoundSymbol {
+                            name: sym.name.clone(),
+                            qualified_name: sym_match.qualified_name.clone(),
+                            kind: sym.kind,
+                            file: display_path.clone(),
+                            language: lang_str,
+                            span: sym.span.clone(),
+                            signature: sym.signature.clone(),
+                            doc_comment: sym.doc_comment.clone(),
+                            visibility: sym.visibility.clone(),
+                            is_exact: is_exact_match,
+                        });
                     }
                 }
             }
         }
 
-        // Sort: exact matches first, then shorter names, then alphabetical
+        // Sort: exact matches first, then shorter names, then alphabetical by file, then line number
         found_symbols.sort_by(|a, b| {
             b.is_exact
                 .cmp(&a.is_exact)
@@ -259,11 +254,12 @@ impl SymbolFinder {
                 .then_with(|| a.span.start_line.cmp(&b.span.start_line))
         });
 
-        let total_found = found_symbols.len();
+        let truncated = total_matches > limit;
+        found_symbols.truncate(limit);
 
         Ok(FindSymbolResponse {
             query: query.to_string(),
-            total_found,
+            total_found: total_matches,
             symbols: found_symbols,
             kind_breakdown,
             language_breakdown,

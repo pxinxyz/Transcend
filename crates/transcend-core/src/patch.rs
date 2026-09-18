@@ -4,7 +4,9 @@
 //! or literal text, preventing syntax corruption before touching disk.
 
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use tree_sitter::{Node, Parser};
 use transcend_protocol::{
@@ -14,6 +16,8 @@ use transcend_protocol::{
 use crate::outline::scanner::SupportedLang;
 use crate::outline::symbol_reader::SymbolReader;
 use crate::{CoreError, CoreResult};
+
+static ATOMIC_PATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct Patcher;
 
@@ -256,12 +260,31 @@ impl Patcher {
         }
 
         let target_path = Path::new(&req.path);
-        fs::write(target_path, &new_source).map_err(|e| {
-            CoreError::General(format!(
-                "Failed to write patched file {}: {e}",
+        let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
+        let file_stem = target_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("patch");
+        let pid = std::process::id();
+        let counter = ATOMIC_PATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp_path = parent.join(format!(".{}.transcend_tmp_{}_{}", file_stem, pid, counter));
+
+        let write_res = (|| -> std::io::Result<()> {
+            let mut tmp_file = fs::File::create(&tmp_path)?;
+            tmp_file.write_all(&new_source)?;
+            tmp_file.sync_all()?;
+            drop(tmp_file);
+            fs::rename(&tmp_path, target_path)?;
+            Ok(())
+        })();
+
+        if let Err(e) = write_res {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(CoreError::General(format!(
+                "Failed to atomically write patched file {}: {e}",
                 target_path.display()
-            ))
-        })?;
+            )));
+        }
 
         Ok(PatchResponse {
             success: true,

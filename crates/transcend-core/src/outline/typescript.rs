@@ -430,61 +430,101 @@ impl TypeScriptOutline {
         })
     }
 
-    fn extract_node(
+    fn extract_nodes(
         &self,
         node: &Node,
         source: &[u8],
         is_exported: bool,
         options: &OutlineOptions,
-    ) -> Option<Symbol> {
+        out: &mut Vec<Symbol>,
+    ) {
         match node.kind() {
             "export_statement" => {
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
-                    if let Some(mut sym) = self.extract_node(&child, source, true, options) {
-                        if sym.doc_comment.is_none() {
-                            sym.doc_comment = Self::extract_doc_comment(node, source);
-                        }
-                        return Some(sym);
-                    }
-                }
-                None
-            }
-            "function_declaration" => self.extract_function(node, source, is_exported, options),
-            "class_declaration" => self.extract_class(node, source, is_exported, options),
-            "interface_declaration" => self.extract_interface(node, source, is_exported, options),
-            "type_alias_declaration" => self.extract_type_alias(node, source, is_exported, options),
-            "enum_declaration" => self.extract_enum(node, source, is_exported, options),
-            "lexical_declaration" | "variable_declaration" => {
-                // Check if it's an exported arrow function, e.g. export const myFunc = () => ...
-                let mut cursor = node.walk();
-                for decl in node.named_children(&mut cursor) {
-                    if decl.kind() == "variable_declarator" {
-                        if let Some(val) = decl.child_by_field_name("value") {
-                            if val.kind() == "arrow_function" || val.kind() == "function" {
-                                if let Some(name_n) = decl.child_by_field_name("name") {
-                                    let name = node_text(&name_n, source).to_string();
-                                    if options.exported_only == Some(true) && !is_exported {
-                                        return None;
-                                    }
-                                    return Some(Symbol {
-                                        name,
-                                        kind: SymbolKind::Function,
-                                        span: node_span(node),
-                                        signature: Self::extract_signature(node, source),
-                                        doc_comment: Self::extract_doc_comment(node, source),
-                                        visibility: if is_exported { Some("exported".to_string()) } else { None },
-                                        relationships: vec![],
-                                        children: vec![],
-                                    });
-                                }
+                    let before_len = out.len();
+                    self.extract_nodes(&child, source, true, options, out);
+                    let doc = Self::extract_doc_comment(node, source);
+                    if doc.is_some() {
+                        for sym in &mut out[before_len..] {
+                            if sym.doc_comment.is_none() {
+                                sym.doc_comment = doc.clone();
                             }
                         }
                     }
                 }
-                None
             }
-            _ => None,
+            "function_declaration" => {
+                if let Some(sym) = self.extract_function(node, source, is_exported, options) {
+                    out.push(sym);
+                }
+            }
+            "class_declaration" => {
+                if let Some(sym) = self.extract_class(node, source, is_exported, options) {
+                    out.push(sym);
+                }
+            }
+            "interface_declaration" => {
+                if let Some(sym) = self.extract_interface(node, source, is_exported, options) {
+                    out.push(sym);
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(sym) = self.extract_type_alias(node, source, is_exported, options) {
+                    out.push(sym);
+                }
+            }
+            "enum_declaration" => {
+                if let Some(sym) = self.extract_enum(node, source, is_exported, options) {
+                    out.push(sym);
+                }
+            }
+            "lexical_declaration" | "variable_declaration" => {
+                let mut cursor = node.walk();
+                for decl in node.named_children(&mut cursor) {
+                    if decl.kind() == "variable_declarator" {
+                        if let Some(name_n) = decl.child_by_field_name("name") {
+                            let name = node_text(&name_n, source).to_string();
+                            if options.exported_only == Some(true) && !is_exported {
+                                continue;
+                            }
+
+                            let is_fn = if let Some(val) = decl.child_by_field_name("value") {
+                                val.kind() == "arrow_function" || val.kind() == "function"
+                            } else {
+                                false
+                            };
+
+                            let kind = if is_fn {
+                                SymbolKind::Function
+                            } else if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1 {
+                                SymbolKind::Constant
+                            } else {
+                                SymbolKind::Variable
+                            };
+
+                            if let Some(ref allowed) = options.symbol_kinds {
+                                if !allowed.contains(&kind) {
+                                    continue;
+                                }
+                            }
+
+                            let sig = clean_signature(node_text(&decl, source).trim_end_matches(';').trim());
+                            out.push(Symbol {
+                                name,
+                                kind,
+                                span: node_span(&decl),
+                                signature: Some(sig),
+                                doc_comment: Self::extract_doc_comment(node, source),
+                                visibility: if is_exported { Some("exported".to_string()) } else { None },
+                                relationships: vec![],
+                                children: vec![],
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -496,9 +536,7 @@ impl LanguageOutline for TypeScriptOutline {
         let mut cursor = root.walk();
 
         for child in root.named_children(&mut cursor) {
-            if let Some(sym) = self.extract_node(&child, source, false, options) {
-                symbols.push(sym);
-            }
+            self.extract_nodes(&child, source, false, options, &mut symbols);
         }
 
         symbols

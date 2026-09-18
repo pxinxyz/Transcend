@@ -34,6 +34,8 @@ pub struct SearchOptions {
     pub max_line_length: Option<usize>,
     /// Optional number of surrounding context lines to include before and after matching lines (0, 1, or 2). Defaults to 0.
     pub context_lines: Option<usize>,
+    /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
+    pub include_hidden: Option<bool>,
 }
 
 /// A single matched line within a file.
@@ -118,6 +120,8 @@ pub struct FindOptions {
     pub sort_by: Option<String>,
     /// Whether pattern matching should be case-sensitive. Defaults to false.
     pub case_sensitive: Option<bool>,
+    /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
+    pub include_hidden: Option<bool>,
 }
 
 /// A discovered filesystem entry with compact metadata.
@@ -449,6 +453,8 @@ pub struct FindSymbolRequest {
     pub file_pattern: Option<String>,
     /// Whether to search gitignored files. Defaults to false.
     pub include_ignored: Option<bool>,
+    /// Whether to search hidden files and directories. Defaults to false.
+    pub include_hidden: Option<bool>,
 }
 
 /// A code symbol definition located across the workspace.

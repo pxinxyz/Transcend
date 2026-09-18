@@ -245,6 +245,32 @@ pub fn compute() -> i32 {
         assert!(res.0.total_found > 0);
         assert!(res.0.symbols.iter().any(|s| s.name == "TranscendServer"));
     }
+
+    #[test]
+    fn test_export_mcp_schemas() {
+        let mcp_dir = std::path::Path::new(r"C:\Users\pxin\.gemini\antigravity\mcp\transcend");
+        if mcp_dir.exists() {
+            let tools = vec![
+                ("search", "High-performance code search returning structured, token-compact results", serde_json::to_value(schemars::schema_for!(SearchRequest)).unwrap()),
+                ("find", "Fast filesystem file discovery respecting ignore rules", serde_json::to_value(schemars::schema_for!(FindRequest)).unwrap()),
+                ("outline", "Extract AST code structure and symbol definitions from a source file", serde_json::to_value(schemars::schema_for!(OutlineRequest)).unwrap()),
+                ("read_symbol", "Surgically extract a specific symbol by name or qualified locator, returning exact source code and span", serde_json::to_value(schemars::schema_for!(ReadSymbolRequest)).unwrap()),
+                ("patch", "Surgically modify code targeting a symbol, span, or text with AST syntax validation before touching disk", serde_json::to_value(schemars::schema_for!(PatchRequest)).unwrap()),
+                ("find_symbol", "Globally find code symbol definitions across the workspace by name, qualified path, or kind with exact AST spans", serde_json::to_value(schemars::schema_for!(FindSymbolRequest)).unwrap()),
+            ];
+
+            for (name, desc, schema) in tools {
+                let tool_def = serde_json::json!({
+                    "name": name,
+                    "description": desc,
+                    "parameters": schema,
+                });
+                let json_str = serde_json::to_string(&tool_def).unwrap();
+                let file_path = mcp_dir.join(format!("{}.json", name));
+                std::fs::write(&file_path, json_str).unwrap();
+            }
+        }
+    }
 }
 
 

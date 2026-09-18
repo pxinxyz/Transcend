@@ -109,17 +109,19 @@ mod tests {
         ParseStatus, PatchRequest, SearchOptions, SymbolKind,
     };
 
+    static SANDBOX_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     struct TestSandbox {
         dir: PathBuf,
     }
 
     impl TestSandbox {
         fn create() -> Self {
-            let id = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let dir = std::env::temp_dir().join(format!("transcend_test_{}", id));
+            let pid = std::process::id();
+            let count = SANDBOX_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let thread_id = format!("{:?}", std::thread::current().id())
+                .replace(|c: char| !c.is_alphanumeric(), "");
+            let dir = std::env::temp_dir().join(format!("transcend_test_{}_{}_{}", pid, thread_id, count));
             fs::create_dir_all(&dir).unwrap();
 
             // 1. Regular UTF-8 file
@@ -621,6 +623,65 @@ mod tests {
     }
 
     #[test]
+    fn test_find_and_search_hidden_files() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Create a hidden directory and a hidden file
+        let github_dir = sandbox.dir.join(".github");
+        fs::create_dir_all(&github_dir).unwrap();
+        fs::write(github_dir.join("ci.yml"), "name: CI hidden workflow\n").unwrap();
+        fs::write(sandbox.dir.join(".env"), "SECRET_KEY=hidden_secret\n").unwrap();
+
+        // 1. Find default (should omit hidden files)
+        let res_default = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .unwrap();
+        assert!(!res_default.entries.iter().any(|e| e.path.contains(".github") || e.path.contains(".env")));
+
+        // 2. Find with include_hidden: true
+        let res_hidden = engine
+            .find(&FindRequest {
+                pattern: None,
+                path: Some(sandbox.path_str()),
+                options: Some(FindOptions {
+                    include_hidden: Some(true),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert!(res_hidden.entries.iter().any(|e| e.path.contains(".github") || e.path.contains(".env")));
+
+        // 3. Search default (should omit hidden files)
+        let search_default = engine
+            .search(&SearchRequest {
+                pattern: "hidden_secret".to_string(),
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .unwrap();
+        assert_eq!(search_default.total_matches, 0);
+
+        // 4. Search with include_hidden: true
+        let search_hidden = engine
+            .search(&SearchRequest {
+                pattern: "hidden_secret".to_string(),
+                path: Some(sandbox.path_str()),
+                options: Some(SearchOptions {
+                    include_hidden: Some(true),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert_eq!(search_hidden.total_matches, 1);
+        assert!(search_hidden.files[0].file.contains(".env"));
+    }
+
+    #[test]
     fn test_find_max_per_dir_diversity() {
         let sandbox = TestSandbox::create();
         let engine = NativeEngine::new();
@@ -786,6 +847,45 @@ impl User {
     }
 
     #[test]
+    fn test_outline_rust_doc_comments_with_attributes() {
+        let engine = NativeEngine::new();
+        let code = r#"
+/// Model representing a database record.
+#[derive(Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct Record {
+    pub id: u64,
+}
+
+/// Dispatches an asynchronous event.
+#[tokio::main]
+#[inline]
+pub async fn dispatch_event() {}
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("record.rs".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("outline should succeed");
+
+        let file = &res.files[0];
+        let record = file.symbols.iter().find(|s| s.name == "Record").unwrap();
+        assert_eq!(
+            record.doc_comment.as_deref(),
+            Some("Model representing a database record.")
+        );
+
+        let dispatch = file.symbols.iter().find(|s| s.name == "dispatch_event").unwrap();
+        assert_eq!(
+            dispatch.doc_comment.as_deref(),
+            Some("Dispatches an asynchronous event.")
+        );
+    }
+
+    #[test]
     fn test_outline_typescript_classes_and_interfaces() {
         let engine = NativeEngine::new();
         let code = r#"
@@ -839,6 +939,44 @@ export class WebServer implements IService {
     }
 
     #[test]
+    fn test_outline_typescript_multi_export_and_constants() {
+        let engine = NativeEngine::new();
+        let code = r#"
+export const API_URL = "https://api.example.com", TIMEOUT = 5000;
+export type Handler = () => void;
+const INTERNAL_SECRET = 42;
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("config.ts".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("typescript outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "typescript");
+
+        let api_url = file.symbols.iter().find(|s| s.name == "API_URL").unwrap();
+        assert_eq!(api_url.kind, SymbolKind::Constant);
+        assert_eq!(api_url.visibility.as_deref(), Some("exported"));
+
+        let timeout = file.symbols.iter().find(|s| s.name == "TIMEOUT").unwrap();
+        assert_eq!(timeout.kind, SymbolKind::Constant);
+        assert_eq!(timeout.visibility.as_deref(), Some("exported"));
+
+        let handler = file.symbols.iter().find(|s| s.name == "Handler").unwrap();
+        assert_eq!(handler.kind, SymbolKind::TypeAlias);
+        assert_eq!(handler.visibility.as_deref(), Some("exported"));
+
+        let secret = file.symbols.iter().find(|s| s.name == "INTERNAL_SECRET").unwrap();
+        assert_eq!(secret.kind, SymbolKind::Constant);
+        assert_eq!(secret.visibility, None);
+    }
+
+    #[test]
     fn test_outline_python_classes_methods_docstrings() {
         let engine = NativeEngine::new();
         let code = r#"
@@ -884,6 +1022,62 @@ class SearchPipeline(BasePipeline):
     }
 
     #[test]
+    fn test_outline_python_decorators_and_constants() {
+        let engine = NativeEngine::new();
+        let code = r#"
+TIMEOUT = 30
+
+@app.get("/users")
+@auth_required
+def get_users():
+    """Retrieve all users."""
+    return []
+
+@dataclass
+class User:
+    id: int
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("app.py".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("python outline should succeed");
+
+        let file = &res.files[0];
+        // 1. Constant TIMEOUT
+        let const_sym = file.symbols.iter().find(|s| s.name == "TIMEOUT").unwrap();
+        assert_eq!(const_sym.kind, SymbolKind::Constant);
+
+        // 2. Decorated function get_users
+        let fn_sym = file.symbols.iter().find(|s| s.name == "get_users").unwrap();
+        assert_eq!(fn_sym.kind, SymbolKind::Function);
+        assert!(fn_sym.signature.as_ref().unwrap().contains("@app.get"));
+        assert_eq!(fn_sym.doc_comment.as_deref(), Some("Retrieve all users."));
+
+        // 3. Surgical read_symbol must include leading decorator
+        let read_res = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("app.py".to_string()),
+                content: Some(code.to_string()),
+                symbol: "get_users".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
+
+        assert!(read_res.found);
+        let src = read_res.source_code.unwrap();
+        assert!(src.starts_with("@app.get"), "read_symbol should include decorators: {}", src);
+
+        // 4. Decorated class User
+        let cls_sym = file.symbols.iter().find(|s| s.name == "User").unwrap();
+        assert_eq!(cls_sym.kind, SymbolKind::Class);
+        assert!(cls_sym.signature.as_ref().unwrap().contains("@dataclass"));
+    }
+
+    #[test]
     fn test_outline_go_functions_methods_receivers() {
         let engine = NativeEngine::new();
         let code = r#"
@@ -923,6 +1117,60 @@ func internalHelper() {}
 
         let helper_fn = file.symbols.iter().find(|s| s.name == "internalHelper").unwrap();
         assert_eq!(helper_fn.visibility, None);
+    }
+
+    #[test]
+    fn test_outline_go_grouped_declarations() {
+        let engine = NativeEngine::new();
+        let code = r#"
+package main
+
+const (
+    StatusPending = "pending"
+    StatusDone = "done"
+)
+
+type (
+    ID uint64
+    HandlerFunc func() error
+)
+
+var (
+    ErrNotFound = "not found"
+)
+"#;
+
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("types.go".to_string()),
+                content: Some(code.to_string()),
+                options: None,
+            })
+            .expect("go outline should succeed");
+
+        assert_eq!(res.files.len(), 1);
+        let file = &res.files[0];
+        assert_eq!(file.language, "go");
+
+        let pending = file.symbols.iter().find(|s| s.name == "StatusPending").unwrap();
+        assert_eq!(pending.kind, SymbolKind::Constant);
+        assert_eq!(pending.visibility.as_deref(), Some("exported"));
+
+        let done = file.symbols.iter().find(|s| s.name == "StatusDone").unwrap();
+        assert_eq!(done.kind, SymbolKind::Constant);
+        assert_eq!(done.visibility.as_deref(), Some("exported"));
+
+        let id = file.symbols.iter().find(|s| s.name == "ID").unwrap();
+        assert_eq!(id.kind, SymbolKind::TypeAlias);
+        assert_eq!(id.visibility.as_deref(), Some("exported"));
+
+        let handler = file.symbols.iter().find(|s| s.name == "HandlerFunc").unwrap();
+        assert_eq!(handler.kind, SymbolKind::TypeAlias);
+        assert_eq!(handler.visibility.as_deref(), Some("exported"));
+
+        let err = file.symbols.iter().find(|s| s.name == "ErrNotFound").unwrap();
+        assert_eq!(err.kind, SymbolKind::Variable);
+        assert_eq!(err.visibility.as_deref(), Some("exported"));
     }
 
     #[test]
@@ -2039,7 +2287,53 @@ def handle_gamma():
             .unwrap();
 
         assert_eq!(limit_res.symbols.len(), 2);
+        assert_eq!(limit_res.total_found, 3);
         assert!(limit_res.truncated);
+    }
+
+    #[test]
+    fn test_find_symbol_exact_matches_prioritized_across_files() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // 1. a_adapter.rs contains 5 partial matches for "process"
+        let a_path = sandbox.dir.join("src").join("a_adapter.rs");
+        let a_code = r#"
+pub fn process_event_one() {}
+pub fn process_event_two() {}
+pub fn process_event_three() {}
+pub fn process_event_four() {}
+pub fn process_event_five() {}
+"#;
+        fs::write(&a_path, a_code).unwrap();
+
+        // 2. z_worker.rs contains 1 EXACT match for "process"
+        let z_path = sandbox.dir.join("src").join("z_worker.rs");
+        let z_code = r#"
+pub fn process() {}
+"#;
+        fs::write(&z_path, z_code).unwrap();
+
+        // Query with exact: false, limit: 3
+        let res = engine
+            .find_symbol(&FindSymbolRequest {
+                name: "process".to_string(),
+                path: Some(sandbox.dir.to_string_lossy().to_string()),
+                exact: Some(false),
+                limit: Some(3),
+                ..Default::default()
+            })
+            .unwrap();
+
+        // Total matches across workspace is 6 (5 partial + 1 exact)
+        assert_eq!(res.total_found, 6);
+        assert_eq!(res.symbols.len(), 3);
+        assert!(res.truncated);
+
+        // FIRST symbol MUST be the exact match from z_worker.rs!
+        assert_eq!(res.symbols[0].name, "process");
+        assert!(res.symbols[0].is_exact);
+        assert!(res.symbols[0].file.contains("z_worker.rs"));
     }
 }
 

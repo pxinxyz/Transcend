@@ -46,11 +46,11 @@ impl PythonOutline {
         None
     }
 
-    fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
-        if let Some(body_node) = node.child_by_field_name("body") {
+    fn extract_signature(effective_node: &Node, inner_node: &Node, source: &[u8]) -> Option<String> {
+        if let Some(body_node) = inner_node.child_by_field_name("body") {
             let body_start = body_node.start_byte();
-            if body_start >= node.start_byte() {
-                let sig_bytes = &source[node.start_byte()..body_start];
+            if body_start >= effective_node.start_byte() {
+                let sig_bytes = &source[effective_node.start_byte()..body_start];
                 let sig_str = std::str::from_utf8(sig_bytes).unwrap_or("");
                 let cleaned = clean_signature(sig_str.trim().trim_end_matches(':').trim());
                 if !cleaned.is_empty() {
@@ -59,7 +59,7 @@ impl PythonOutline {
             }
         }
 
-        let first_line = node_text(node, source).lines().next().unwrap_or("").trim();
+        let first_line = node_text(effective_node, source).lines().next().unwrap_or("").trim();
         let cleaned = clean_signature(first_line.trim_end_matches(':').trim());
         if !cleaned.is_empty() {
             Some(cleaned)
@@ -81,6 +81,7 @@ impl PythonOutline {
     fn extract_function(
         &self,
         node: &Node,
+        outer_node: Option<&Node>,
         source: &[u8],
         is_method: bool,
         options: &OutlineOptions,
@@ -116,11 +117,13 @@ impl PythonOutline {
             None
         };
 
+        let effective_node = outer_node.unwrap_or(node);
+
         Some(Symbol {
             name,
             kind,
-            span: node_span(node),
-            signature: Self::extract_signature(node, source),
+            span: node_span(effective_node),
+            signature: Self::extract_signature(effective_node, node, source),
             doc_comment,
             visibility,
             relationships: vec![],
@@ -128,7 +131,13 @@ impl PythonOutline {
         })
     }
 
-    fn extract_class(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_class(
+        &self,
+        node: &Node,
+        outer_node: Option<&Node>,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::determine_visibility(&name);
@@ -171,14 +180,14 @@ impl PythonOutline {
             for item in body.named_children(&mut cursor) {
                 match item.kind() {
                     "function_definition" | "async_function_definition" => {
-                        if let Some(sym) = self.extract_function(&item, source, true, options) {
+                        if let Some(sym) = self.extract_function(&item, None, source, true, options) {
                             children.push(sym);
                         }
                     }
                     "decorated_definition" => {
                         if let Some(inner) = item.child_by_field_name("definition") {
                             if inner.kind() == "function_definition" || inner.kind() == "async_function_definition" {
-                                if let Some(sym) = self.extract_function(&inner, source, true, options) {
+                                if let Some(sym) = self.extract_function(&inner, Some(&item), source, true, options) {
                                     children.push(sym);
                                 }
                             }
@@ -189,11 +198,13 @@ impl PythonOutline {
             }
         }
 
+        let effective_node = outer_node.unwrap_or(node);
+
         Some(Symbol {
             name,
             kind: SymbolKind::Class,
-            span: node_span(node),
-            signature: Self::extract_signature(node, source),
+            span: node_span(effective_node),
+            signature: Self::extract_signature(effective_node, node, source),
             doc_comment,
             visibility,
             relationships,
@@ -204,15 +215,55 @@ impl PythonOutline {
     fn extract_node(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
         match node.kind() {
             "function_definition" | "async_function_definition" => {
-                self.extract_function(node, source, false, options)
+                self.extract_function(node, None, source, false, options)
             }
-            "class_definition" => self.extract_class(node, source, options),
+            "class_definition" => self.extract_class(node, None, source, options),
             "decorated_definition" => {
                 if let Some(inner) = node.child_by_field_name("definition") {
-                    self.extract_node(&inner, source, options)
+                    match inner.kind() {
+                        "function_definition" | "async_function_definition" => {
+                            self.extract_function(&inner, Some(node), source, false, options)
+                        }
+                        "class_definition" => {
+                            self.extract_class(&inner, Some(node), source, options)
+                        }
+                        _ => None,
+                    }
                 } else {
                     None
                 }
+            }
+            "expression_statement" => {
+                if let Some(assign) = node.named_child(0) {
+                    if assign.kind() == "assignment" {
+                        if let Some(left) = assign.child_by_field_name("left") {
+                            if left.kind() == "identifier" {
+                                let name = node_text(&left, source).to_string();
+                                let is_constant = name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1;
+                                let kind = if is_constant { SymbolKind::Constant } else { SymbolKind::Variable };
+
+                                if let Some(ref allowed) = options.symbol_kinds {
+                                    if !allowed.contains(&kind) {
+                                        return None;
+                                    }
+                                }
+
+                                let sig = clean_signature(node_text(node, source).trim());
+                                return Some(Symbol {
+                                    name: name.clone(),
+                                    kind,
+                                    span: node_span(node),
+                                    signature: Some(sig),
+                                    doc_comment: None,
+                                    visibility: Self::determine_visibility(&name),
+                                    relationships: vec![],
+                                    children: vec![],
+                                });
+                            }
+                        }
+                    }
+                }
+                None
             }
             _ => None,
         }

@@ -139,8 +139,7 @@ impl GoOutline {
         })
     }
 
-    fn extract_type(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
-        // node is type_declaration, children can be type_spec
+    fn extract_types(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
         let mut cursor = node.walk();
         for spec in node.named_children(&mut cursor) {
             if spec.kind() == "type_spec" {
@@ -152,7 +151,10 @@ impl GoOutline {
                         continue;
                     }
 
-                    let type_n = spec.child_by_field_name("type")?;
+                    let type_n = match spec.child_by_field_name("type") {
+                        Some(t) => t,
+                        None => continue,
+                    };
                     let mut kind = SymbolKind::TypeAlias;
                     let mut children = Vec::new();
 
@@ -221,12 +223,12 @@ impl GoOutline {
                         }
                     }
 
-                    return Some(Symbol {
+                    out.push(Symbol {
                         name,
                         kind,
-                        span: node_span(node),
-                        signature: Some(clean_signature(node_text(node, source).trim_end_matches('{').trim())),
-                        doc_comment: Self::extract_doc_comment(node, source),
+                        span: node_span(&spec),
+                        signature: Some(clean_signature(node_text(&spec, source).trim_end_matches('{').trim())),
+                        doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
                         visibility: if exported { Some("exported".to_string()) } else { None },
                         relationships: vec![],
                         children,
@@ -234,15 +236,100 @@ impl GoOutline {
                 }
             }
         }
-        None
     }
 
-    fn extract_node(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_consts(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
+        if let Some(ref allowed) = options.symbol_kinds {
+            if !allowed.contains(&SymbolKind::Constant) {
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        for spec in node.named_children(&mut cursor) {
+            if spec.kind() == "const_spec" {
+                let mut s_cursor = spec.walk();
+                for name_n in spec.children_by_field_name("name", &mut s_cursor) {
+                    let name = node_text(&name_n, source).to_string();
+                    let exported = Self::is_exported(&name);
+                    if options.exported_only == Some(true) && !exported {
+                        continue;
+                    }
+                    let sig = clean_signature(node_text(&spec, source));
+                    out.push(Symbol {
+                        name,
+                        kind: SymbolKind::Constant,
+                        span: node_span(&spec),
+                        signature: Some(sig),
+                        doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
+                        visibility: if exported { Some("exported".to_string()) } else { None },
+                        relationships: vec![],
+                        children: vec![],
+                    });
+                }
+            }
+        }
+    }
+
+    fn extract_vars(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
+        if let Some(ref allowed) = options.symbol_kinds {
+            if !allowed.contains(&SymbolKind::Variable) {
+                return;
+            }
+        }
+        let mut cursor = node.walk();
+        let mut specs = Vec::new();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "var_spec" {
+                specs.push(child);
+            } else if child.kind() == "var_spec_list" {
+                let mut c_cursor = child.walk();
+                for inner in child.named_children(&mut c_cursor) {
+                    if inner.kind() == "var_spec" {
+                        specs.push(inner);
+                    }
+                }
+            }
+        }
+
+        for spec in specs {
+            let mut s_cursor = spec.walk();
+            for name_n in spec.children_by_field_name("name", &mut s_cursor) {
+                let name = node_text(&name_n, source).to_string();
+                let exported = Self::is_exported(&name);
+                if options.exported_only == Some(true) && !exported {
+                    continue;
+                }
+                let sig = clean_signature(node_text(&spec, source));
+                out.push(Symbol {
+                    name,
+                    kind: SymbolKind::Variable,
+                    span: node_span(&spec),
+                    signature: Some(sig),
+                    doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
+                    visibility: if exported { Some("exported".to_string()) } else { None },
+                    relationships: vec![],
+                    children: vec![],
+                });
+            }
+        }
+    }
+
+    fn extract_nodes(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
         match node.kind() {
-            "function_declaration" => self.extract_function(node, source, options),
-            "method_declaration" => self.extract_method(node, source, options),
-            "type_declaration" => self.extract_type(node, source, options),
-            _ => None,
+            "function_declaration" => {
+                if let Some(sym) = self.extract_function(node, source, options) {
+                    out.push(sym);
+                }
+            }
+            "method_declaration" => {
+                if let Some(sym) = self.extract_method(node, source, options) {
+                    out.push(sym);
+                }
+            }
+            "type_declaration" => self.extract_types(node, source, options, out),
+            "const_declaration" => self.extract_consts(node, source, options, out),
+            "var_declaration" => self.extract_vars(node, source, options, out),
+            _ => {}
         }
     }
 }
@@ -254,9 +341,7 @@ impl LanguageOutline for GoOutline {
         let mut cursor = root.walk();
 
         for child in root.named_children(&mut cursor) {
-            if let Some(sym) = self.extract_node(&child, source, options) {
-                symbols.push(sym);
-            }
+            self.extract_nodes(&child, source, options, &mut symbols);
         }
 
         symbols
