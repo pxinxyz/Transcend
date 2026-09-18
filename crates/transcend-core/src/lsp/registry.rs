@@ -45,7 +45,7 @@ pub static KNOWN_SERVERS: &[LspServerProfile] = &[
     },
     LspServerProfile {
         language_id: "python",
-        binary_candidates: &["pyright-langserver", "basedpyright-langserver", "ruff"],
+        binary_candidates: &["pyright-langserver", "pyright", "basedpyright-langserver", "ruff"],
         args: &["--stdio"],
         extensions: &["py", "pyi"],
         root_markers: &["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
@@ -65,11 +65,88 @@ pub static KNOWN_SERVERS: &[LspServerProfile] = &[
         root_markers: &["compile_commands.json", "CMakeLists.txt"],
     },
     LspServerProfile {
+        language_id: "csharp",
+        binary_candidates: &["csharp-ls", "OmniSharp"],
+        args: &[],
+        extensions: &["cs"],
+        root_markers: &["*.sln", "*.csproj"],
+    },
+    LspServerProfile {
+        language_id: "java",
+        binary_candidates: &["jdtls"],
+        args: &[],
+        extensions: &["java"],
+        root_markers: &["pom.xml", "build.gradle", "build.gradle.kts"],
+    },
+    LspServerProfile {
+        language_id: "kotlin",
+        binary_candidates: &["kotlin-language-server"],
+        args: &[],
+        extensions: &["kt", "kts"],
+        root_markers: &["build.gradle.kts", "build.gradle", "pom.xml"],
+    },
+    LspServerProfile {
+        language_id: "php",
+        binary_candidates: &["intelephense", "phpactor"],
+        args: &["--stdio"],
+        extensions: &["php"],
+        root_markers: &["composer.json"],
+    },
+    LspServerProfile {
+        language_id: "ruby",
+        binary_candidates: &["solargraph", "ruby-lsp"],
+        args: &["stdio"],
+        extensions: &["rb", "rake", "gemspec"],
+        root_markers: &["Gemfile", ".rubocop.yml"],
+    },
+    LspServerProfile {
+        language_id: "swift",
+        binary_candidates: &["sourcekit-lsp"],
+        args: &[],
+        extensions: &["swift"],
+        root_markers: &["Package.swift"],
+    },
+    LspServerProfile {
+        language_id: "bash",
+        binary_candidates: &["bash-language-server"],
+        args: &["start"],
+        extensions: &["sh", "bash"],
+        root_markers: &[".git"],
+    },
+    LspServerProfile {
+        language_id: "sql",
+        binary_candidates: &["sql-language-server", "sqls"],
+        args: &["up", "--method", "stdio"],
+        extensions: &["sql"],
+        root_markers: &[".git"],
+    },
+    LspServerProfile {
+        language_id: "dart",
+        binary_candidates: &["dart"],
+        args: &["language-server", "--protocol=lsp"],
+        extensions: &["dart"],
+        root_markers: &["pubspec.yaml"],
+    },
+    LspServerProfile {
         language_id: "zig",
         binary_candidates: &["zls"],
         args: &[],
         extensions: &["zig"],
         root_markers: &["build.zig"],
+    },
+    LspServerProfile {
+        language_id: "lua",
+        binary_candidates: &["lua-language-server"],
+        args: &[],
+        extensions: &["lua"],
+        root_markers: &[".luarc.json", ".git"],
+    },
+    LspServerProfile {
+        language_id: "markdown",
+        binary_candidates: &["marksman"],
+        args: &["server"],
+        extensions: &["md", "markdown"],
+        root_markers: &[".marksman.toml", ".git"],
     },
 ];
 
@@ -179,14 +256,33 @@ mod tests {
 
     #[test]
     fn test_profile_lookup() {
-        let rs_path = Path::new("src/main.rs");
-        let prof = LspRegistry::profile_for_path(rs_path).expect("rust profile should be found");
-        assert_eq!(prof.language_id, "rust");
-        assert_eq!(prof.binary_candidates[0], "rust-analyzer");
+        let test_cases = [
+            ("main.rs", "rust"),
+            ("app.ts", "typescript"),
+            ("app.js", "typescript"),
+            ("script.py", "python"),
+            ("main.go", "go"),
+            ("main.c", "c"),
+            ("main.cpp", "cpp"),
+            ("Program.cs", "csharp"),
+            ("App.java", "java"),
+            ("Main.kt", "kotlin"),
+            ("index.php", "php"),
+            ("app.rb", "ruby"),
+            ("main.swift", "swift"),
+            ("deploy.sh", "bash"),
+            ("query.sql", "sql"),
+            ("main.dart", "dart"),
+            ("main.zig", "zig"),
+            ("init.lua", "lua"),
+            ("README.md", "markdown"),
+        ];
 
-        let py_path = Path::new("scripts/test.py");
-        let prof = LspRegistry::profile_for_path(py_path).expect("python profile should be found");
-        assert_eq!(prof.language_id, "python");
+        for (filename, expected_lang) in test_cases {
+            let prof = LspRegistry::profile_for_path(Path::new(filename))
+                .unwrap_or_else(|| panic!("profile should be found for {filename}"));
+            assert_eq!(prof.language_id, expected_lang, "failed for {filename}");
+        }
     }
 
     #[test]

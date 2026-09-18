@@ -51,13 +51,23 @@ impl SymbolCoordinateBridge {
 
         let lang = match ext.as_str() {
             "rs" => tree_sitter_rust::LANGUAGE.into(),
-            "ts" | "tsx" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            "js" | "jsx" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            "py" => tree_sitter_python::LANGUAGE.into(),
+            "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "py" | "pyi" => tree_sitter_python::LANGUAGE.into(),
             "go" => tree_sitter_go::LANGUAGE.into(),
             "c" | "h" => tree_sitter_c::LANGUAGE.into(),
-            "cpp" | "hpp" | "cc" => tree_sitter_cpp::LANGUAGE.into(),
+            "cpp" | "hpp" | "cc" | "cxx" | "hxx" => tree_sitter_cpp::LANGUAGE.into(),
+            "cs" => tree_sitter_c_sharp::LANGUAGE.into(),
+            "java" => tree_sitter_java::LANGUAGE.into(),
+            "kt" | "kts" => tree_sitter_kotlin_ng::LANGUAGE.into(),
+            "php" => tree_sitter_php::LANGUAGE_PHP.into(),
+            "rb" | "rake" | "gemspec" => tree_sitter_ruby::LANGUAGE.into(),
+            "swift" => tree_sitter_swift::LANGUAGE.into(),
+            "sh" | "bash" => tree_sitter_bash::LANGUAGE.into(),
+            "sql" => tree_sitter_sequel::LANGUAGE.into(),
+            "dart" => tree_sitter_dart::LANGUAGE.into(),
             "zig" => tree_sitter_zig::LANGUAGE.into(),
+            "lua" => tree_sitter_lua::LANGUAGE.into(),
+            "md" | "markdown" => tree_sitter_md::LANGUAGE.into(),
             _ => return None,
         };
 
@@ -148,5 +158,20 @@ impl DataStore {
         let pos = SymbolCoordinateBridge::resolve_position(path, "", None, Some(10), Some(5))
             .expect("should convert 1-based to 0-based");
         assert_eq!(pos, (9, 4));
+    }
+
+    #[test]
+    fn test_bridge_multilingual_coordinate() {
+        let py_code = "def compute_sum(a, b):\n    return a + b\n";
+        let py_path = Path::new("main.py");
+        let pos = SymbolCoordinateBridge::resolve_position(py_path, py_code, Some("compute_sum"), None, None)
+            .expect("should find compute_sum");
+        assert_eq!(pos.0, 0);
+
+        let java_code = "class Greeter {\n    public void sayHello() {\n    }\n}\n";
+        let java_path = Path::new("Greeter.java");
+        let pos = SymbolCoordinateBridge::resolve_position(java_path, java_code, Some("sayHello"), None, None)
+            .expect("should find sayHello");
+        assert_eq!(pos.0, 1);
     }
 }
