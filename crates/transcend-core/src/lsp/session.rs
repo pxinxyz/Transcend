@@ -48,7 +48,8 @@ impl LspSession {
             .current_dir(&workspace_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
 
         let mut child = cmd.spawn().map_err(|e| {
             format!("Failed to spawn language server '{binary_path}': {e}")
@@ -315,3 +316,4 @@ impl LspSession {
         LspDistiller::distill_diagnostics(&all_diags, path_filter, severity_filter)
     }
 }
+

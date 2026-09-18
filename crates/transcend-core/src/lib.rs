@@ -9,16 +9,19 @@ pub mod lsp;
 pub mod outline;
 pub mod patch;
 pub mod search;
+pub mod terminal;
 
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 use transcend_protocol::{
-    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, LspDefinitionRequest,
-    LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse, LspHoverRequest,
-    LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest, OutlineResponse,
-    PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse, SearchRequest,
-    SearchResponse,
+    ExecRequest, ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
+    LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
+    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
+    SearchRequest, SearchResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
+    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
+    TerminalWriteResponse,
 };
 
 use crate::find::FindScanner;
@@ -81,12 +84,28 @@ pub trait Engine: Send + Sync {
 
     /// Retrieve active compiler diagnostics for file or workspace.
     fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>>;
+
+    /// Execute a command using the hybrid terminal runner.
+    fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>>;
+
+    /// Read incremental output from an active terminal session.
+    fn terminal_read<'a>(&'a self, req: &'a TerminalReadRequest) -> BoxFuture<'a, CoreResult<TerminalReadResponse>>;
+
+    /// Send interactive input to an active terminal session.
+    fn terminal_write<'a>(&'a self, req: &'a TerminalWriteRequest) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>>;
+
+    /// Resize terminal dimensions.
+    fn terminal_resize<'a>(&'a self, req: &'a TerminalResizeRequest) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>>;
+
+    /// Terminate an active terminal session and its process tree.
+    fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>>;
 }
 
 /// Default in-process engine implementation.
 #[derive(Clone)]
 pub struct NativeEngine {
     lsp: Arc<lsp::LspEngine>,
+    terminal: Arc<terminal::TerminalEngine>,
 }
 
 impl Default for NativeEngine {
@@ -99,6 +118,7 @@ impl NativeEngine {
     pub fn new() -> Self {
         Self {
             lsp: Arc::new(lsp::LspEngine::new()),
+            terminal: Arc::new(terminal::TerminalEngine::new()),
         }
     }
 }
@@ -149,6 +169,36 @@ impl Engine for NativeEngine {
     fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>> {
         Box::pin(async move {
             self.lsp.diagnostics(self, req).await
+        })
+    }
+
+    fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>> {
+        Box::pin(async move {
+            self.terminal.exec(req).await
+        })
+    }
+
+    fn terminal_read<'a>(&'a self, req: &'a TerminalReadRequest) -> BoxFuture<'a, CoreResult<TerminalReadResponse>> {
+        Box::pin(async move {
+            self.terminal.read(req).await
+        })
+    }
+
+    fn terminal_write<'a>(&'a self, req: &'a TerminalWriteRequest) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>> {
+        Box::pin(async move {
+            self.terminal.write(req).await
+        })
+    }
+
+    fn terminal_resize<'a>(&'a self, req: &'a TerminalResizeRequest) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>> {
+        Box::pin(async move {
+            self.terminal.resize(req).await
+        })
+    }
+
+    fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>> {
+        Box::pin(async move {
+            self.terminal.kill(req).await
         })
     }
 }

@@ -38,4 +38,10 @@ tree-sitter-dart = { workspace = true }
 tree-sitter-zig = { workspace = true }
 tree-sitter-lua = { workspace = true }
 tree-sitter-md = { workspace = true }
+portable-pty = { workspace = true }
+strip-ansi-escapes = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true }
+
 

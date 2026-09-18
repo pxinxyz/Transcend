@@ -20,6 +20,13 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 - Match budget capping (`max_matches`) with `FileCluster` aggregation to prevent context window overflow.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
+- Terminal subsystem (`terminal::TerminalEngine`):
+  - Decoupled transport (`PipeTransport` for fast one-shot/quiet CLI, `PtyTransport` for interactive/TTY CLI via `portable-pty`).
+  - Decoupled lifecycle (`blocking` for one-shot exit within `timeout_ms`, `detached` returning persistent `session_id`).
+  - Process tree governance: Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with root process and `taskkill /T /F` fallback; POSIX process groups (`killpg`).
+  - Asynchronous PTY disposal on dedicated background worker thread to prevent `ClosePseudoConsole` deadlocks during pipe drain.
+  - Cursor-based ring buffer (`CursorRingBuffer`) with monotonic read cursor and head/tail byte slicing.
+  - Terminal projection (`TerminalProjection`): ANSI escape code stripping and CR (`\r`) in-place line folding.
 
 ## 4. Work Guidance
 - Use release builds (`cargo test --release`) when verifying search and traversal benchmarks.

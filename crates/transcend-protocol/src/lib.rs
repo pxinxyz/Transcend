@@ -669,5 +669,202 @@ pub struct LspDiagnosticsResponse {
     pub severity_breakdown: BTreeMap<String, usize>,
 }
 
+// =========================================================================
+// Terminal & Execution Subsystem Contracts
+// =========================================================================
+
+/// Transport mechanism for terminal execution.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecTransport {
+    /// Automatically select: pipes for standard non-interactive commands, PTY for commands requiring terminal emulation.
+    #[default]
+    Auto,
+    /// Standard OS pipes (stdout/stderr captured cleanly without terminal control codes).
+    Pipe,
+    /// Pseudoterminal (ConPTY on Windows, openpty on Unix) for interactive sessions, REPLs, and TTY-aware tools.
+    Pty,
+}
+
+/// Action to take when command execution reaches the timeout threshold.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeoutAction {
+    /// Detach into an active background session and return session_id for subsequent streaming.
+    #[default]
+    Detach,
+    /// Forcibly terminate the process tree.
+    Kill,
+    /// Abort and return an execution error.
+    Error,
+}
+
+/// Execution status of a command.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecStatus {
+    /// Command finished and process exited cleanly.
+    #[default]
+    Exited,
+    /// Execution timed out and process was detached into an active background session.
+    Detached,
+    /// Process failed to spawn or encountered an OS runtime failure.
+    Failed,
+}
+
+/// Request to execute a command via the hybrid terminal engine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ExecRequest {
+    /// Shell command string to execute.
+    pub command: String,
+    /// Working directory for execution. If omitted, defaults to the current workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Transport mode: "auto" (default), "pipe", or "pty".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ExecTransport>,
+    /// Milliseconds to wait synchronously before applying timeout_action (default: 10,000ms).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    /// Action upon reaching timeout: "detach" (default), "kill", or "error".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_action: Option<TimeoutAction>,
+    /// Optional shell executable override (e.g. "powershell", "pwsh", "cmd", "bash", "sh").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<String>,
+    /// Maximum bytes of output to return in the response (default: 32,768 bytes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output_bytes: Option<usize>,
+}
+
+/// Response returned from an execution request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct ExecResponse {
+    /// Execution outcome: "exited", "detached", or "failed".
+    pub status: ExecStatus,
+    /// Exit code if process completed, or null if detached/running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Ephemeral session identifier assigned if the command was detached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Normalized, token-compact terminal output.
+    pub output: String,
+    /// Current read cursor position in the session output stream.
+    pub cursor: usize,
+    /// Whether the output was truncated by max_output_bytes.
+    pub truncated: bool,
+    /// Total wall-clock execution time elapsed in milliseconds.
+    pub elapsed_ms: u64,
+}
+
+/// Status of an active background terminal session.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalSessionStatus {
+    /// Process is actively running.
+    #[default]
+    Running,
+    /// Process has exited.
+    Exited,
+    /// Process failed or crashed.
+    Failed,
+}
+
+/// Request to read incremental output from an active background session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalReadRequest {
+    /// Identifier of the session to read from.
+    pub session_id: String,
+    /// Read cursor offset. Only output appended after this cursor will be returned.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<usize>,
+    /// Maximum bytes of output to return in this chunk (default: 16,384 bytes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<usize>,
+    /// Optional timeout in milliseconds to wait for new output if buffer has no new data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+/// Response containing incremental terminal output.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalReadResponse {
+    /// Session identifier.
+    pub session_id: String,
+    /// Current lifecycle status of the session.
+    pub status: TerminalSessionStatus,
+    /// Incremental output since provided cursor.
+    pub output: String,
+    /// Updated cursor position for subsequent reads.
+    pub next_cursor: usize,
+    /// Process exit code if completed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Whether output chunk was truncated by max_bytes.
+    pub truncated: bool,
+}
+
+/// Request to send interactive input to a running terminal session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalWriteRequest {
+    /// Identifier of the active session.
+    pub session_id: String,
+    /// Raw text or control characters to send to the terminal stdin (e.g. "y\n", "\x03" for Ctrl+C).
+    pub input: String,
+}
+
+/// Response returned from an interactive write operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalWriteResponse {
+    /// Session identifier.
+    pub session_id: String,
+    /// Number of bytes successfully dispatched to terminal stdin.
+    pub bytes_written: usize,
+}
+
+/// Request to resize terminal dimensions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalResizeRequest {
+    /// Identifier of the active session.
+    pub session_id: String,
+    /// Terminal column width (e.g. 120).
+    pub cols: u16,
+    /// Terminal row height (e.g. 30).
+    pub rows: u16,
+}
+
+/// Response returned from a resize operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalResizeResponse {
+    /// Session identifier.
+    pub session_id: String,
+    /// Whether the resize operation succeeded.
+    pub success: bool,
+}
+
+/// Request to terminate a background terminal session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalKillRequest {
+    /// Identifier of the session to terminate.
+    pub session_id: String,
+}
+
+/// Response returned from a session kill operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct TerminalKillResponse {
+    /// Session identifier.
+    pub session_id: String,
+    /// Whether the session process tree was successfully terminated.
+    pub success: bool,
+    /// Final exit code if captured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Remaining unread output before process termination.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_output: Option<String>,
+}
+
+
 
 

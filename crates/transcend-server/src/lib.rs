@@ -6,11 +6,13 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, LspDefinitionRequest,
-    LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse, LspHoverRequest,
-    LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
+    ExecRequest, ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
+    LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
-    SearchRequest, SearchResponse,
+    SearchRequest, SearchResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
+    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
+    TerminalWriteResponse,
 };
 
 /// The Transcend MCP Server instance.
@@ -152,6 +154,66 @@ impl TranscendServer {
         Parameters(req): Parameters<LspDiagnosticsRequest>,
     ) -> Result<Json<LspDiagnosticsResponse>, String> {
         self.engine.lsp_diagnostics(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Execute a command in an isolated terminal or process with hybrid lifecycle control.
+    #[tool(
+        name = "exec",
+        description = "Execute a command in an isolated terminal or process with hybrid lifecycle control (blocking vs detached, pipe vs pty)"
+    )]
+    pub async fn exec(
+        &self,
+        Parameters(req): Parameters<ExecRequest>,
+    ) -> Result<Json<ExecResponse>, String> {
+        self.engine.exec(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Read output from a running or exited terminal session using incremental cursors.
+    #[tool(
+        name = "terminal_read",
+        description = "Read output from a running or exited terminal session using incremental cursors"
+    )]
+    pub async fn terminal_read(
+        &self,
+        Parameters(req): Parameters<TerminalReadRequest>,
+    ) -> Result<Json<TerminalReadResponse>, String> {
+        self.engine.terminal_read(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Send input, keystrokes, or signals to a running terminal session.
+    #[tool(
+        name = "terminal_write",
+        description = "Send input, keystrokes, or signals to a running terminal session"
+    )]
+    pub async fn terminal_write(
+        &self,
+        Parameters(req): Parameters<TerminalWriteRequest>,
+    ) -> Result<Json<TerminalWriteResponse>, String> {
+        self.engine.terminal_write(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Resize a PTY terminal session's columns and rows.
+    #[tool(
+        name = "terminal_resize",
+        description = "Resize a PTY terminal session's columns and rows"
+    )]
+    pub async fn terminal_resize(
+        &self,
+        Parameters(req): Parameters<TerminalResizeRequest>,
+    ) -> Result<Json<TerminalResizeResponse>, String> {
+        self.engine.terminal_resize(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Forcibly terminate a running terminal session and its entire process tree.
+    #[tool(
+        name = "terminal_kill",
+        description = "Forcibly terminate a running terminal session and its entire process tree"
+    )]
+    pub async fn terminal_kill(
+        &self,
+        Parameters(req): Parameters<TerminalKillRequest>,
+    ) -> Result<Json<TerminalKillResponse>, String> {
+        self.engine.terminal_kill(&req).await.map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -326,6 +388,22 @@ pub fn compute() -> i32 {
         assert!(res.0.signature.is_some() || res.0.documentation.is_some());
     }
 
+    #[tokio::test]
+    async fn test_server_exec_and_terminal_lifecycle() {
+        let server = TranscendServer::default();
+        let exec_res = server
+            .exec(Parameters(ExecRequest {
+                command: "echo test_exec_echo".to_string(),
+                ..Default::default()
+            }))
+            .await
+            .expect("exec should succeed");
+
+        assert_eq!(exec_res.0.status, transcend_protocol::ExecStatus::Exited);
+        assert_eq!(exec_res.0.exit_code, Some(0));
+        assert!(exec_res.0.output.contains("test_exec_echo"));
+    }
+
     #[test]
     fn test_export_mcp_schemas() {
         let mcp_dir = std::path::Path::new(r"C:\Users\pxin\.gemini\antigravity\mcp\transcend");
@@ -341,6 +419,11 @@ pub fn compute() -> i32 {
                 ("lsp_references", "Find all compiler-resolved references and call sites across the workspace", serde_json::to_value(schemars::schema_for!(LspReferencesRequest)).unwrap()),
                 ("lsp_hover", "Inspect inferred type signature and documentation for a symbol or position", serde_json::to_value(schemars::schema_for!(LspHoverRequest)).unwrap()),
                 ("lsp_diagnostics", "Retrieve compiler diagnostics (errors, warnings) for a file or workspace", serde_json::to_value(schemars::schema_for!(LspDiagnosticsRequest)).unwrap()),
+                ("exec", "Execute a command in an isolated terminal or process with hybrid lifecycle control", serde_json::to_value(schemars::schema_for!(ExecRequest)).unwrap()),
+                ("terminal_read", "Read output from a running or exited terminal session using incremental cursors", serde_json::to_value(schemars::schema_for!(TerminalReadRequest)).unwrap()),
+                ("terminal_write", "Send input, keystrokes, or signals to a running terminal session", serde_json::to_value(schemars::schema_for!(TerminalWriteRequest)).unwrap()),
+                ("terminal_resize", "Resize a PTY terminal session's columns and rows", serde_json::to_value(schemars::schema_for!(TerminalResizeRequest)).unwrap()),
+                ("terminal_kill", "Forcibly terminate a running terminal session and its entire process tree", serde_json::to_value(schemars::schema_for!(TerminalKillRequest)).unwrap()),
             ];
 
             for (name, desc, schema) in tools {
@@ -349,7 +432,7 @@ pub fn compute() -> i32 {
                     "description": desc,
                     "parameters": schema,
                 });
-                let json_str = serde_json::to_string(&tool_def).unwrap();
+                let json_str = serde_json::to_string_pretty(&tool_def).unwrap();
                 let file_path = mcp_dir.join(format!("{}.json", name));
                 std::fs::write(&file_path, json_str).unwrap();
             }
