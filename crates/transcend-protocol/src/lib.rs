@@ -502,4 +502,172 @@ pub struct FindSymbolResponse {
     pub truncated: bool,
 }
 
+/// Request to locate the compiler-resolved definition of a symbol or position.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspDefinitionRequest {
+    /// File path where the symbol or position is referenced.
+    pub path: String,
+    /// Identifier name or symbol to find definition for (e.g. "poll", "Config::new").
+    /// If provided, Tree-sitter resolves its coordinate in the file before querying LSP.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// 1-based line number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// 1-based column number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<usize>,
+}
+
+/// A target location returned by an LSP definition query.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspTargetLocation {
+    /// Relative or absolute path to the target file.
+    pub file: String,
+    /// Exact target location span.
+    pub span: SourceSpan,
+    /// Preview snippet of the definition line(s).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+}
+
+/// Response returned by an LSP definition query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspDefinitionResponse {
+    /// Target definitions found (typically 1, or multiple for overloads/traits).
+    pub targets: Vec<LspTargetLocation>,
+    /// Underlying resolution engine: "lsp:<server>" or "tree-sitter:heuristic".
+    pub engine: String,
+}
+
+/// Request to find all compiler-resolved references and call sites across the workspace.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspReferencesRequest {
+    /// File path where the symbol or position is referenced.
+    pub path: String,
+    /// Identifier name or symbol to find references for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// 1-based line number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// 1-based column number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<usize>,
+    /// Whether to include the declaration/definition itself in the results. Defaults to false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_declaration: Option<bool>,
+    /// Maximum number of references to return. Defaults to 50.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// A single reference occurrence.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspReferenceLocation {
+    /// File path where the reference occurs.
+    pub file: String,
+    /// Exact location span.
+    pub span: SourceSpan,
+    /// Preview snippet of the referencing line.
+    pub line_text: String,
+}
+
+/// Response returned by an LSP references query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspReferencesResponse {
+    /// Total count of references found.
+    pub total_found: usize,
+    /// References list.
+    pub references: Vec<LspReferenceLocation>,
+    /// Whether references were capped by limit.
+    pub truncated: bool,
+    /// Underlying resolution engine: "lsp:<server>" or "tree-sitter:heuristic".
+    pub engine: String,
+}
+
+/// Request to inspect inferred type signature and documentation for a symbol or position.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspHoverRequest {
+    /// File path to inspect.
+    pub path: String,
+    /// Identifier name or symbol to hover over.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// 1-based line number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// 1-based column number (optional if symbol is provided).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub character: Option<usize>,
+}
+
+/// Response returned by an LSP hover query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspHoverResponse {
+    /// Resolved signature or type description (e.g. "fn poll(&mut self) -> Poll<Result<()>>").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Documentation text or doc comments.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub documentation: Option<String>,
+    /// Exact span of the hovered token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<SourceSpan>,
+    /// Underlying resolution engine: "lsp:<server>" or "tree-sitter:heuristic".
+    pub engine: String,
+}
+
+/// Severity level of an LSP diagnostic.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Information,
+    Hint,
+}
+
+/// A structured compiler diagnostic message.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspDiagnosticItem {
+    /// File path where the diagnostic was issued.
+    pub file: String,
+    /// Diagnostic severity (error, warning, information, hint).
+    pub severity: DiagnosticSeverity,
+    /// Exact source code location span.
+    pub span: SourceSpan,
+    /// Human-readable compiler/linter message.
+    pub message: String,
+    /// Optional error code (e.g. "E0308", "unused_variables").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Source compiler/tool (e.g. "rustc", "pyright", "gopls").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+/// Request to retrieve compiler diagnostics.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspDiagnosticsRequest {
+    /// File or directory path to retrieve diagnostics for. If omitted, returns all workspace diagnostics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Optional severity filter (e.g. only return errors).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<DiagnosticSeverity>,
+}
+
+/// Response returned by an LSP diagnostics query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspDiagnosticsResponse {
+    /// Total count of diagnostics matching filter.
+    pub total_count: usize,
+    /// Structured diagnostic items.
+    pub diagnostics: Vec<LspDiagnosticItem>,
+    /// Breakdown of diagnostics by severity.
+    pub severity_breakdown: BTreeMap<String, usize>,
+}
+
+
 

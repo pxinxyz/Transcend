@@ -40,7 +40,7 @@ ignore = "0.4.33"
 globset = "0.4"
 
 # Async & Runtime
-tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "io-std", "io-util", "sync", "process", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "std", "fmt"] }
 anyhow = "1.0"

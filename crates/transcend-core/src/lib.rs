@@ -5,15 +5,20 @@
 
 pub mod find;
 pub mod find_symbol;
+pub mod lsp;
 pub mod outline;
 pub mod patch;
 pub mod search;
 
+use std::pin::Pin;
+use std::sync::Arc;
 use thiserror::Error;
 use transcend_protocol::{
-    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, OutlineRequest,
-    OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
-    SearchRequest, SearchResponse,
+    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, LspDefinitionRequest,
+    LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse, LspHoverRequest,
+    LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest, OutlineResponse,
+    PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse, SearchRequest,
+    SearchResponse,
 };
 
 use crate::find::FindScanner;
@@ -42,6 +47,9 @@ pub enum CoreError {
 /// Result alias for Core operations.
 pub type CoreResult<T> = Result<T, CoreError>;
 
+/// Future type alias for object-safe asynchronous Engine trait methods.
+pub type BoxFuture<'a, T> = Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
 /// Core execution engine trait.
 pub trait Engine: Send + Sync {
     /// Execute a code search.
@@ -61,15 +69,37 @@ pub trait Engine: Send + Sync {
 
     /// Globally find code symbol definitions across the workspace.
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse>;
+
+    /// Go to compiler-resolved definition of a symbol or position.
+    fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>>;
+
+    /// Find all compiler-resolved references and call sites across the workspace.
+    fn lsp_references<'a>(&'a self, req: &'a LspReferencesRequest) -> BoxFuture<'a, CoreResult<LspReferencesResponse>>;
+
+    /// Inspect inferred type signature and documentation.
+    fn lsp_hover<'a>(&'a self, req: &'a LspHoverRequest) -> BoxFuture<'a, CoreResult<LspHoverResponse>>;
+
+    /// Retrieve active compiler diagnostics for file or workspace.
+    fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>>;
 }
 
 /// Default in-process engine implementation.
-#[derive(Debug, Default, Clone)]
-pub struct NativeEngine;
+#[derive(Clone)]
+pub struct NativeEngine {
+    lsp: Arc<lsp::LspEngine>,
+}
+
+impl Default for NativeEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NativeEngine {
     pub fn new() -> Self {
-        Self
+        Self {
+            lsp: Arc::new(lsp::LspEngine::new()),
+        }
     }
 }
 
@@ -96,6 +126,30 @@ impl Engine for NativeEngine {
 
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse> {
         SymbolFinder::find(req)
+    }
+
+    fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>> {
+        Box::pin(async move {
+            self.lsp.goto_definition(self, req).await
+        })
+    }
+
+    fn lsp_references<'a>(&'a self, req: &'a LspReferencesRequest) -> BoxFuture<'a, CoreResult<LspReferencesResponse>> {
+        Box::pin(async move {
+            self.lsp.find_references(self, req).await
+        })
+    }
+
+    fn lsp_hover<'a>(&'a self, req: &'a LspHoverRequest) -> BoxFuture<'a, CoreResult<LspHoverResponse>> {
+        Box::pin(async move {
+            self.lsp.hover(self, req).await
+        })
+    }
+
+    fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>> {
+        Box::pin(async move {
+            self.lsp.diagnostics(self, req).await
+        })
     }
 }
 
@@ -2334,6 +2388,111 @@ pub fn process() {}
         assert_eq!(res.symbols[0].name, "process");
         assert!(res.symbols[0].is_exact);
         assert!(res.symbols[0].file.contains("z_worker.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_lsp_definition_symbol_and_coordinates() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let rs_path = sandbox.dir.join("src").join("engine.rs");
+        let rs_code = r#"
+pub struct Executor {
+    pub max_threads: usize,
+}
+
+impl Executor {
+    pub fn dispatch(&self) -> bool {
+        true
+    }
+}
+"#;
+        fs::write(&rs_path, rs_code).unwrap();
+
+        let res = engine
+            .lsp_definition(&LspDefinitionRequest {
+                path: rs_path.to_string_lossy().to_string(),
+                symbol: Some("Executor::dispatch".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("lsp_definition should succeed");
+
+        assert!(!res.targets.is_empty());
+        assert_eq!(res.targets[0].span.start_line, 7);
+        assert!(res.targets[0].file.contains("engine.rs"));
+    }
+
+    #[tokio::test]
+    async fn test_lsp_references_symbol() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let rs_path = sandbox.dir.join("src").join("service.rs");
+        let rs_code = r#"
+pub fn run_task() {}
+
+pub fn caller_one() {
+    run_task();
+}
+
+pub fn caller_two() {
+    run_task();
+}
+"#;
+        fs::write(&rs_path, rs_code).unwrap();
+
+        let res = engine
+            .lsp_references(&LspReferencesRequest {
+                path: rs_path.to_string_lossy().to_string(),
+                symbol: Some("run_task".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("lsp_references should succeed");
+
+        assert!(res.total_found >= 2);
+        assert!(res.references.iter().any(|r| r.line_text.contains("caller_one") || r.line_text.contains("run_task()")));
+    }
+
+    #[tokio::test]
+    async fn test_lsp_hover_symbol() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let rs_path = sandbox.dir.join("src").join("worker.rs");
+        let rs_code = r#"
+/// Computes checksum value.
+pub fn compute_checksum(val: u32) -> u32 {
+    val * 2
+}
+"#;
+        fs::write(&rs_path, rs_code).unwrap();
+
+        let res = engine
+            .lsp_hover(&LspHoverRequest {
+                path: rs_path.to_string_lossy().to_string(),
+                symbol: Some("compute_checksum".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("lsp_hover should succeed");
+
+        assert!(res.signature.is_some() || res.documentation.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_lsp_diagnostics_query() {
+        let engine = NativeEngine::new();
+        let res = engine
+            .lsp_diagnostics(&LspDiagnosticsRequest {
+                path: None,
+                severity: None,
+            })
+            .await
+            .expect("lsp_diagnostics should succeed");
+
+        assert_eq!(res.total_count, res.diagnostics.len());
     }
 }
 

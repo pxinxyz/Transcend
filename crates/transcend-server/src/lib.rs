@@ -6,7 +6,9 @@ use std::sync::Arc;
 use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
-    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, OutlineRequest,
+    FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, LspDefinitionRequest,
+    LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse, LspHoverRequest,
+    LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadSymbolRequest, ReadSymbolResponse,
     SearchRequest, SearchResponse,
 };
@@ -102,6 +104,54 @@ impl TranscendServer {
         Parameters(req): Parameters<FindSymbolRequest>,
     ) -> Result<Json<FindSymbolResponse>, String> {
         self.engine.find_symbol(&req).map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Go to compiler-resolved definition of a symbol or position across the workspace.
+    #[tool(
+        name = "lsp_definition",
+        description = "Go to compiler-resolved definition of a symbol or position across the workspace"
+    )]
+    pub async fn lsp_definition(
+        &self,
+        Parameters(req): Parameters<LspDefinitionRequest>,
+    ) -> Result<Json<LspDefinitionResponse>, String> {
+        self.engine.lsp_definition(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Find all compiler-resolved references and call sites across the workspace.
+    #[tool(
+        name = "lsp_references",
+        description = "Find all compiler-resolved references and call sites across the workspace"
+    )]
+    pub async fn lsp_references(
+        &self,
+        Parameters(req): Parameters<LspReferencesRequest>,
+    ) -> Result<Json<LspReferencesResponse>, String> {
+        self.engine.lsp_references(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Inspect inferred type signature and documentation for a symbol or position.
+    #[tool(
+        name = "lsp_hover",
+        description = "Inspect inferred type signature and documentation for a symbol or position"
+    )]
+    pub async fn lsp_hover(
+        &self,
+        Parameters(req): Parameters<LspHoverRequest>,
+    ) -> Result<Json<LspHoverResponse>, String> {
+        self.engine.lsp_hover(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Retrieve compiler diagnostics (errors, warnings) for a file or workspace.
+    #[tool(
+        name = "lsp_diagnostics",
+        description = "Retrieve compiler diagnostics (errors, warnings) for a file or workspace"
+    )]
+    pub async fn lsp_diagnostics(
+        &self,
+        Parameters(req): Parameters<LspDiagnosticsRequest>,
+    ) -> Result<Json<LspDiagnosticsResponse>, String> {
+        self.engine.lsp_diagnostics(&req).await.map(Json).map_err(|e| e.to_string())
     }
 }
 
@@ -246,6 +296,36 @@ pub fn compute() -> i32 {
         assert!(res.0.symbols.iter().any(|s| s.name == "TranscendServer"));
     }
 
+    #[tokio::test]
+    async fn test_server_lsp_definition_tool() {
+        let server = TranscendServer::default();
+        let res = server
+            .lsp_definition(Parameters(LspDefinitionRequest {
+                path: "src/lib.rs".to_string(),
+                symbol: Some("TranscendServer".to_string()),
+                ..Default::default()
+            }))
+            .await
+            .expect("lsp_definition tool call should succeed");
+
+        assert!(!res.0.targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_lsp_hover_tool() {
+        let server = TranscendServer::default();
+        let res = server
+            .lsp_hover(Parameters(LspHoverRequest {
+                path: "src/lib.rs".to_string(),
+                symbol: Some("TranscendServer".to_string()),
+                ..Default::default()
+            }))
+            .await
+            .expect("lsp_hover tool call should succeed");
+
+        assert!(res.0.signature.is_some() || res.0.documentation.is_some());
+    }
+
     #[test]
     fn test_export_mcp_schemas() {
         let mcp_dir = std::path::Path::new(r"C:\Users\pxin\.gemini\antigravity\mcp\transcend");
@@ -257,6 +337,10 @@ pub fn compute() -> i32 {
                 ("read_symbol", "Surgically extract a specific symbol by name or qualified locator, returning exact source code and span", serde_json::to_value(schemars::schema_for!(ReadSymbolRequest)).unwrap()),
                 ("patch", "Surgically modify code targeting a symbol, span, or text with AST syntax validation before touching disk", serde_json::to_value(schemars::schema_for!(PatchRequest)).unwrap()),
                 ("find_symbol", "Globally find code symbol definitions across the workspace by name, qualified path, or kind with exact AST spans", serde_json::to_value(schemars::schema_for!(FindSymbolRequest)).unwrap()),
+                ("lsp_definition", "Go to compiler-resolved definition of a symbol or position across the workspace", serde_json::to_value(schemars::schema_for!(LspDefinitionRequest)).unwrap()),
+                ("lsp_references", "Find all compiler-resolved references and call sites across the workspace", serde_json::to_value(schemars::schema_for!(LspReferencesRequest)).unwrap()),
+                ("lsp_hover", "Inspect inferred type signature and documentation for a symbol or position", serde_json::to_value(schemars::schema_for!(LspHoverRequest)).unwrap()),
+                ("lsp_diagnostics", "Retrieve compiler diagnostics (errors, warnings) for a file or workspace", serde_json::to_value(schemars::schema_for!(LspDiagnosticsRequest)).unwrap()),
             ];
 
             for (name, desc, schema) in tools {
