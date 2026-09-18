@@ -265,8 +265,25 @@ impl FileOps {
         }
 
         // Security boundary check: ensure canonical path does not escape workspace_root
-        let root_str = req.workspace_root.as_deref().unwrap_or(".");
-        let root_path = Path::new(root_str);
+        let root_buf = if let Some(ref r) = req.workspace_root {
+            std::path::PathBuf::from(r)
+        } else if let Ok(env_root) = std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT")) {
+            std::path::PathBuf::from(env_root)
+        } else if let Ok(cwd) = std::env::current_dir() {
+            let mut curr = Some(cwd.as_path());
+            let mut found = cwd.clone();
+            while let Some(dir) = curr {
+                if dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("package.json").exists() {
+                    found = dir.to_path_buf();
+                    break;
+                }
+                curr = dir.parent();
+            }
+            found
+        } else {
+            std::path::PathBuf::from(".")
+        };
+        let root_path = root_buf.as_path();
 
         if let (Ok(canonical_target), Ok(canonical_root)) = (
             target_path.canonicalize(),

@@ -276,6 +276,9 @@ impl Engine for NativeEngine {
     fn delete_path(&self, req: &DeletePathRequest) -> CoreResult<DeletePathResponse> {
         let mut resolved = req.clone();
         resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        if resolved.workspace_root.is_none() {
+            resolved.workspace_root = Some(self.get_workspace().to_string_lossy().to_string());
+        }
         FileOps::delete_path(&resolved)
     }
 
