@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-cli"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -1107,7 +1107,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-core"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "chrono",
  "globset",
@@ -1148,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-protocol"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "schemars",
  "serde",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "transcend-server"
-version = "1.0.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rmcp",

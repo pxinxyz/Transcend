@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-20%20Tools-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-101%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-21%20Tools-8A2BE2" alt="MCP Compatible"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-111%20passed-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -34,7 +34,7 @@ Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are tr
 
 Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
 
-Transcend replaces blind scraping with **20 typed, AST-aware, LSP-native, and terminal execution primitives** organized across three computational tiers:
+Transcend replaces blind scraping with **21 typed, AST-aware, LSP-native, terminal execution, and version control primitives** organized across four computational tiers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -48,21 +48,21 @@ Transcend replaces blind scraping with **20 typed, AST-aware, LSP-native, and te
 │  [ Tier 1: Codebase Intelligence & File Lifecycle ]                                    │
 │    find               Topological Radar & Extension Census                             │
 │    search             Clustered Ripgrep Heatmaps & Content Search                      │
-│    find_symbol        Global Project-Wide Definition Finder                            │
+│    find_symbol        Smart Casing & Subsequence Definition Finder                     │
 │    outline            AST Structural Tree or Syntax-Valid Skeletons                     │
 │    read_symbol        Surgical Semantic Symbol Extraction                              │
-│    read_file          Line-Bounded Token-Budgeted Reader with Binary-Safety            │
+│    read_file          Line-Bounded Fast Chunked Reader with Binary-Safety              │
 │    write_file         Atomic File Creator with Overwrite & Parent Directory Guards     │
 │    delete_path        Workspace-Contained File & Recursive Directory Deletion          │
 │    patch              AST-Guarded Patching with Splicing Modes (Insert/Prepend/Append) │
-│    batch_patch        Multi-File Transactional Atomic Changeset with Rollback          │
+│    batch_patch        Consolidated Multi-File Atomic Changeset with Rollback           │
 │    set_workspace      Dynamic Workspace Root Anchor & Auto-Resolution                  │
 │                                                                                        │
 │  [ Tier 2: Language Server Protocol (LSP) ]                                            │
 │    lsp_definition     Exact Cross-File Definition Navigation (Tree-sitter Bridge)      │
 │    lsp_references     Semantic Multi-File Usage Extraction                             │
 │    lsp_hover          Distilled Type Signatures & Cleaned Documentation                │
-│    lsp_diagnostics    Real-Time Compiler & Typechecker Diagnostics                     │
+│    lsp_diagnostics    Auto-Warming Real-Time Compiler Diagnostics (JSON Fallback)      │
 │                                                                                        │
 │  [ Tier 3: Hybrid Terminal & PTY Execution ]                                           │
 │    exec               Hybrid One-Shot Execution with Auto-Detach (Pipe vs PTY)         │
@@ -70,6 +70,9 @@ Transcend replaces blind scraping with **20 typed, AST-aware, LSP-native, and te
 │    terminal_write     Interactive Stdin Delivery & Keystroke Injection                 │
 │    terminal_resize    PTY Dimension Adjustment (Rows / Cols)                           │
 │    terminal_kill      Process Tree Termination (Windows Job Objects / POSIX PGID)      │
+│                                                                                        │
+│  [ Tier 4: Version Control & Git Lifecycle ]                                           │
+│    git_status         Structured Porcelain v2 Git Repository Inspector                 │
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -249,6 +252,16 @@ Transcend solves the fundamental dilemma of agent shell execution by decoupling 
 ### 20. `terminal_kill` — Process Tree Termination
 - **Windows Job Objects**: Binds process trees to kernel Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring that complex child/grandchild processes (`node.exe`, `vite.exe`) are killed atomically without port leaks.
 - **Asynchronous PTY Disposal**: Cleans up ConPTY pseudo console handles on dedicated background worker threads to prevent Win32 synchronous pipe-drain deadlocks.
+
+---
+
+## Tier 4: Version Control & Git Lifecycle
+
+### 21. `git_status` — Structured Porcelain v2 Git Inspector
+Replaces terminal string scraping like `git status -s` with strongly-typed, token-compact JSON.
+- **Full State Breakdown**: Categorizes modified files into `staged`, `unstaged`, `untracked`, and `conflicted` lists.
+- **Branch & Tracking Awareness**: Extracts active branch (`branch`), tracking upstream (`upstream`), and precise commit divergence (`ahead`, `behind`).
+- **Clean Indicator**: `is_clean: true` allows agents to instantly verify repository state before or after batch modifications.
 
 ---
 
