@@ -6,6 +6,7 @@
 pub mod bridge;
 pub mod distiller;
 pub mod fallback;
+pub mod installer;
 pub mod pool;
 pub mod protocol;
 pub mod registry;
@@ -15,7 +16,8 @@ use std::fs;
 use std::path::Path;
 use transcend_protocol::{
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
-    LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse,
+    LspHoverRequest, LspHoverResponse, LspInstallRequest, LspInstallResponse, LspReferencesRequest,
+    LspReferencesResponse, LspStatusRequest, LspStatusResponse,
 };
 
 use crate::{CoreError, NativeEngine};
@@ -209,5 +211,15 @@ impl LspEngine {
             diagnostics: all_diags,
             severity_breakdown,
         })
+    }
+
+    /// Check current installation status and recipes for language servers.
+    pub async fn status(&self, req: &LspStatusRequest) -> Result<LspStatusResponse, CoreError> {
+        Ok(installer::LspInstaller::check_status(req).await)
+    }
+
+    /// Automatically install a language server using host package managers.
+    pub async fn install(&self, req: &LspInstallRequest) -> Result<LspInstallResponse, CoreError> {
+        installer::LspInstaller::install(req).await
     }
 }

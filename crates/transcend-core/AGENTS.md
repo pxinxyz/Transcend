@@ -25,6 +25,8 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 - Smart casing and token subsequence matching in `find_symbol` across snake_case $\leftrightarrow$ camelCase/PascalCase boundaries.
 - In-process native `GitEngine` parsing `git status --porcelain=v2 --branch` into typed, token-compact JSON.
 - Native compiler JSON diagnostics fallback (`cargo check --message-format=json`) when LSP language servers are absent.
+- Dynamic LSP discovery across system `PATH` and toolchain directories (`~/.cargo/bin`, `%APPDATA%\npm`, `~/.transcend/bin`, `~/go/bin`) with zero hardcoded paths.
+- Recipe-based language server status auditing (`lsp_status`) and automated host package manager installation (`lsp_install`) with bounded execution timeouts and version verification.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
 - Terminal subsystem (`terminal::TerminalEngine`):

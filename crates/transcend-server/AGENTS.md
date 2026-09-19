@@ -9,8 +9,9 @@ Owns tool definitions, router registrations (`#[tool_router]`), JSON schema nego
 ## 3. Local Contracts
 - Implements MCP tools strictly using `rmcp` macros (`#[tool]`, `#[tool_router(server_handler)]`).
 - All tool outputs are strongly typed via `rmcp::Json<T>`.
-- Exposes core codebase tools (`find`, `search`, `outline`, `find_symbol`, `read_symbol`, `patch`, `batch_patch`, `read_file`, `write_file`, `delete_path`, `set_workspace`, `git_status`) and LSP tools (`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_diagnostics`).
+- Exposes core codebase tools (`find`, `search`, `outline`, `find_symbol`, `read_symbol`, `patch`, `batch_patch`, `read_file`, `write_file`, `delete_path`, `set_workspace`, `git_status`) and LSP tools (`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_diagnostics`, `lsp_status`, `lsp_install`).
 - Exposes hybrid terminal tools (`exec`, `terminal_read`, `terminal_write`, `terminal_resize`, `terminal_kill`).
+- 23 total native tools registered in the server router.
 - Does not implement business logic directly; delegates to `transcend-core::Engine`.
 
 ## 4. Work Guidance

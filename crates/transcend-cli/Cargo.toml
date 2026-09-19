@@ -10,6 +10,8 @@ name = "transcend"
 path = "src/main.rs"
 
 [dependencies]
+transcend-protocol = { workspace = true }
+transcend-core = { workspace = true }
 transcend-server = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io"] }
 tokio = { workspace = true }

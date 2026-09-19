@@ -22,7 +22,8 @@ use transcend_protocol::{
     ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
     GitStatusRequest, GitStatusResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
-    LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
+    LspHoverRequest, LspHoverResponse, LspInstallRequest, LspInstallResponse, LspReferencesRequest,
+    LspReferencesResponse, LspStatusRequest, LspStatusResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
     ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, SetWorkspaceRequest,
     SetWorkspaceResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
@@ -43,6 +44,9 @@ use crate::search::SearchScanner;
 pub enum CoreError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
 
     #[error("Pattern error: {0}")]
     InvalidPattern(String),
@@ -103,6 +107,12 @@ pub trait Engine: Send + Sync {
 
     /// Retrieve active compiler diagnostics for file or workspace.
     fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>>;
+
+    /// Check current installation status and recipes for language servers.
+    fn lsp_status<'a>(&'a self, req: &'a LspStatusRequest) -> BoxFuture<'a, CoreResult<LspStatusResponse>>;
+
+    /// Automatically install a language server using host package managers.
+    fn lsp_install<'a>(&'a self, req: &'a LspInstallRequest) -> BoxFuture<'a, CoreResult<LspInstallResponse>>;
 
     /// Execute a command using the hybrid terminal runner.
     fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>>;
@@ -340,6 +350,20 @@ impl Engine for NativeEngine {
         }
         Box::pin(async move {
             self.lsp.diagnostics(self, &resolved).await
+        })
+    }
+
+    fn lsp_status<'a>(&'a self, req: &'a LspStatusRequest) -> BoxFuture<'a, CoreResult<LspStatusResponse>> {
+        let req = req.clone();
+        Box::pin(async move {
+            self.lsp.status(&req).await
+        })
+    }
+
+    fn lsp_install<'a>(&'a self, req: &'a LspInstallRequest) -> BoxFuture<'a, CoreResult<LspInstallResponse>> {
+        let req = req.clone();
+        Box::pin(async move {
+            self.lsp.install(&req).await
         })
     }
 

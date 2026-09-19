@@ -166,15 +166,21 @@ impl LspRegistry {
         KNOWN_SERVERS.iter().find(|p| p.language_id == lower)
     }
 
-    /// Check if any candidate binary for this profile exists on system PATH.
-    /// Returns the resolved binary name/path if found.
-    pub fn resolve_binary(profile: &LspServerProfile) -> Option<String> {
+    /// Check if any candidate binary for this profile exists on system PATH or toolchain directories.
+    /// Returns the resolved candidate binary name and its absolute path.
+    pub fn resolve_binary_path(profile: &LspServerProfile) -> Option<(String, PathBuf)> {
         for candidate in profile.binary_candidates {
-            if is_on_path(candidate) {
-                return Some((*candidate).to_string());
+            if let Some(path) = find_executable(candidate) {
+                return Some(((*candidate).to_string(), path));
             }
         }
         None
+    }
+
+    /// Check if any candidate binary for this profile exists on system PATH.
+    /// Returns the resolved binary name if found.
+    pub fn resolve_binary(profile: &LspServerProfile) -> Option<String> {
+        Self::resolve_binary_path(profile).map(|(name, _)| name)
     }
 
     /// Discover workspace root directory for a target file.
@@ -217,23 +223,72 @@ impl LspRegistry {
     }
 }
 
-/// Check whether an executable exists on the system PATH.
-pub fn is_on_path(executable: &str) -> bool {
-    let path_var = match std::env::var_os("PATH") {
-        Some(v) => v,
-        None => return false,
-    };
+/// Helper to collect candidate directories to search for executables.
+/// Includes system PATH plus common user toolchain directories.
+pub fn search_directories() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
 
+    if let Some(path_var) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path_var));
+    }
+
+    // Include common user-local toolchain directories if present
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+
+    if let Some(home_dir) = home {
+        let cargo_bin = home_dir.join(".cargo").join("bin");
+        if cargo_bin.is_dir() && !dirs.contains(&cargo_bin) {
+            dirs.push(cargo_bin);
+        }
+        let transcend_bin = home_dir.join(".transcend").join("bin");
+        if transcend_bin.is_dir() && !dirs.contains(&transcend_bin) {
+            dirs.push(transcend_bin);
+        }
+        let go_bin = home_dir.join("go").join("bin");
+        if go_bin.is_dir() && !dirs.contains(&go_bin) {
+            dirs.push(go_bin);
+        }
+        #[cfg(windows)]
+        {
+            if let Some(appdata) = std::env::var_os("APPDATA") {
+                let npm_dir = PathBuf::from(appdata).join("npm");
+                if npm_dir.is_dir() && !dirs.contains(&npm_dir) {
+                    dirs.push(npm_dir);
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let local_bin = home_dir.join(".local").join("bin");
+            if local_bin.is_dir() && !dirs.contains(&local_bin) {
+                dirs.push(local_bin);
+            }
+            let npm_global = home_dir.join(".npm-global").join("bin");
+            if npm_global.is_dir() && !dirs.contains(&npm_global) {
+                dirs.push(npm_global);
+            }
+        }
+    }
+
+    dirs
+}
+
+/// Locate an executable across PATH and toolchain directories, returning its absolute path.
+pub fn find_executable(executable: &str) -> Option<PathBuf> {
     #[cfg(windows)]
     let extensions: Vec<String> = {
         let pathext = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
         pathext.split(';').map(|s| s.to_lowercase()).collect()
     };
 
-    for dir in std::env::split_paths(&path_var) {
+    let dirs = search_directories();
+
+    for dir in dirs {
         let direct = dir.join(executable);
         if direct.is_file() {
-            return true;
+            return Some(direct);
         }
 
         #[cfg(windows)]
@@ -241,13 +296,18 @@ pub fn is_on_path(executable: &str) -> bool {
             for ext in &extensions {
                 let with_ext = dir.join(format!("{executable}{ext}"));
                 if with_ext.is_file() {
-                    return true;
+                    return Some(with_ext);
                 }
             }
         }
     }
 
-    false
+    None
+}
+
+/// Check whether an executable exists on the system PATH or toolchain directories.
+pub fn is_on_path(executable: &str) -> bool {
+    find_executable(executable).is_some()
 }
 
 #[cfg(test)]

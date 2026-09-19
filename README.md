@@ -12,8 +12,8 @@
 <p align="center">
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
-  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-21%20Tools-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-111%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-23%20Tools-8A2BE2" alt="MCP Compatible"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-115%20passed-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
@@ -34,7 +34,7 @@ Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are tr
 
 Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
 
-Transcend replaces blind scraping with **21 typed, AST-aware, LSP-native, terminal execution, and version control primitives** organized across four computational tiers:
+Transcend replaces blind scraping with **23 typed, AST-aware, LSP-native, terminal execution, and version control primitives** organized across four computational tiers:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -63,6 +63,8 @@ Transcend replaces blind scraping with **21 typed, AST-aware, LSP-native, termin
 │    lsp_references     Semantic Multi-File Usage Extraction                             │
 │    lsp_hover          Distilled Type Signatures & Cleaned Documentation                │
 │    lsp_diagnostics    Auto-Warming Real-Time Compiler Diagnostics (JSON Fallback)      │
+│    lsp_status         Audit Detected Language Servers, Locations & Recipes             │
+│    lsp_install        Automated Language Server Installation via Host Package Managers │
 │                                                                                        │
 │  [ Tier 3: Hybrid Terminal & PTY Execution ]                                           │
 │    exec               Hybrid One-Shot Execution with Auto-Detach (Pipe vs PTY)         │
@@ -188,6 +190,19 @@ Transcend integrates official, standardized language servers over asynchronous s
 ### 15. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
 - **Live Background Stream**: Subscribes to `textDocument/publishDiagnostics` published by language servers during session edits.
 - **Precise Filtering**: Filters diagnostics by file path and severity (`Error`, `Warning`, `Information`, `Hint`).
+- **Native Fallback**: Automatically invokes in-process `cargo check --message-format=json` compiler diagnostics when language server binaries are unavailable.
+
+### 16. `lsp_status` — Language Server Audit & Recipe Discovery
+Audits all 18 supported language server profiles across system `PATH` and toolchain directories (`~/.cargo/bin`, `%APPDATA%\npm`, `~/.transcend/bin`, `~/go/bin`).
+- **Dynamic Resolution**: Discovers candidate binaries dynamically in priority order with zero hardcoded paths.
+- **Probe & Version**: Safely queries `--version` or `version` with bounded timeouts, filtering out shell errors.
+- **Recipe Manifest**: Returns available installation recipes and detects whether each package manager is available on the host.
+
+### 17. `lsp_install` — Automated Language Server Installation
+Enables agents and developers to install missing language servers on demand.
+- **Auto-Selection**: Inspects available host package managers (`npm`, `rustup`, `cargo`, `go`, `pip`, `dotnet`, `winget`, `brew`) and selects the optimal recipe.
+- **Async Execution & Safety**: Bounded 180-second timeout with full stdout/stderr capture and exit code checks.
+- **Immediate Verification**: Confirms post-install executable discovery and fetches the active version string without requiring system restart.
 
 ---
 
@@ -230,26 +245,26 @@ Transcend solves the fundamental dilemma of agent shell execution by decoupling 
            output, exit_code, cursor                        Return status: "detached", session_id
 ```
 
-### 16. `exec` — Hybrid Execution with Auto-Detach
+### 18. `exec` — Hybrid Execution with Auto-Detach
 - **Fast Path (Single Turn)**: Routine commands that exit within `timeout_ms` (e.g. `cargo check`, `git status`) return immediate exit codes and output in a single tool turn without multi-turn polling overhead.
 - **Auto-Detach (Long-Running Tasks)**: Long-running servers (`npm run dev`, `cargo watch`, Python REPLs) automatically detach without hanging the turn, returning a persistent `session_id`.
 - **Decoupled Transport**: Automatically uses `pipe` for quiet batch utilities and `pty` (ConPTY / openpty) for TTY-aware tools.
 - **Direct Raw Mode**: Supports `raw: true` for direct binary execution avoiding shell interpretation.
 
-### 17. `terminal_read` — Cursor-Based Incremental Output Streaming
+### 19. `terminal_read` — Cursor-Based Incremental Output Streaming
 - **Monotonic Cursor**: Accepts `cursor: usize` and returns `next_cursor: usize`. Subsequent turns read only new output, eliminating repetitive context-wasteful re-reads.
 - **Pattern Await**: Optional `wait_for_pattern` waits for specific terminal prompts (e.g. `Ready on http://localhost`) before returning.
 - **CR (`\r`) Line Folding**: Interactive CLI progress bars, spinners, and download counters are folded to their final state in-place, slashing token usage by up to 90%.
 - **ANSI Sanitization**: In-process terminal escape sequence stripping via `strip-ansi-escapes`.
 - **Ring Buffer Bounds**: 1 MB bounded circular buffer with head/tail slicing protects against out-of-memory crashes on runaway output.
 
-### 18. `terminal_write` — Interactive Stdin Delivery
+### 20. `terminal_write` — Interactive Stdin Delivery
 - Injects keystrokes, commands, and interactive responses (`y\n`, Ctrl+C `\x03`) into active detached sessions and REPLs.
 
-### 19. `terminal_resize` — PTY Dimension Control
+### 21. `terminal_resize` — PTY Dimension Control
 - Adjusts pseudo terminal column and row geometry (`cols`, `rows`) to adapt output layouts for CLI dashboards and TUIs.
 
-### 20. `terminal_kill` — Process Tree Termination
+### 22. `terminal_kill` — Process Tree Termination
 - **Windows Job Objects**: Binds process trees to kernel Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring that complex child/grandchild processes (`node.exe`, `vite.exe`) are killed atomically without port leaks.
 - **Asynchronous PTY Disposal**: Cleans up ConPTY pseudo console handles on dedicated background worker threads to prevent Win32 synchronous pipe-drain deadlocks.
 
@@ -257,10 +272,11 @@ Transcend solves the fundamental dilemma of agent shell execution by decoupling 
 
 ## Tier 4: Version Control & Git Lifecycle
 
-### 21. `git_status` — Structured Porcelain v2 Git Inspector
+### 23. `git_status` — Structured Porcelain v2 Git Inspector
 Replaces terminal string scraping like `git status -s` with strongly-typed, token-compact JSON.
 - **Full State Breakdown**: Categorizes modified files into `staged`, `unstaged`, `untracked`, and `conflicted` lists.
 - **Branch & Tracking Awareness**: Extracts active branch (`branch`), tracking upstream (`upstream`), and precise commit divergence (`ahead`, `behind`).
+- **Clean Indicator**: `is_clean: true` allows agents to instantly verify repository state before or after batch modifications.
 - **Clean Indicator**: `is_clean: true` allows agents to instantly verify repository state before or after batch modifications.
 
 ---
@@ -324,6 +340,24 @@ cargo build --release
 Run test suite to verify:
 ```bash
 cargo test --workspace
+```
+
+### CLI Subcommands
+
+Transcend operates both as an MCP server daemon and as a standalone CLI tool:
+
+```bash
+# Audit detected language servers, binary paths, and recipes
+transcend lsp status
+
+# Audit a specific language server
+transcend lsp status typescript
+
+# Automatically install an official language server
+transcend lsp install typescript
+
+# Install using a specific package manager
+transcend lsp install python --method pip
 ```
 
 ---
@@ -391,9 +425,9 @@ Transcend/
 │   │   ├── patch.rs             # In-memory preflight AST verification, splicing, and batch changesets
 │   │   ├── file_ops.rs          # Bounded line/byte reader, atomic file creator, and contained deletion
 │   │   ├── git_ops.rs           # In-process porcelain v2 git status inspector
-│   │   ├── lsp/                 # LSP stdio JSON-RPC pool, coordinate bridge, and token distillation
+│   │   ├── lsp/                 # LSP stdio JSON-RPC pool, coordinate bridge, installer, and token distillation
 │   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
-│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (21 tools)
+│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (23 tools)
 │   └── transcend-cli/        # Binary entry point and CLI runner
 ├── banner.png                # Transcend visual identity
 └── Cargo.toml                # Workspace definition

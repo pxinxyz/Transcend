@@ -741,6 +741,97 @@ pub struct LspDiagnosticsResponse {
     pub severity_breakdown: BTreeMap<String, usize>,
 }
 
+/// Request to audit status and installation recipes of official language servers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspStatusRequest {
+    /// Optional language filter (e.g. "rust", "typescript", "python", "go").
+    /// If omitted, returns status for all 18 supported languages.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "lang")]
+    pub language: Option<String>,
+}
+
+/// An installation recipe for a language server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspInstallRecipe {
+    /// Package manager or installation tool (e.g. "npm", "rustup", "cargo", "pip", "go", "winget", "brew").
+    pub manager: String,
+    /// Exact shell command for installation.
+    pub command: String,
+    /// Whether the required package manager is available on the host system.
+    pub available: bool,
+    /// Human-readable explanation or package notes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Current status and installation profile for a language server.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspServerStatus {
+    /// Canonical language identifier (e.g. "rust", "typescript", "python").
+    pub language: String,
+    /// Primary candidate binary name (e.g. "rust-analyzer", "pyright-langserver").
+    pub primary_binary: String,
+    /// Whether any candidate binary is currently installed and discoverable.
+    pub installed: bool,
+    /// Resolved executable binary name if installed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Full path to the executable if installed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Reported version string (e.g. "rust-analyzer 1.85.0").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Available installation recipes for this language server.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub install_methods: Vec<LspInstallRecipe>,
+}
+
+/// Response returned by an LSP status query.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspStatusResponse {
+    /// List of language server profiles and their current host status.
+    pub servers: Vec<LspServerStatus>,
+    /// Total count of servers inspected.
+    pub total_servers: usize,
+    /// Count of servers currently installed.
+    pub total_installed: usize,
+}
+
+/// Request to install a language server.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspInstallRequest {
+    /// Canonical language ID to install (e.g. "rust", "typescript", "python", "go").
+    #[serde(alias = "lang")]
+    pub language: String,
+    /// Specific package manager or recipe to use (e.g. "npm", "rustup", "cargo", "pip", "go", "auto").
+    /// Defaults to "auto", selecting the highest-priority available package manager.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "manager")]
+    pub method: Option<String>,
+}
+
+/// Response returned by an LSP installation operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct LspInstallResponse {
+    /// Whether installation succeeded and the binary is now discoverable.
+    pub success: bool,
+    /// Canonical language ID.
+    pub language: String,
+    /// Resolved binary name after installation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+    /// Absolute path to the newly installed binary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Version reported by the newly installed binary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// Stdout and stderr logs captured during execution.
+    pub output: String,
+    /// Human-readable summary message.
+    pub message: String,
+}
+
 // =========================================================================
 // Terminal & Execution Subsystem Contracts
 // =========================================================================

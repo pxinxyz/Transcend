@@ -9,7 +9,8 @@ use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
     ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, GitStatusRequest, GitStatusResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
-    LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
+    LspHoverRequest, LspHoverResponse, LspInstallRequest, LspInstallResponse, LspReferencesRequest,
+    LspReferencesResponse, LspStatusRequest, LspStatusResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
     ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, SetWorkspaceRequest,
     SetWorkspaceResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
@@ -156,6 +157,30 @@ impl TranscendServer {
         Parameters(req): Parameters<LspDiagnosticsRequest>,
     ) -> Result<Json<LspDiagnosticsResponse>, String> {
         self.engine.lsp_diagnostics(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Audit status and available installation recipes for official language servers.
+    #[tool(
+        name = "lsp_status",
+        description = "Audit status and available installation recipes for official language servers"
+    )]
+    pub async fn lsp_status(
+        &self,
+        Parameters(req): Parameters<LspStatusRequest>,
+    ) -> Result<Json<LspStatusResponse>, String> {
+        self.engine.lsp_status(&req).await.map(Json).map_err(|e| e.to_string())
+    }
+
+    /// Automatically install an official language server using host package managers.
+    #[tool(
+        name = "lsp_install",
+        description = "Automatically install an official language server using host package managers"
+    )]
+    pub async fn lsp_install(
+        &self,
+        Parameters(req): Parameters<LspInstallRequest>,
+    ) -> Result<Json<LspInstallResponse>, String> {
+        self.engine.lsp_install(&req).await.map(Json).map_err(|e| e.to_string())
     }
 
     /// Execute a command in an isolated terminal or process with hybrid lifecycle control.
@@ -493,6 +518,8 @@ pub fn compute() -> i32 {
                 ("lsp_references", "Find all compiler-resolved references and call sites across the workspace", serde_json::to_value(schemars::schema_for!(LspReferencesRequest)).unwrap()),
                 ("lsp_hover", "Inspect inferred type signature and documentation for a symbol or position", serde_json::to_value(schemars::schema_for!(LspHoverRequest)).unwrap()),
                 ("lsp_diagnostics", "Retrieve compiler diagnostics (errors, warnings) for a file or workspace", serde_json::to_value(schemars::schema_for!(LspDiagnosticsRequest)).unwrap()),
+                ("lsp_status", "Audit status and available installation recipes for official language servers", serde_json::to_value(schemars::schema_for!(LspStatusRequest)).unwrap()),
+                ("lsp_install", "Automatically install an official language server using host package managers", serde_json::to_value(schemars::schema_for!(LspInstallRequest)).unwrap()),
                 ("exec", "Execute a command in an isolated terminal or process with hybrid lifecycle control", serde_json::to_value(schemars::schema_for!(ExecRequest)).unwrap()),
                 ("terminal_read", "Read output from a running or exited terminal session using incremental cursors", serde_json::to_value(schemars::schema_for!(TerminalReadRequest)).unwrap()),
                 ("terminal_write", "Send input, keystrokes, or signals to a running terminal session", serde_json::to_value(schemars::schema_for!(TerminalWriteRequest)).unwrap()),
@@ -617,6 +644,21 @@ pub fn compute() -> i32 {
 
         assert!(res.0.is_git_repo);
         assert!(!res.0.branch.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_lsp_status_tool() {
+        let server = TranscendServer::default();
+        let res = server
+            .lsp_status(Parameters(LspStatusRequest {
+                language: Some("rust".to_string()),
+            }))
+            .await
+            .expect("lsp_status should succeed");
+
+        assert_eq!(res.0.total_servers, 1);
+        assert_eq!(res.0.servers[0].language, "rust");
+        assert!(!res.0.servers[0].install_methods.is_empty());
     }
 }
 
