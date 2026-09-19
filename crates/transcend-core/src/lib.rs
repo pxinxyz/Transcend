@@ -6,6 +6,7 @@
 pub mod file_ops;
 pub mod find;
 pub mod find_symbol;
+pub mod git_ops;
 pub mod lsp;
 pub mod outline;
 pub mod patch;
@@ -19,6 +20,7 @@ use thiserror::Error;
 use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
     ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    GitStatusRequest, GitStatusResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
@@ -122,6 +124,9 @@ pub trait Engine: Send + Sync {
 
     /// Retrieve the currently active or auto-detected workspace root.
     fn get_workspace(&self) -> PathBuf;
+
+    /// Inspect structured git status for a repository directory.
+    fn git_status<'a>(&'a self, req: &'a GitStatusRequest) -> BoxFuture<'a, CoreResult<GitStatusResponse>>;
 }
 
 /// Default in-process engine implementation.
@@ -367,6 +372,17 @@ impl Engine for NativeEngine {
     fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>> {
         Box::pin(async move {
             self.terminal.kill(req).await
+        })
+    }
+
+    fn git_status<'a>(&'a self, req: &'a GitStatusRequest) -> BoxFuture<'a, CoreResult<GitStatusResponse>> {
+        let target_dir = self.resolve_path(req.path.as_deref());
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                crate::git_ops::GitEngine::status(&target_dir)
+            })
+            .await
+            .map_err(|e| CoreError::General(format!("Git task join error: {e}")))?
         })
     }
 }
@@ -3171,6 +3187,162 @@ pub fn compute_checksum(val: u32) -> u32 {
             serde_json::from_value(json!({ "query": "struct Engine", "dir": "crates" })).unwrap();
         assert_eq!(search_req.pattern, "struct Engine");
         assert_eq!(search_req.path, Some("crates".to_string()));
+    }
+
+    #[test]
+    fn test_batch_patch_consolidated_diff() {
+        let sandbox = TestSandbox::create();
+        let target = sandbox.dir.join("multi_patch.rs");
+        fs::write(
+            &target,
+            "fn compute() {\n    let a = 1;\n    let b = 2;\n    let sum = a + b;\n}\n",
+        )
+        .unwrap();
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .batch_patch(&BatchPatchRequest {
+                patches: vec![
+                    PatchRequest {
+                        path: target.to_string_lossy().to_string(),
+                        target_text: Some("let a = 1;".to_string()),
+                        replacement: "let a = 10;".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                    PatchRequest {
+                        path: target.to_string_lossy().to_string(),
+                        target_text: Some("let b = 2;".to_string()),
+                        replacement: "let b = 20;".to_string(),
+                        validate_ast: Some(true),
+                        ..Default::default()
+                    },
+                ],
+                validate_ast: Some(true),
+                dry_run: Some(false),
+            })
+            .expect("batch_patch should succeed");
+
+        assert!(res.success);
+        assert_eq!(res.total_files_patched, 1);
+        let diff = res.diff.expect("consolidated diff should be present");
+        assert_eq!(diff.matches("--- a/").count(), 1);
+        assert_eq!(diff.matches("+++ b/").count(), 1);
+        assert!(diff.contains("+    let a = 10;"));
+        assert!(diff.contains("+    let b = 20;"));
+    }
+
+    #[test]
+    fn test_read_file_fast_chunked_counting() {
+        let sandbox = TestSandbox::create();
+        let target = sandbox.dir.join("massive.txt");
+        let mut f = fs::File::create(&target).unwrap();
+        use std::io::Write;
+        for i in 1..=20_000 {
+            writeln!(f, "Line number {i} with payload data").unwrap();
+        }
+        drop(f);
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .read_file(&transcend_protocol::ReadFileRequest {
+                path: target.to_string_lossy().to_string(),
+                start_line: Some(1),
+                end_line: Some(5),
+                line_numbers: Some(true),
+                max_bytes: None,
+            })
+            .expect("read_file should succeed");
+
+        assert_eq!(res.start_line, 1);
+        assert_eq!(res.end_line, 5);
+        assert_eq!(res.total_lines, 20_000);
+        assert!(res.content.contains("    1 | Line number 1"));
+        assert!(res.content.contains("    5 | Line number 5"));
+        assert!(!res.content.contains("Line number 6"));
+    }
+
+    #[test]
+    fn test_find_symbol_smart_casing_and_fuzzy_subsequence() {
+        let sandbox = TestSandbox::create();
+        let src_file = sandbox.dir.join("processor.rs");
+        fs::write(
+            &src_file,
+            "pub fn SetupVmcsForProcessor() -> bool { true }\npub fn SetupVmcs() -> bool { true }\n",
+        )
+        .unwrap();
+
+        let engine = NativeEngine::new();
+
+        // 1. Exact match with casing normalization: "setup_vmcs" -> "SetupVmcs"
+        let res_exact = engine
+            .find_symbol(&transcend_protocol::FindSymbolRequest {
+                name: "setup_vmcs".to_string(),
+                path: Some(sandbox.path_str()),
+                exact: Some(true),
+                fuzzy: Some(false),
+                ..Default::default()
+            })
+            .expect("find_symbol should succeed");
+
+        assert!(res_exact.symbols.iter().any(|s| s.name == "SetupVmcs" && s.is_exact));
+
+        // 2. Fuzzy subsequence match: "setup_vmcs" -> "SetupVmcsForProcessor"
+        let res_fuzzy = engine
+            .find_symbol(&transcend_protocol::FindSymbolRequest {
+                name: "setup_vmcs".to_string(),
+                path: Some(sandbox.path_str()),
+                exact: Some(false),
+                fuzzy: Some(true),
+                ..Default::default()
+            })
+            .expect("find_symbol should succeed");
+
+        assert!(res_fuzzy.symbols.iter().any(|s| s.name == "SetupVmcsForProcessor"));
+    }
+
+    #[test]
+    fn test_git_status_porcelain_v2_parser() {
+        let mock_output = "\
+# branch.oid 1234567890abcdef
+# branch.head feature/mcp-hardening
+# branch.upstream origin/feature/mcp-hardening
+# branch.ab +2 -1
+1 .M N... 100644 100644 100644 abc def crates/core/src/lib.rs
+1 M. N... 100644 100644 100644 abc def crates/protocol/src/lib.rs
+2 R. N... 100644 100644 100644 abc def R100 new_name.rs\told_name.rs
+u UU N... 100644 100644 100644 abc def conflict.rs
+? untracked_file.txt
+";
+
+        let parsed = crate::git_ops::GitEngine::parse_porcelain_v2(mock_output).unwrap();
+        assert!(parsed.is_git_repo);
+        assert_eq!(parsed.branch, "feature/mcp-hardening");
+        assert_eq!(parsed.upstream.as_deref(), Some("origin/feature/mcp-hardening"));
+        assert_eq!(parsed.ahead, 2);
+        assert_eq!(parsed.behind, 1);
+        assert_eq!(parsed.unstaged.len(), 1);
+        assert_eq!(parsed.unstaged[0].path, "crates/core/src/lib.rs");
+        assert_eq!(parsed.unstaged[0].status, transcend_protocol::GitFileStatus::Modified);
+        assert_eq!(parsed.staged.len(), 2);
+        assert_eq!(parsed.staged[0].path, "crates/protocol/src/lib.rs");
+        assert_eq!(parsed.staged[1].path, "new_name.rs");
+        assert_eq!(parsed.staged[1].original_path.as_deref(), Some("old_name.rs"));
+        assert_eq!(parsed.conflicted, vec!["conflict.rs".to_string()]);
+        assert_eq!(parsed.untracked, vec!["untracked_file.txt".to_string()]);
+        assert!(!parsed.is_clean);
+    }
+
+    #[tokio::test]
+    async fn test_native_engine_git_status() {
+        let engine = NativeEngine::new();
+        let res = engine
+            .git_status(&transcend_protocol::GitStatusRequest { path: None })
+            .await
+            .expect("git_status on active repository should succeed");
+
+        assert!(res.is_git_repo);
+        assert!(!res.branch.is_empty());
     }
 }
 

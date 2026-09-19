@@ -153,15 +153,43 @@ impl LspEngine {
     /// Retrieve active compiler diagnostics for file or workspace.
     pub async fn diagnostics(
         &self,
-        _engine: &NativeEngine,
+        engine: &NativeEngine,
         req: &LspDiagnosticsRequest,
     ) -> Result<LspDiagnosticsResponse, CoreError> {
+        let workspace_root = engine.get_workspace();
+
+        // 1. If path is provided, attempt to auto-warm / spawn the language server for that file
+        if let Some(ref path_str) = req.path {
+            let file_path = Path::new(path_str);
+            if file_path.exists() {
+                if let Ok(Some((session, _profile))) = self.pool.get_or_spawn(file_path).await {
+                    let _ = session.ensure_document_open(file_path).await;
+                    // Bounded debounce to allow server to publish diagnostics
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                }
+            }
+        }
+
         let active_sessions = self.pool.active_sessions().await;
         let mut all_diags = Vec::new();
 
         for session in active_sessions {
             let res = session.get_diagnostics(req.path.as_deref(), req.severity).await;
             all_diags.extend(res.diagnostics);
+        }
+
+        // 2. If no diagnostics obtained from LSP sessions (or no LSP installed), attempt native compiler JSON fallback
+        if all_diags.is_empty() {
+            let path_filter = req.path.clone();
+            let sev_filter = req.severity;
+            let root = workspace_root.clone();
+            let fallback_diags = tokio::task::spawn_blocking(move || {
+                HeuristicFallback::compiler_diagnostics(&root, path_filter.as_deref(), sev_filter)
+            })
+            .await
+            .unwrap_or_default();
+
+            all_diags.extend(fallback_diags);
         }
 
         let total_count = all_diags.len();

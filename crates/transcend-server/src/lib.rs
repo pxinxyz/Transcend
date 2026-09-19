@@ -7,7 +7,7 @@ use rmcp::{handler::server::wrapper::Parameters, tool, tool_router, Json};
 use transcend_core::{Engine, NativeEngine};
 use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
-    ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
+    ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse, GitStatusRequest, GitStatusResponse,
     LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
     LspHoverRequest, LspHoverResponse, LspReferencesRequest, LspReferencesResponse, OutlineRequest,
     OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
@@ -277,6 +277,18 @@ impl TranscendServer {
     ) -> Result<Json<SetWorkspaceResponse>, String> {
         self.engine.set_workspace(&req).map(Json).map_err(|e| e.to_string())
     }
+
+    /// Inspect structured git status for a repository directory without terminal text scraping.
+    #[tool(
+        name = "git_status",
+        description = "Inspect structured git status for a repository directory without terminal text scraping"
+    )]
+    pub async fn git_status(
+        &self,
+        Parameters(req): Parameters<GitStatusRequest>,
+    ) -> Result<Json<GitStatusResponse>, String> {
+        self.engine.git_status(&req).await.map(Json).map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +503,7 @@ pub fn compute() -> i32 {
                 ("delete_path", "Delete a file or directory safely within workspace boundaries", serde_json::to_value(schemars::schema_for!(DeletePathRequest)).unwrap()),
                 ("batch_patch", "Transactionally apply multiple patches across files with AST preflight and rollback guarantees", serde_json::to_value(schemars::schema_for!(BatchPatchRequest)).unwrap()),
                 ("set_workspace", "Configure or update the active project workspace root directory for all path-based operations", serde_json::to_value(schemars::schema_for!(SetWorkspaceRequest)).unwrap()),
+                ("git_status", "Inspect structured git status for a repository directory without terminal text scraping", serde_json::to_value(schemars::schema_for!(GitStatusRequest)).unwrap()),
             ];
 
             for (name, desc, schema) in tools {
@@ -589,6 +602,21 @@ pub fn compute() -> i32 {
 
         assert!(res.0.success);
         assert!(!res.0.workspace_root.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_server_git_status_tool() {
+        let server = TranscendServer::default();
+        let cur = std::env::current_dir().unwrap();
+        let res = server
+            .git_status(Parameters(GitStatusRequest {
+                path: Some(cur.to_string_lossy().to_string()),
+            }))
+            .await
+            .expect("git_status should succeed");
+
+        assert!(res.0.is_git_repo);
+        assert!(!res.0.branch.is_empty());
     }
 }
 

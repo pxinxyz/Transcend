@@ -20,7 +20,7 @@ use transcend_protocol::{
 };
 
 use crate::outline::scanner::{OutlineScanner, SupportedLang};
-use crate::outline::symbol_reader::SymbolReader;
+use crate::outline::symbol_reader::{tokenize_identifier, SymbolReader};
 use crate::{CoreError, CoreResult};
 
 pub struct SymbolFinder;
@@ -68,18 +68,27 @@ impl SymbolFinder {
         }
 
         let exact = req.exact.unwrap_or(true);
-        let case_sensitive = req.case_sensitive.unwrap_or(exact);
+        let fuzzy = req.fuzzy.unwrap_or(!exact);
+        let case_sensitive = req.case_sensitive.unwrap_or(false);
         let limit = req.limit.unwrap_or(20);
 
         // Normalize query for qualified lookups
         let query_normalized = query.replace('.', "::");
         // Leaf name for Stage 1 word-boundary search
         let leaf = query_normalized.rsplit("::").next().unwrap_or(query).trim();
+        let query_tokens = tokenize_identifier(leaf);
 
         // -------------------------------------------------------------
         // STAGE 1: Candidate File Discovery (Fast Ripgrep Pre-Filter)
         // -------------------------------------------------------------
-        let pattern = if exact {
+        let pattern = if query_tokens.len() > 1 {
+            if fuzzy {
+                query_tokens.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join(".*")
+            } else {
+                let joined_sep = query_tokens.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("[_-]?");
+                format!(r"({}|{})", regex::escape(leaf), joined_sep)
+            }
+        } else if exact {
             if leaf.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 format!(r"\b{}\b", regex::escape(leaf))
             } else {
@@ -214,9 +223,13 @@ impl SymbolFinder {
                     sym_match.matches(query, &query_normalized, req.kind.as_ref())
                 } else {
                     sym_match.matches_case_insensitive(&query_lower, &query_norm_lower, req.kind.as_ref())
+                        || sym_match.matches_token_casing(&query_tokens, req.kind.as_ref())
                 };
 
-                let is_partial_match = !exact && sym_match.matches_partial(&query_lower, req.kind.as_ref());
+                let is_partial_match = (!exact || fuzzy) && (
+                    sym_match.matches_partial(&query_lower, req.kind.as_ref())
+                        || sym_match.matches_fuzzy_subsequence(&query_tokens, req.kind.as_ref())
+                );
 
                 if is_exact_match || is_partial_match {
                     total_matches += 1;

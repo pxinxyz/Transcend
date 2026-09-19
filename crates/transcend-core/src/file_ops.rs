@@ -134,6 +134,30 @@ impl FileOps {
             }
 
             line_buf.clear();
+
+            // Fast-path: once target end_line has been collected, switch to fast chunked newline counting
+            if let Some(el) = end_line_req {
+                if line_no >= el {
+                    let mut chunk = [0u8; 65536];
+                    let mut has_bytes_after = false;
+                    let mut last_byte = 0u8;
+                    loop {
+                        let n = reader.read(&mut chunk).map_err(|e| {
+                            CoreError::General(format!("Failed to count remaining lines in {}: {e}", path.display()))
+                        })?;
+                        if n == 0 {
+                            break;
+                        }
+                        has_bytes_after = true;
+                        last_byte = chunk[n - 1];
+                        total_lines += chunk[..n].iter().filter(|&&b| b == b'\n').count();
+                    }
+                    if has_bytes_after && last_byte != b'\n' {
+                        total_lines += 1;
+                    }
+                    break;
+                }
+            }
         }
 
         if total_lines == 0 {

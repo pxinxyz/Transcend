@@ -68,6 +68,96 @@ impl<'a> SymbolMatch<'a> {
         }
         false
     }
+
+    pub(crate) fn matches_token_casing(&self, query_tokens: &[String], kind_filter: Option<&SymbolKind>) -> bool {
+        if let Some(kind) = kind_filter {
+            if &self.symbol.kind != kind {
+                return false;
+            }
+        }
+        let sym_tokens = tokenize_identifier(&self.symbol.name);
+        if sym_tokens == query_tokens {
+            return true;
+        }
+        for alias in &self.aliases {
+            if tokenize_identifier(alias) == query_tokens {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub(crate) fn matches_fuzzy_subsequence(&self, query_tokens: &[String], kind_filter: Option<&SymbolKind>) -> bool {
+        if let Some(kind) = kind_filter {
+            if &self.symbol.kind != kind {
+                return false;
+            }
+        }
+        let sym_tokens = tokenize_identifier(&self.symbol.name);
+        if is_token_subsequence(query_tokens, &sym_tokens) {
+            return true;
+        }
+        for alias in &self.aliases {
+            if is_token_subsequence(query_tokens, &tokenize_identifier(alias)) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Deconstruct an identifier into lowercase word tokens, splitting across underscores,
+/// hyphens, colons, dots, and camelCase / PascalCase word boundaries.
+pub fn tokenize_identifier(s: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = s.chars().collect();
+
+    for i in 0..chars.len() {
+        let c = chars[i];
+        if c == '_' || c == '-' || c == ':' || c == '.' || c == '/' || c == '\\' {
+            if !current.is_empty() {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+            continue;
+        }
+
+        if c.is_uppercase() {
+            let prev_is_lower = i > 0 && chars[i - 1].is_lowercase();
+            let next_is_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+            let prev_is_upper = i > 0 && chars[i - 1].is_uppercase();
+
+            if (prev_is_lower && !current.is_empty()) || (prev_is_upper && next_is_lower && !current.is_empty()) {
+                tokens.push(current.to_lowercase());
+                current.clear();
+            }
+        }
+
+        current.push(c);
+    }
+
+    if !current.is_empty() {
+        tokens.push(current.to_lowercase());
+    }
+
+    tokens
+}
+
+/// Check if `query_tokens` appear as an ordered subsequence within `target_tokens`.
+pub fn is_token_subsequence(query_tokens: &[String], target_tokens: &[String]) -> bool {
+    if query_tokens.is_empty() || query_tokens.len() > target_tokens.len() {
+        return false;
+    }
+    let mut q_idx = 0;
+    for t in target_tokens {
+        if q_idx < query_tokens.len() {
+            if t == &query_tokens[q_idx] || t.starts_with(&query_tokens[q_idx]) {
+                q_idx += 1;
+            }
+        }
+    }
+    q_idx == query_tokens.len()
 }
 
 

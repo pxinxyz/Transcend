@@ -521,6 +521,9 @@ pub struct FindSymbolRequest {
     pub include_ignored: Option<bool>,
     /// Whether to search hidden files and directories. Defaults to false.
     pub include_hidden: Option<bool>,
+    /// Whether to enable smart casing and snake_case <-> camelCase fuzzy token matching. Defaults to true when exact is false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuzzy: Option<bool>,
 }
 
 /// A code symbol definition located across the workspace.
@@ -1070,4 +1073,71 @@ pub struct SetWorkspaceResponse {
     pub workspace_root: String,
     /// Status or diagnostic message.
     pub message: String,
+}
+
+// =========================================================================
+// Version Control & Git Operation Contracts
+// =========================================================================
+
+/// Status of a version-controlled file in git.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitFileStatus {
+    Modified,
+    Added,
+    Deleted,
+    Renamed,
+    TypeChanged,
+    Untracked,
+    Conflicted,
+}
+
+/// A version-controlled file entry with staging state.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct GitFileEntry {
+    /// Relative path from repository root.
+    pub path: String,
+    /// Git working tree / index status.
+    pub status: GitFileStatus,
+    /// Original path if renamed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_path: Option<String>,
+}
+
+/// Request parameters to inspect git status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct GitStatusRequest {
+    /// Optional directory path within the git repository. Defaults to active workspace root.
+    #[serde(skip_serializing_if = "Option::is_none", alias = "dir", alias = "directory", alias = "workspace_root")]
+    pub path: Option<String>,
+}
+
+/// Response containing structured, token-compact git repository status.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct GitStatusResponse {
+    /// Whether the directory is inside a git repository.
+    pub is_git_repo: bool,
+    /// Current checked-out branch name or commit SHA (e.g. "main", "HEAD (detached)").
+    pub branch: String,
+    /// Upstream tracking branch if configured (e.g. "origin/main").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+    /// Number of commits ahead of upstream.
+    pub ahead: usize,
+    /// Number of commits behind upstream.
+    pub behind: usize,
+    /// Staged file changes ready to commit.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub staged: Vec<GitFileEntry>,
+    /// Unstaged modifications in working tree.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub unstaged: Vec<GitFileEntry>,
+    /// Untracked files not yet added to version control.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub untracked: Vec<String>,
+    /// Files with unresolved merge conflicts.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub conflicted: Vec<String>,
+    /// Clean status indicator (true if working tree has no changes).
+    pub is_clean: bool,
 }

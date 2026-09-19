@@ -6,8 +6,9 @@
 use std::fs;
 use std::path::Path;
 use transcend_protocol::{
-    LspDefinitionResponse, LspHoverResponse, LspReferenceLocation, LspReferencesResponse,
-    LspTargetLocation, OutlineOptions, OutlineRequest, SearchOptions, SearchRequest, SourceSpan,
+    DiagnosticSeverity, LspDefinitionResponse, LspDiagnosticItem, LspHoverResponse,
+    LspReferenceLocation, LspReferencesResponse, LspTargetLocation, OutlineOptions, OutlineRequest,
+    SearchOptions, SearchRequest, SourceSpan,
 };
 
 use crate::{Engine, NativeEngine};
@@ -177,5 +178,95 @@ impl HeuristicFallback {
             span: None,
             engine: "tree-sitter:heuristic".to_string(),
         }
+    }
+
+    /// Attempt to retrieve compiler diagnostics via CLI JSON mode (e.g. cargo check, tsc, ruff/mypy).
+    pub fn compiler_diagnostics(
+        workspace_root: &Path,
+        file_path_filter: Option<&str>,
+        severity_filter: Option<DiagnosticSeverity>,
+    ) -> Vec<LspDiagnosticItem> {
+        let mut results = Vec::new();
+
+        // 1. Rust Project: Cargo.toml
+        if workspace_root.join("Cargo.toml").exists() {
+            let output = std::process::Command::new("cargo")
+                .args(["check", "--message-format=json", "--quiet"])
+                .current_dir(workspace_root)
+                .output();
+
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                for line in stdout.lines() {
+                    let trimmed = line.trim();
+                    if !trimmed.starts_with('{') {
+                        continue;
+                    }
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                        if val.get("reason").and_then(|r| r.as_str()) == Some("compiler-message") {
+                            if let Some(msg) = val.get("message") {
+                                let level = msg.get("level").and_then(|l| l.as_str()).unwrap_or("error");
+                                let severity = match level {
+                                    "error" => DiagnosticSeverity::Error,
+                                    "warning" => DiagnosticSeverity::Warning,
+                                    "note" => DiagnosticSeverity::Information,
+                                    "help" => DiagnosticSeverity::Hint,
+                                    _ => DiagnosticSeverity::Error,
+                                };
+
+                                if let Some(req_sev) = severity_filter {
+                                    if severity != req_sev {
+                                        continue;
+                                    }
+                                }
+
+                                let message_text = msg.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                                let code = msg.get("code").and_then(|c| c.get("code")).and_then(|c| c.as_str()).map(|s| s.to_string());
+
+                                if let Some(spans) = msg.get("spans").and_then(|s| s.as_array()) {
+                                    let target_span = spans.iter().find(|s| s.get("is_primary").and_then(|p| p.as_bool()) == Some(true))
+                                        .or_else(|| spans.first());
+
+                                    if let Some(span_val) = target_span {
+                                        let file_name = span_val.get("file_name").and_then(|f| f.as_str()).unwrap_or("").replace('\\', "/");
+                                        if let Some(filter) = file_path_filter {
+                                            let filter_norm = filter.replace('\\', "/");
+                                            if !file_name.ends_with(&filter_norm) && !filter_norm.ends_with(&file_name) {
+                                                continue;
+                                            }
+                                        }
+
+                                        let line_start = span_val.get("line_start").and_then(|l| l.as_u64()).unwrap_or(1) as usize;
+                                        let line_end = span_val.get("line_end").and_then(|l| l.as_u64()).unwrap_or(line_start as u64) as usize;
+                                        let col_start = span_val.get("column_start").and_then(|c| c.as_u64()).unwrap_or(1) as usize;
+                                        let col_end = span_val.get("column_end").and_then(|c| c.as_u64()).unwrap_or(col_start as u64) as usize;
+                                        let byte_start = span_val.get("byte_start").and_then(|b| b.as_u64()).unwrap_or(0) as usize;
+                                        let byte_end = span_val.get("byte_end").and_then(|b| b.as_u64()).unwrap_or(byte_start as u64) as usize;
+
+                                        results.push(LspDiagnosticItem {
+                                            file: file_name,
+                                            span: SourceSpan {
+                                                start_line: line_start,
+                                                start_col: col_start,
+                                                end_line: line_end,
+                                                end_col: col_end,
+                                                start_byte: byte_start,
+                                                end_byte: byte_end,
+                                            },
+                                            severity,
+                                            code,
+                                            source: Some("rustc".to_string()),
+                                            message: message_text,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        results
     }
 }

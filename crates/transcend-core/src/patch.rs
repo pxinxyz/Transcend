@@ -455,7 +455,6 @@ impl Patcher {
             std::collections::HashMap::new();
         let mut simulated_results = Vec::with_capacity(req.patches.len());
         let mut accumulated_syntax_errors = Vec::new();
-        let mut combined_diff = String::new();
         let mut any_failed = false;
 
         for patch_req in &req.patches {
@@ -516,17 +515,29 @@ impl Patcher {
                 working_buffers.insert(path_buf.clone(), new_bytes);
             }
 
-            if let Some(ref d) = res.diff {
-                if !d.is_empty() {
-                    combined_diff.push_str(d);
-                    combined_diff.push('\n');
-                }
-            }
-
             simulated_results.push(res);
         }
 
         let distinct_files: std::collections::HashSet<_> = req.patches.iter().map(|p| &p.path).collect();
+
+        // Phase 1.5: Compute Consolidated Cumulative Diff per File
+        let mut consolidated_diff = String::new();
+        let mut sorted_paths: Vec<_> = working_buffers.keys().cloned().collect();
+        sorted_paths.sort();
+        for path_buf in sorted_paths {
+            if let (Some(orig), Some(curr)) = (original_contents.get(&path_buf), working_buffers.get(&path_buf)) {
+                if orig != curr {
+                    let display_path = path_buf.to_string_lossy();
+                    if let Some(d) = Self::generate_file_diff(&display_path, orig, curr) {
+                        if !consolidated_diff.is_empty() {
+                            consolidated_diff.push('\n');
+                        }
+                        consolidated_diff.push_str(&d);
+                    }
+                }
+            }
+        }
+        let final_diff = if consolidated_diff.is_empty() { None } else { Some(consolidated_diff) };
 
         if any_failed {
             return Ok(BatchPatchResponse {
@@ -535,7 +546,7 @@ impl Patcher {
                 total_files_patched: 0,
                 all_ast_valid: false,
                 syntax_errors: accumulated_syntax_errors,
-                diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+                diff: final_diff,
                 message: "Batch patch aborted: one or more patches failed AST preflight validation or target resolution. No files modified on disk.".to_string(),
             });
         }
@@ -547,7 +558,7 @@ impl Patcher {
                 total_files_patched: distinct_files.len(),
                 all_ast_valid: true,
                 syntax_errors: vec![],
-                diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+                diff: final_diff,
                 message: "Dry run: all patches in batch successfully validated. No changes written to disk.".to_string(),
             });
         }
@@ -608,9 +619,96 @@ impl Patcher {
             total_files_patched: distinct_files.len(),
             all_ast_valid: true,
             syntax_errors: vec![],
-            diff: if combined_diff.is_empty() { None } else { Some(combined_diff) },
+            diff: final_diff,
             message: format!("Successfully applied batch patch across {} files.", distinct_files.len()),
         })
+    }
+
+    /// Compute a unified diff between original bytes and modified bytes of a file.
+    pub fn generate_file_diff(
+        display_path: &str,
+        orig_bytes: &[u8],
+        new_bytes: &[u8],
+    ) -> Option<String> {
+        if orig_bytes == new_bytes {
+            return None;
+        }
+
+        let orig_str = String::from_utf8_lossy(orig_bytes);
+        let new_str = String::from_utf8_lossy(new_bytes);
+
+        let orig_lines: Vec<&str> = orig_str.lines().collect();
+        let new_lines: Vec<&str> = new_str.lines().collect();
+
+        if orig_lines.is_empty() && new_lines.is_empty() {
+            return None;
+        }
+
+        let prefix_len = orig_lines
+            .iter()
+            .zip(new_lines.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        let mut suffix_len = 0;
+        while suffix_len < orig_lines.len().saturating_sub(prefix_len)
+            && suffix_len < new_lines.len().saturating_sub(prefix_len)
+            && orig_lines[orig_lines.len() - 1 - suffix_len] == new_lines[new_lines.len() - 1 - suffix_len]
+        {
+            suffix_len += 1;
+        }
+
+        let ctx_before_start = prefix_len.saturating_sub(3);
+        let ctx_before_end = prefix_len;
+
+        let l_orig_start = prefix_len;
+        let l_orig_end = orig_lines.len().saturating_sub(suffix_len);
+
+        let l_new_start = prefix_len;
+        let l_new_end = new_lines.len().saturating_sub(suffix_len);
+
+        let ctx_after_start = l_orig_end;
+        let ctx_after_end = (l_orig_end + 3).min(orig_lines.len());
+
+        let orig_count = (ctx_before_end - ctx_before_start)
+            + (l_orig_end - l_orig_start)
+            + (ctx_after_end - ctx_after_start);
+        let new_count = (ctx_before_end - ctx_before_start)
+            + (l_new_end - l_new_start)
+            + (ctx_after_end - ctx_after_start);
+
+        let mut diff = String::new();
+        diff.push_str(&format!("--- a/{}\n", display_path));
+        diff.push_str(&format!("+++ b/{}\n", display_path));
+        diff.push_str(&format!(
+            "@@ -{},{} +{},{} @@\n",
+            ctx_before_start + 1,
+            orig_count,
+            ctx_before_start + 1,
+            new_count
+        ));
+
+        // Context before
+        for i in ctx_before_start..ctx_before_end {
+            diff.push_str(&format!(" {}\n", orig_lines[i]));
+        }
+
+        // Old lines (-)
+        for i in l_orig_start..l_orig_end {
+            diff.push_str(&format!("-{}\n", orig_lines[i]));
+        }
+
+        // New lines (+)
+        for i in l_new_start..l_new_end {
+            diff.push_str(&format!("+{}\n", new_lines[i]));
+        }
+
+        // Context after
+        for i in ctx_after_start..ctx_after_end {
+            diff.push_str(&format!(" {}\n", orig_lines[i]));
+        }
+
+        Some(diff)
     }
 
     fn collect_syntax_errors(
