@@ -386,12 +386,14 @@ Transcend/
 │   ├── transcend-protocol/   # Strongly-typed schemas, JSON-RPC contracts, and request/response models
 │   ├── transcend-core/       # Core computational engines:
 │   │   ├── find.rs / search.rs  # Ripgrep-grade search, directory radar, and diversity sampling
+│   │   ├── find_symbol.rs       # Smart casing & token subsequence definition finder
 │   │   ├── outline/             # 18 Tree-sitter parsers, semantic hierarchy, and syntax skeletonizer
 │   │   ├── patch.rs             # In-memory preflight AST verification, splicing, and batch changesets
 │   │   ├── file_ops.rs          # Bounded line/byte reader, atomic file creator, and contained deletion
+│   │   ├── git_ops.rs           # In-process porcelain v2 git status inspector
 │   │   ├── lsp/                 # LSP stdio JSON-RPC pool, coordinate bridge, and token distillation
 │   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
-│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (19 tools)
+│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (21 tools)
 │   └── transcend-cli/        # Binary entry point and CLI runner
 ├── banner.png                # Transcend visual identity
 └── Cargo.toml                # Workspace definition
