@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SearchRequest {
     /// Regular expression or text pattern to search for.
+    #[serde(alias = "query", alias = "regex")]
     pub pattern: String,
     /// Optional directory or file path to search within. Defaults to current directory.
+    #[serde(alias = "dir", alias = "directory", alias = "file_path", alias = "search_path")]
     pub path: Option<String>,
     /// Optional search tuning options.
     pub options: Option<SearchOptions>,
@@ -96,8 +98,10 @@ pub struct SearchResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindRequest {
     /// Optional filename pattern (e.g. "*.rs", "main", "Cargo.*") or glob. If omitted, lists all files.
+    #[serde(alias = "query", alias = "name", alias = "glob")]
     pub pattern: Option<String>,
     /// Optional root directory to begin search. Defaults to current directory.
+    #[serde(alias = "dir", alias = "directory", alias = "search_path")]
     pub path: Option<String>,
     /// Optional discovery tuning options.
     pub options: Option<FindOptions>,
@@ -280,7 +284,7 @@ pub struct OutlineSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutlineRequest {
     /// File path or directory to outline. If a directory, traverses respecting ignore rules.
-    #[serde(alias = "file_path")]
+    #[serde(alias = "file_path", alias = "file", alias = "dir", alias = "directory")]
     pub path: Option<String>,
     /// Optional direct code content (for in-memory buffer / unsaved code inspection).
     pub content: Option<String>,
@@ -328,10 +332,12 @@ pub struct OutlineResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ReadSymbolRequest {
     /// File path on disk.
+    #[serde(alias = "file", alias = "file_path")]
     pub path: Option<String>,
     /// Optional direct source content (for in-memory buffers / unsaved code inspection).
     pub content: Option<String>,
     /// Symbol locator: bare name (e.g. "poll") or qualified path (e.g. "Heartbeat::poll", "Uart.write_byte").
+    #[serde(alias = "name", alias = "symbol_name", alias = "query")]
     pub symbol: String,
     /// Optional symbol kind filter to disambiguate.
     pub kind: Option<SymbolKind>,
@@ -406,13 +412,13 @@ pub enum PatchMode {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PatchRequest {
     /// File path to patch.
-    #[serde(alias = "file_path")]
+    #[serde(alias = "file_path", alias = "file", alias = "target_file")]
     pub path: String,
     /// Splicing mode: "replace" (default), "insert_before", "insert_after", "prepend_to_symbol", or "append_to_symbol".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<PatchMode>,
     /// Target locator: symbol name (e.g. "Heartbeat::poll" or "SetupVmcsForProcessor").
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "symbol", alias = "name")]
     pub target_symbol: Option<String>,
     /// Occurrence index if multiple symbols share the name (0-based, default: 0).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -496,8 +502,10 @@ pub struct BatchPatchResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FindSymbolRequest {
     /// Symbol name or identifier pattern (e.g. "SetupVmcsForProcessor", "VmmContext", "poll").
+    #[serde(alias = "symbol", alias = "query", alias = "pattern")]
     pub name: String,
     /// Optional directory or file path to search within. Defaults to current directory.
+    #[serde(alias = "file", alias = "file_path", alias = "dir", alias = "directory")]
     pub path: Option<String>,
     /// Optional symbol kind filter (e.g. "function", "struct", "macro", "interface").
     pub kind: Option<SymbolKind>,
@@ -564,16 +572,17 @@ pub struct FindSymbolResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct LspDefinitionRequest {
     /// File path where the symbol or position is referenced.
+    #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Identifier name or symbol to find definition for (e.g. "poll", "Config::new").
     /// If provided, Tree-sitter resolves its coordinate in the file before querying LSP.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
     pub character: Option<usize>,
 }
 
@@ -602,15 +611,16 @@ pub struct LspDefinitionResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct LspReferencesRequest {
     /// File path where the symbol or position is referenced.
+    #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Identifier name or symbol to find references for.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
     pub character: Option<usize>,
     /// Whether to include the declaration/definition itself in the results. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -648,15 +658,16 @@ pub struct LspReferencesResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct LspHoverRequest {
     /// File path to inspect.
+    #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Identifier name or symbol to hover over.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
     pub character: Option<usize>,
 }
 
@@ -709,7 +720,7 @@ pub struct LspDiagnosticItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct LspDiagnosticsRequest {
     /// File or directory path to retrieve diagnostics for. If omitted, returns all workspace diagnostics.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "file", alias = "file_path", alias = "dir")]
     pub path: Option<String>,
     /// Optional severity filter (e.g. only return errors).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -774,9 +785,10 @@ pub enum ExecStatus {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ExecRequest {
     /// Shell command string to execute.
+    #[serde(alias = "cmd")]
     pub command: String,
     /// Working directory for execution. If omitted, defaults to the current workspace root.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", alias = "working_directory", alias = "dir")]
     pub cwd: Option<String>,
     /// Transport mode: "auto" (default), "pipe", or "pty".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -836,6 +848,7 @@ pub enum TerminalSessionStatus {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TerminalReadRequest {
     /// Identifier of the session to read from.
+    #[serde(alias = "id")]
     pub session_id: String,
     /// Read cursor offset. Only output appended after this cursor will be returned.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -873,6 +886,7 @@ pub struct TerminalReadResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TerminalWriteRequest {
     /// Identifier of the active session.
+    #[serde(alias = "id")]
     pub session_id: String,
     /// Raw text or control characters to send to the terminal stdin (e.g. "y\n", "\x03" for Ctrl+C).
     pub input: String,
@@ -891,6 +905,7 @@ pub struct TerminalWriteResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TerminalResizeRequest {
     /// Identifier of the active session.
+    #[serde(alias = "id")]
     pub session_id: String,
     /// Terminal column width (e.g. 120).
     pub cols: u16,
@@ -911,6 +926,7 @@ pub struct TerminalResizeResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct TerminalKillRequest {
     /// Identifier of the session to terminate.
+    #[serde(alias = "id")]
     pub session_id: String,
 }
 
@@ -937,6 +953,7 @@ pub struct TerminalKillResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ReadFileRequest {
     /// Path to file on disk.
+    #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Optional 1-based start line (inclusive). Defaults to 1.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -980,6 +997,7 @@ pub struct ReadFileResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct WriteFileRequest {
     /// Destination file path.
+    #[serde(alias = "file", alias = "file_path", alias = "target_file")]
     pub path: String,
     /// Text content to write.
     pub content: String,
@@ -1010,6 +1028,7 @@ pub struct WriteFileResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct DeletePathRequest {
     /// File or directory path to delete.
+    #[serde(alias = "file", alias = "file_path", alias = "target_path")]
     pub path: String,
     /// Whether to recursively delete non-empty directories. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1038,6 +1057,7 @@ pub struct DeletePathResponse {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct SetWorkspaceRequest {
     /// Workspace root directory path.
+    #[serde(alias = "workspace_root", alias = "dir", alias = "directory")]
     pub path: String,
 }
 

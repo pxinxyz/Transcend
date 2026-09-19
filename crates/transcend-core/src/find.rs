@@ -54,12 +54,20 @@ impl FindScanner {
             Some(pat) if !pat.is_empty() && pat != "*" => {
                 let case_insensitive = !case_sensitive;
                 if pat.contains('*') || pat.contains('?') || pat.contains('[') {
-                    let glob = GlobBuilder::new(pat)
+                    match GlobBuilder::new(pat)
                         .case_insensitive(case_insensitive)
                         .literal_separator(false)
                         .build()
-                        .map_err(|e| CoreError::InvalidPattern(e.to_string()))?;
-                    Some(PatternFilter::Glob(glob.compile_matcher()))
+                    {
+                        Ok(glob) => Some(PatternFilter::Glob(glob.compile_matcher())),
+                        Err(_) => {
+                            if case_sensitive {
+                                Some(PatternFilter::ExactSubstring(pat.clone()))
+                            } else {
+                                Some(PatternFilter::CaseInsensitiveSubstring(pat.to_lowercase()))
+                            }
+                        }
+                    }
                 } else if case_sensitive {
                     Some(PatternFilter::ExactSubstring(pat.clone()))
                 } else {

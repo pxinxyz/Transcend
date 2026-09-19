@@ -24,9 +24,10 @@ impl FileOps {
     /// Read file content with line/byte boundaries and binary safety checks.
     pub fn read_file(req: &ReadFileRequest) -> CoreResult<ReadFileResponse> {
         let path = Path::new(&req.path);
+        let display_path = crate::clean_path(path).to_string_lossy().to_string();
         if !path.exists() {
             return Ok(ReadFileResponse {
-                file: req.path.clone(),
+                file: display_path,
                 content: String::new(),
                 start_line: 0,
                 end_line: 0,
@@ -44,7 +45,7 @@ impl FileOps {
 
         if metadata.is_dir() {
             return Ok(ReadFileResponse {
-                file: req.path.clone(),
+                file: display_path,
                 content: String::new(),
                 start_line: 0,
                 end_line: 0,
@@ -63,23 +64,28 @@ impl FileOps {
             CoreError::General(format!("Failed to open file {}: {e}", path.display()))
         })?;
 
-        let mut probe_buffer = [0u8; 1024];
-        let bytes_read = file.read(&mut probe_buffer).unwrap_or(0);
-        if probe_buffer[..bytes_read].contains(&0x00) {
+        let mut probe = [0u8; 1024];
+        let bytes_read = file.read(&mut probe).map_err(|e| {
+            CoreError::General(format!("Failed to probe file header for {}: {e}", path.display()))
+        })?;
+
+        if probe[..bytes_read].contains(&0x00) {
             return Ok(ReadFileResponse {
-                file: req.path.clone(),
-                content: format!("[Binary file omitted: {} bytes]", size_bytes),
+                file: display_path,
+                content: format!("[Binary file omitted ({} bytes)]", size_bytes),
                 start_line: 0,
                 end_line: 0,
                 total_lines: 0,
                 size_bytes,
                 truncated: false,
                 is_binary: true,
-                message: Some("Binary file detected containing NUL bytes.".to_string()),
+                message: Some(format!(
+                    "Binary file detected (size: {} bytes). Content omitted for token safety.",
+                    size_bytes
+                )),
             });
         }
 
-        // 2. Stream file content line-by-line via BufReader with O(1) memory overhead
         file.seek(SeekFrom::Start(0)).map_err(|e| {
             CoreError::General(format!("Failed to rewind file {}: {e}", path.display()))
         })?;
@@ -103,27 +109,27 @@ impl FileOps {
             total_lines += 1;
             let line_no = total_lines;
 
-            let within_window = line_no >= start_line && match end_line_req {
-                Some(end) => line_no <= end,
-                None => true,
-            };
+            if line_no >= start_line && end_line_req.map_or(true, |el| line_no <= el) {
+                if !truncated {
+                    let decoded_line = String::from_utf8_lossy(&line_buf);
+                    let formatted_line = if line_numbers {
+                        format!("{:5} | {}", line_no, decoded_line)
+                    } else {
+                        decoded_line.into_owned()
+                    };
 
-            if within_window && !truncated {
-                let s = String::from_utf8_lossy(&line_buf);
-                let line_text = s.trim_end_matches(['\r', '\n']);
-
-                let formatted_line = if line_numbers {
-                    format!("{:>5} | {}\n", line_no, line_text)
-                } else {
-                    format!("{}\n", line_text)
-                };
-
-                if content.len() + formatted_line.len() > max_bytes && !content.is_empty() {
-                    truncated = true;
-                } else {
-                    content.push_str(&formatted_line);
-                    actual_end_line = line_no;
-                    collected_any = true;
+                    if content.len() + formatted_line.len() > max_bytes {
+                        let remaining_budget = max_bytes.saturating_sub(content.len());
+                        if remaining_budget > 0 {
+                            let clipped: String = formatted_line.chars().take(remaining_budget).collect();
+                            content.push_str(&clipped);
+                        }
+                        truncated = true;
+                    } else {
+                        content.push_str(&formatted_line);
+                        actual_end_line = line_no;
+                        collected_any = true;
+                    }
                 }
             }
 
@@ -132,7 +138,7 @@ impl FileOps {
 
         if total_lines == 0 {
             return Ok(ReadFileResponse {
-                file: req.path.clone(),
+                file: display_path,
                 content: String::new(),
                 start_line: 1,
                 end_line: 0,
@@ -146,7 +152,7 @@ impl FileOps {
 
         if start_line > total_lines {
             return Ok(ReadFileResponse {
-                file: req.path.clone(),
+                file: display_path,
                 content: String::new(),
                 start_line,
                 end_line: start_line,
@@ -171,7 +177,7 @@ impl FileOps {
         }
 
         Ok(ReadFileResponse {
-            file: req.path.clone(),
+            file: display_path,
             content,
             start_line,
             end_line: actual_end_line,
@@ -186,11 +192,12 @@ impl FileOps {
     /// Write text content to file atomically, with collision and parent directory guards.
     pub fn write_file(req: &WriteFileRequest) -> CoreResult<WriteFileResponse> {
         let target_path = Path::new(&req.path);
+        let display_path = crate::clean_path(target_path).to_string_lossy().to_string();
         let exists = target_path.exists();
 
         if exists && req.overwrite != Some(true) {
             return Ok(WriteFileResponse {
-                file: req.path.clone(),
+                file: display_path,
                 success: false,
                 bytes_written: 0,
                 created_new: false,
@@ -239,7 +246,7 @@ impl FileOps {
         }
 
         Ok(WriteFileResponse {
-            file: req.path.clone(),
+            file: display_path,
             success: true,
             bytes_written: req.content.len(),
             created_new: !exists,
@@ -254,9 +261,10 @@ impl FileOps {
     /// Delete file or directory within workspace safety boundaries.
     pub fn delete_path(req: &DeletePathRequest) -> CoreResult<DeletePathResponse> {
         let target_path = Path::new(&req.path);
+        let display_path = crate::clean_path(target_path).to_string_lossy().to_string();
         if !target_path.exists() {
             return Ok(DeletePathResponse {
-                path: req.path.clone(),
+                path: display_path,
                 success: false,
                 is_directory: false,
                 deleted_count: 0,
@@ -289,11 +297,13 @@ impl FileOps {
             target_path.canonicalize(),
             root_path.canonicalize(),
         ) {
-            if !canonical_target.starts_with(&canonical_root) {
+            let clean_canonical_target = crate::clean_path(&canonical_target);
+            let clean_canonical_root = crate::clean_path(&canonical_root);
+            if !clean_canonical_target.starts_with(&clean_canonical_root) {
                 return Err(CoreError::General(format!(
                     "Access denied: path '{}' escapes workspace boundary '{}'",
-                    target_path.display(),
-                    canonical_root.display()
+                    display_path,
+                    clean_canonical_root.display()
                 )));
             }
         }
@@ -307,7 +317,7 @@ impl FileOps {
                 })?;
                 if read_dir.next().is_some() {
                     return Ok(DeletePathResponse {
-                        path: req.path.clone(),
+                        path: display_path,
                         success: false,
                         is_directory: true,
                         deleted_count: 0,
@@ -321,7 +331,7 @@ impl FileOps {
                     CoreError::General(format!("Failed to remove directory {}: {e}", target_path.display()))
                 })?;
                 return Ok(DeletePathResponse {
-                    path: req.path.clone(),
+                    path: display_path,
                     success: true,
                     is_directory: true,
                     deleted_count: 1,
@@ -336,7 +346,7 @@ impl FileOps {
             })?;
 
             Ok(DeletePathResponse {
-                path: req.path.clone(),
+                path: display_path,
                 success: true,
                 is_directory: true,
                 deleted_count: count,
@@ -348,7 +358,7 @@ impl FileOps {
             })?;
 
             Ok(DeletePathResponse {
-                path: req.path.clone(),
+                path: display_path,
                 success: true,
                 is_directory: false,
                 deleted_count: 1,

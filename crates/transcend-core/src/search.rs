@@ -46,15 +46,25 @@ impl SearchScanner {
         let default_options = SearchOptions::default();
         let opts = req.options.as_ref().unwrap_or(&default_options);
 
-        // Build regex matcher
+        // Build regex matcher (falls back to literal escaped pattern on syntax error for agent resilience)
         let case_insensitive = !opts.case_sensitive.unwrap_or(false);
-        let matcher = Arc::new(
-            RegexMatcherBuilder::new()
-                .case_insensitive(case_insensitive)
-                .multi_line(false)
-                .build(&req.pattern)
-                .map_err(|e| CoreError::InvalidPattern(e.to_string()))?,
-        );
+        let matcher = match RegexMatcherBuilder::new()
+            .case_insensitive(case_insensitive)
+            .multi_line(false)
+            .build(&req.pattern)
+        {
+            Ok(m) => Arc::new(m),
+            Err(_) => {
+                let escaped = regex::escape(&req.pattern);
+                Arc::new(
+                    RegexMatcherBuilder::new()
+                        .case_insensitive(case_insensitive)
+                        .multi_line(false)
+                        .build(&escaped)
+                        .map_err(|e| CoreError::InvalidPattern(e.to_string()))?,
+                )
+            }
+        };
 
         // Build file walker
         let include_hidden = opts.include_hidden.unwrap_or(false);

@@ -97,14 +97,11 @@ pub fn make_notification(method: &str, params: Value) -> Value {
 /// Convert an absolute file path to a file:// URI.
 pub fn path_to_uri(path: &std::path::Path) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let path_str = canonical.to_string_lossy().replace('\\', "/");
+    let clean = crate::clean_path(&canonical);
+    let path_str = clean.to_string_lossy().replace('\\', "/");
     let trimmed = path_str.trim_start_matches('/');
-    if path_str.starts_with('/') {
-        format!("file://{path_str}")
-    } else {
-        // Windows drive letter C:/... -> file:///C:/...
-        format!("file:///{trimmed}")
-    }
+    let uri_path = trimmed.replace(' ', "%20");
+    format!("file:///{uri_path}")
 }
 
 /// Convert a file:// URI to a local PathBuf.
@@ -116,7 +113,7 @@ pub fn uri_to_path(uri: &str) -> std::path::PathBuf {
 
     // Decode URL-encoded characters (e.g. %20 -> space)
     let decoded = urlencoding_decode(path_str);
-    std::path::PathBuf::from(decoded)
+    crate::clean_path(&std::path::PathBuf::from(decoded))
 }
 
 fn urlencoding_decode(s: &str) -> String {

@@ -138,6 +138,18 @@ impl Default for NativeEngine {
     }
 }
 
+/// Normalize a path by stripping Windows verbatim device prefixes (`\\?\` or `//?/`).
+pub fn clean_path(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else if let Some(stripped) = s.strip_prefix("//?/") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_path_buf()
+    }
+}
+
 impl NativeEngine {
     pub fn new() -> Self {
         Self {
@@ -151,24 +163,24 @@ impl NativeEngine {
     pub fn get_workspace(&self) -> PathBuf {
         if let Ok(guard) = self.workspace_root.read() {
             if let Some(ref root) = *guard {
-                return root.clone();
+                return clean_path(root);
             }
         }
         if let Ok(env_root) = std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT")) {
             let p = PathBuf::from(env_root);
             if p.exists() {
-                return p;
+                return clean_path(&p);
             }
         }
         if let Ok(cwd) = std::env::current_dir() {
             let mut curr = Some(cwd.as_path());
             while let Some(dir) = curr {
                 if dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("package.json").exists() {
-                    return dir.to_path_buf();
+                    return clean_path(dir);
                 }
                 curr = dir.parent();
             }
-            return cwd;
+            return clean_path(&cwd);
         }
         PathBuf::from(".")
     }
@@ -176,7 +188,7 @@ impl NativeEngine {
     /// Resolve an optional or relative path against the active workspace root.
     pub fn resolve_path(&self, raw: Option<&str>) -> PathBuf {
         let root = self.get_workspace();
-        match raw {
+        let target = match raw {
             None => root,
             Some(p) => {
                 let s = p.trim();
@@ -191,7 +203,8 @@ impl NativeEngine {
                     }
                 }
             }
-        }
+        };
+        clean_path(&target)
     }
 }
 
@@ -211,13 +224,14 @@ impl Engine for NativeEngine {
             )));
         }
         let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let clean = clean_path(&canonical);
         if let Ok(mut guard) = self.workspace_root.write() {
-            *guard = Some(canonical.clone());
+            *guard = Some(clean.clone());
         }
         Ok(SetWorkspaceResponse {
             success: true,
-            workspace_root: canonical.to_string_lossy().to_string(),
-            message: format!("Workspace root configured to {}", canonical.display()),
+            workspace_root: clean.to_string_lossy().to_string(),
+            message: format!("Workspace root configured to {}", clean.display()),
         })
     }
 
@@ -3072,6 +3086,91 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert_eq!(res.total_matches, 5);
         // 2 matched files + 1 empty cluster = 3 files retained
         assert_eq!(res.files.len(), 3);
+    }
+
+    #[test]
+    fn test_clean_path_normalization() {
+        use std::path::PathBuf;
+        let win_verbatim = PathBuf::from(r"\\?\C:\projects\transcend\src\main.rs");
+        let cleaned = clean_path(&win_verbatim);
+        assert_eq!(cleaned, PathBuf::from(r"C:\projects\transcend\src\main.rs"));
+
+        let slash_verbatim = PathBuf::from("//?/C:/projects/transcend/src/main.rs");
+        let cleaned_slash = clean_path(&slash_verbatim);
+        assert_eq!(cleaned_slash, PathBuf::from("C:/projects/transcend/src/main.rs"));
+
+        let normal_path = PathBuf::from("C:/projects/transcend/src/main.rs");
+        assert_eq!(clean_path(&normal_path), normal_path);
+    }
+
+    #[test]
+    fn test_search_regex_fallback_on_invalid_syntax() {
+        let sandbox = TestSandbox::create();
+        fs::write(
+            sandbox.dir.join("calc.rs"),
+            "fn calculate(x: i32) -> i32 { x * 2 }\n",
+        )
+        .unwrap();
+
+        let engine = NativeEngine::new();
+        // "fn calculate(" has unclosed parenthesis, invalid in strict regex
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "fn calculate(".to_string(),
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .expect("search with invalid regex should fall back to literal match");
+
+        assert_eq!(res.total_matches, 1);
+        assert!(res.files[0].matches[0].line_text.contains("fn calculate(x: i32)"));
+    }
+
+    #[test]
+    fn test_find_glob_fallback_on_invalid_syntax() {
+        let sandbox = TestSandbox::create();
+        fs::write(sandbox.dir.join("test[special].rs"), "content\n").unwrap();
+
+        let engine = NativeEngine::new();
+        // "test[" has unclosed bracket, invalid in strict glob
+        let res = engine
+            .find(&transcend_protocol::FindRequest {
+                pattern: Some("test[".to_string()),
+                path: Some(sandbox.path_str()),
+                options: None,
+            })
+            .expect("find with invalid glob should fall back to substring match");
+
+        assert_eq!(res.total_count, 1);
+        assert!(res.entries[0].path.contains("test[special].rs"));
+    }
+
+    #[test]
+    fn test_serde_parameter_aliases() {
+        use serde_json::json;
+
+        // ReadFileRequest: "file" alias for "path"
+        let read_req: transcend_protocol::ReadFileRequest =
+            serde_json::from_value(json!({ "file": "src/main.rs" })).unwrap();
+        assert_eq!(read_req.path, "src/main.rs");
+
+        // ExecRequest: "cmd" alias for "command", "working_directory" for "cwd"
+        let exec_req: transcend_protocol::ExecRequest =
+            serde_json::from_value(json!({ "cmd": "cargo check", "working_directory": "crates/core" })).unwrap();
+        assert_eq!(exec_req.command, "cargo check");
+        assert_eq!(exec_req.cwd, Some("crates/core".to_string()));
+
+        // FindSymbolRequest: "symbol" alias for "name", "dir" for "path"
+        let find_sym_req: transcend_protocol::FindSymbolRequest =
+            serde_json::from_value(json!({ "symbol": "NativeEngine", "dir": "crates" })).unwrap();
+        assert_eq!(find_sym_req.name, "NativeEngine");
+        assert_eq!(find_sym_req.path, Some("crates".to_string()));
+
+        // SearchRequest: "query" alias for "pattern", "dir" for "path"
+        let search_req: transcend_protocol::SearchRequest =
+            serde_json::from_value(json!({ "query": "struct Engine", "dir": "crates" })).unwrap();
+        assert_eq!(search_req.pattern, "struct Engine");
+        assert_eq!(search_req.path, Some("crates".to_string()));
     }
 }
 

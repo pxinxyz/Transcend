@@ -210,7 +210,7 @@ impl TerminalEngine {
             let wait_ms = req.timeout_ms.unwrap_or(5_000);
             let deadline = Instant::now() + Duration::from_millis(wait_ms);
             while Instant::now() < deadline {
-                let (peek_output, _, _, _) = session.read(from_cursor, max_bytes);
+                let (peek_output, _, _, _) = session.read(from_cursor, usize::MAX);
                 if peek_output.contains(pattern) || !session.is_running() {
                     break;
                 }
