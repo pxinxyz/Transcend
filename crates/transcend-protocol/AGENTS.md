@@ -8,7 +8,7 @@ Owns all serializable protocol types, JSON Schema definitions (`schemars::JsonSc
 
 ## 3. Local Contracts
 - Every public request/response type must derive `serde::Serialize`, `serde::Deserialize`, and `schemars::JsonSchema`.
-- Owns data contracts for codebase primitives, LSP operations, terminal execution, and workspace lifecycle (`SetWorkspaceRequest`, `SetWorkspaceResponse`, `ExecRequest`, `ExecResponse`, `TerminalReadRequest`, `TerminalReadResponse`, `TerminalWriteRequest`, `TerminalWriteResponse`, `TerminalResizeRequest`, `TerminalResizeResponse`, `TerminalKillRequest`, `TerminalKillResponse`).
+- Owns data contracts for codebase primitives, LSP operations, terminal execution, workspace lifecycle (`SetWorkspaceRequest`, `SetWorkspaceResponse`), and version control (`GitStatusRequest`, `GitStatusResponse`, `GitFileStatus`, `GitFileEntry`).
 - Zero business logic: only data definitions, validation helpers, and contract fixtures.
 - Pure Rust, zero I/O or network dependencies.
 

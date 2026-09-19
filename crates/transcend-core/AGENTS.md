@@ -19,9 +19,12 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 - Lossy UTF-8 decoding with CRLF normalization; searching non-UTF-8 text files must never panic.
 - Match budget capping (`max_matches`) with `FileCluster` aggregation and optional empty cluster pruning (`max_empty_clusters`).
 - Workspace root management (`workspace_root`, `set_workspace`) with anchor detection (`Cargo.toml`, `.git`) and automatic relative path resolution across all operations.
-- Transactional cumulative batch patching with in-memory buffer threading and single-write disk commits.
+- Transactional cumulative batch patching with in-memory buffer threading, consolidated single-file unified diff generation, and single-write disk commits.
 - Indentation-aware splicing for `prepend_to_symbol` and `append_to_symbol`.
-- Streaming line reader in `read_file` with $O(1)$ memory overhead.
+- Streaming line reader in `read_file` with $O(1)$ memory overhead and fast 64KB raw chunk newline counting once `end_line` is reached.
+- Smart casing and token subsequence matching in `find_symbol` across snake_case $\leftrightarrow$ camelCase/PascalCase boundaries.
+- In-process native `GitEngine` parsing `git status --porcelain=v2 --branch` into typed, token-compact JSON.
+- Native compiler JSON diagnostics fallback (`cargo check --message-format=json`) when LSP language servers are absent.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
 - Terminal subsystem (`terminal::TerminalEngine`):
