@@ -67,6 +67,10 @@ impl SymbolFinder {
 
         let exact = req.exact.unwrap_or(true);
         let fuzzy = req.fuzzy.unwrap_or(!exact);
+        // Deliberately insensitive by default. Literal case-matching here would defeat smart
+        // casing, which is the feature that lets `setup_vmcs` resolve `SetupVmcs`. The
+        // protocol doc previously claimed this "Defaults to true for exact matches", which no
+        // implementation could satisfy alongside smart casing; the doc was corrected instead.
         let case_sensitive = req.case_sensitive.unwrap_or(false);
         let limit = req.limit.unwrap_or(20);
 

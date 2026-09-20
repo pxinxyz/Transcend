@@ -11,9 +11,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 use super::super::buffer::SharedCursorRingBuffer;
 use super::super::platform::{ProcessTreeOwner, resolve_shell};
 
