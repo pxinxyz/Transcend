@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mcp_client import McpSession  # noqa: E402
@@ -378,6 +379,153 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
             f"on={on.get('total_matches')} off={off.get('total_matches')}",
             (off.get("total_matches") or 0) > (on.get("total_matches") or 0),
         )
+
+    # ---- find: the remaining documented options --------------------------
+    sizes = os.path.join(scratch, "sizes")
+    shutil.rmtree(sizes, ignore_errors=True)
+    os.makedirs(sizes)
+    open(os.path.join(sizes, "small.txt"), "w").write("x")
+    open(os.path.join(sizes, "large.txt"), "w").write("y" * 5000)
+    open(os.path.join(sizes, "medium.txt"), "w").write("z" * 500)
+
+    # sort_by=size must order largest first, as documented.
+    r = j(s.call("find", {"pattern": "*.txt", "path": sizes, "options": {"sort_by": "size"}}))
+    order = [os.path.basename(e.get("path", "")) for e in r.get("entries") or []]
+    check(
+        "find", "sort_by=size orders largest first",
+        f"order={order}",
+        order[:1] == ["large.txt"],
+    )
+
+    # sort_by=path must be alphabetical.
+    r = j(s.call("find", {"pattern": "*.txt", "path": sizes, "options": {"sort_by": "path"}}))
+    order = [os.path.basename(e.get("path", "")) for e in r.get("entries") or []]
+    check(
+        "find", "sort_by=path orders alphabetically",
+        f"order={order}",
+        order == sorted(order),
+    )
+
+    # exclude must actually exclude.
+    r = j(s.call("find", {"pattern": "*.txt", "path": sizes,
+                          "options": {"exclude": ["large.txt"]}}))
+    paths = [os.path.basename(e.get("path", "")) for e in r.get("entries") or []]
+    check(
+        "find", "exclude removes matching files",
+        f"paths={paths}",
+        bool(paths) and "large.txt" not in paths,
+    )
+
+    # file_type=directory must return directories, not files.
+    r = j(s.call("find", {"pattern": "*", "path": tree,
+                          "options": {"file_type": "directory"}}))
+    paths = [e.get("path", "") for e in r.get("entries") or []]
+    check(
+        "find", "file_type=directory does not return regular files",
+        f"paths={paths}",
+        bool(paths) and not any(p.endswith(".rs") or p.endswith(".txt") for p in paths),
+    )
+
+    # max_per_dir must bound results from any one directory.
+    bulk = os.path.join(scratch, "bulk")
+    shutil.rmtree(bulk, ignore_errors=True)
+    os.makedirs(bulk)
+    for i in range(20):
+        open(os.path.join(bulk, f"b{i:02}.rs"), "w").write("pub fn b() {}\n")
+    r = j(s.call("find", {"pattern": "*.rs", "path": bulk,
+                          "options": {"max_per_dir": 3, "max_results": 50}}))
+    n = len(r.get("entries") or [])
+    check(
+        "find", "max_per_dir=3 bounds results from one directory",
+        f"returned={n}",
+        n <= 3,
+    )
+
+    # ---- find: does a capping mean the caller is told? -------------------
+    r = j(s.call("find", {"pattern": "*.rs", "path": bulk, "options": {"max_results": 2}}))
+    check(
+        "find", "a max_results cap sets truncated=true",
+        f"truncated={r.get('truncated')} returned={len(r.get('entries') or [])} "
+        f"total={r.get('total_count')}",
+        r.get("truncated") is True or (r.get("total_count") or 0) <= 2,
+    )
+
+    # ---- terminal: write must reach the child, read must see it ----------
+    # The child has to be a SHELL for a typed command to produce output. An earlier version
+    # of this probe sent a shell command to `node -e setInterval(...)`, which simply discards
+    # its input -- so the check failed for the probe's reason, not the tool's.
+    raw = s.call("exec", {"command": "powershell -NoProfile -NoLogo",
+                          "transport": "pty", "timeout_action": "detach",
+                          "timeout_ms": 3000})
+    r = j(raw)
+    sid = r.get("session_id")
+    if sid:
+        # Wait for the prompt rather than assuming a fixed settle time.
+        prompt = ""
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            rd = j(s.call("terminal_read", {"session_id": sid, "cursor": 0,
+                                            "timeout_ms": 800}))
+            prompt = rd.get("output") or ""
+            if "PS " in prompt:
+                break
+            time.sleep(0.3)
+        check(
+            "terminal_write", "a pty shell reaches an interactive prompt",
+            f"output_tail={prompt[-60:]!r}",
+            "PS " in prompt,
+        )
+
+        marker = "PROBE_ECHO_MARKER"
+        wr = j(s.call("terminal_write", {"session_id": sid, "input": f"echo {marker}\r"}))
+        seen = ""
+        for _ in range(15):
+            rd = j(s.call("terminal_read", {"session_id": sid, "cursor": 0,
+                                            "timeout_ms": 1000}))
+            seen = rd.get("output") or ""
+            if marker in seen:
+                break
+            time.sleep(0.3)
+        check(
+            "terminal_write", "typed input reaches the child and its output returns",
+            f"bytes_written={wr.get('bytes_written')} output_tail={seen[-120:]!r}",
+            marker in seen,
+        )
+        s.call("terminal_kill", {"session_id": sid})
+    else:
+        check("terminal_write", "a detached pty session is returned", f"raw={raw[:160]!r}", False)
+
+    # ---- terminal_resize: must be accepted for a live session ------------
+    raw = s.call("exec", {"command": "node -e \"setInterval(()=>{},1000)\"",
+                          "transport": "pty", "timeout_action": "detach",
+                          "timeout_ms": 2500})
+    r = j(raw)
+    sid = r.get("session_id")
+    if sid:
+        rr = j(s.call("terminal_resize", {"session_id": sid, "cols": 100, "rows": 40}))
+        check(
+            "terminal_resize", "resize succeeds on a live session",
+            f"success={rr.get('success')}",
+            rr.get("success") is True,
+        )
+        s.call("terminal_kill", {"session_id": sid})
+
+    # ---- lsp_definition / lsp_hover on a known symbol --------------------
+    r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
+                                    "symbol": "alpha"}))
+    check(
+        "lsp_definition", "a defined symbol yields a target",
+        f"targets={len(r.get('targets') or [])} engine={r.get('engine')!r}",
+        len(r.get("targets") or []) > 0,
+    )
+
+    r = j(s.call("lsp_hover", {"path": os.path.join(scratch, "sample.rs"),
+                               "symbol": "alpha"}))
+    check(
+        "lsp_hover", "a symbol yields a signature or documentation",
+        f"signature={r.get('signature')!r} engine={r.get('engine')!r}",
+        bool(r.get("signature") or r.get("documentation")),
+    )
 
 
 def main() -> None:
