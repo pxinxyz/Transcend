@@ -53,6 +53,32 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## Outline summary counters described different stages (fixed)
+
+Found by probing whether a count field means the same thing across tools. On an 8-file,
+16-symbol directory:
+
+| caps | `summary.total_files` | `summary.total_symbols` |
+|---|---|---|
+| none | 8 | 16 |
+| `max_files: 1` | 1 | **16** |
+| `max_symbols: 1` | **8** | **16** |
+
+The `max_files` row is an impossible census — one file cannot hold sixteen symbols. The cause:
+`total_symbols` counted every symbol parsed *before* `apply_budget` ran, while `total_files`
+counted files after `take(max_files)` but *before* that same budget. So the meaning of each
+counter shifted depending on which cap bit, and a reader doing an architecture survey got a
+different answer depending on the caller's budgets.
+
+Fixed in `e4ab981`: both counters now describe what the response carries, consistently.
+`truncated` is what reports that the result is partial, and its doc comment now says so —
+previously that was left to the reader, which is how the two diverged unnoticed.
+
+Two intermediate attempts were wrong and are recorded here because the first looked
+reasonable: widening `total_files` to every discovered file while `total_symbols` still
+counted only parsed symbols claimed *eight files containing two symbols*. Both counters have
+to move together or neither should move.
+
 ## Boundary budgets were reinterpreted instead of refused (fixed)
 
 Found by probing error paths and boundaries, all verified live first:
