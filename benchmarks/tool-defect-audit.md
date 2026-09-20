@@ -45,6 +45,16 @@ while fixing items 3 and 1.
   audit reproduced this with `set_workspace` racing a no-path `find_symbol`. Most invasive
   of the set and the least likely to be hit by a single-agent session.
 
+  **Narrowed by test (`aaf28af`).** A client-level probe was inconclusive because an MCP
+  client serialises requests over one session, so it exercised ordering rather than
+  concurrency. Settled in-process with real threads: one flipping `set_workspace` between two
+  roots while another issued 300 relative writes on a cloned engine. Result: 279 writes
+  succeeded, split 145/134 across both roots, **zero escapes, zero mismatches**. So which root
+  an operation lands under does depend on timing — the order-dependence is real — but it is
+  **not a boundary or soundness failure**: no write landed outside both roots, and every
+  response named the root the bytes actually reached. The remaining concern is reproducibility
+  for a caller, not safety.
+
   A related layering hazard was found while investigating this and is now documented and
   tested (`b974f33`): `FileOps::ensure_within` returns `Ok(())` for a `None` boundary instead
   of failing closed. Enforcement actually happens one layer up, where `NativeEngine`
