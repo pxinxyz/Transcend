@@ -1177,6 +1177,17 @@ pub struct ReadFileRequest {
 /// Response returned by a read_file operation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ReadFileResponse {
+    /// Whether the read succeeded.
+    ///
+    /// False for a missing file and for a path that is a directory. Without this, both were
+    /// indistinguishable from a genuinely empty file: all returned empty content,
+    /// `truncated: false` and zero line counts, leaving the free-text `message` as the only
+    /// signal. `write_file` and `delete_path` already carry `success`, so the file tools can
+    /// now be treated uniformly.
+    ///
+    /// Note this is true when a binary file's content is omitted: the read succeeded and
+    /// `is_binary` says why the content is a placeholder.
+    pub success: bool,
     /// Target file path.
     pub file: String,
     /// Extracted text content.

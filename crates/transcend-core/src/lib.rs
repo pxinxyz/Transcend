@@ -1113,19 +1113,14 @@ mod tests {
         );
     }
 
-    /// Pins the current `read_file` failure contract so its weakness is visible in the code
-    /// rather than only in a review.
+    /// `read_file` distinguishes failure from an empty file without prose.
     ///
-    /// `ReadFileResponse` has no success discriminator: a missing file, a directory, and a
-    /// genuinely empty file all return `content: ""`, `truncated: false`, `total_lines: 0`.
-    /// The only failure signal is the free-text `message`, and the only way to test it is to
-    /// parse prose. Every sibling mutating tool returns `success`; `read_file` is the outlier.
-    ///
-    /// Verified live: an agent gating on `content`/`truncated` cannot tell these apart.
-    /// Fixing it means adding a field to a public response contract, so this test records the
-    /// behaviour and will need updating when that decision is taken.
+    /// Before `success` existed these three were identical in every field a caller would gate
+    /// on -- empty content, `truncated: false`, zero line counts -- leaving the free-text
+    /// `message` as the only signal, so an agent reading `content` saw a missing file as an
+    /// empty one. `success` is now the discriminator, matching `write_file` and `delete_path`.
     #[test]
-    fn read_file_failures_are_indistinguishable_without_parsing_the_message() {
+    fn read_file_distinguishes_failure_from_an_empty_file() {
         let sandbox = TestSandbox::create();
         let engine = NativeEngine::new();
 
@@ -1155,33 +1150,56 @@ mod tests {
             })
             .expect("directory returns Ok, not Err");
 
-        // The fields a caller would naturally gate on are identical across all three.
+        // The discriminator: which reads actually happened.
+        assert!(!missing.success, "a missing file is not a successful read");
+        assert!(!directory.success, "a directory is not a readable file");
+        assert!(
+            blank.success,
+            "an empty file IS a successful read and must not look like a failure"
+        );
+
+        // The content fields remain identical, which is exactly why `success` has to exist.
         for (label, res) in [
             ("missing", &missing),
             ("empty", &blank),
             ("directory", &directory),
         ] {
             assert_eq!(res.content, "", "{label}: content");
-            assert!(!res.truncated, "{label}: truncated");
             assert_eq!(res.total_lines, 0, "{label}: total_lines");
         }
 
-        // Only prose separates them, which is the whole problem.
-        assert!(
-            missing.message.is_some(),
-            "missing file must explain itself"
-        );
-        assert!(directory.message.is_some(), "directory must explain itself");
-        assert!(
-            blank.message.is_none(),
-            "a successful read of an empty file carries no message"
-        );
-
-        // And the missing-file message says so, in prose rather than a machine-readable field.
+        // The prose still explains the failure, and is not the only signal.
         let msg = missing.message.unwrap_or_default();
+        assert!(msg.contains("does not exist"), "got {msg:?}");
+    }
+
+    /// A binary file's content is omitted, but the read itself succeeded -- so `success` must
+    /// be true and `is_binary` carries the reason the content is a placeholder. Conflating the
+    /// two would make every binary read look like a failed one.
+    #[test]
+    fn read_file_reports_binary_omission_as_a_successful_read() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let bin = sandbox.dir.join("blob.bin");
+        fs::write(&bin, b"\x00\x01\x02\xff\xfe binary payload").unwrap();
+
+        let res = engine
+            .read_file(&ReadFileRequest {
+                path: bin.to_string_lossy().to_string(),
+                ..Default::default()
+            })
+            .expect("binary read returns Ok");
+
         assert!(
-            msg.contains("does not exist"),
-            "expected a prose failure reason, got {msg:?}"
+            res.success,
+            "the file was read; only its content was withheld"
+        );
+        assert!(res.is_binary, "is_binary must carry the reason");
+        assert!(
+            res.content.contains("Binary file omitted"),
+            "content should be a placeholder, got {:?}",
+            res.content
         );
     }
 

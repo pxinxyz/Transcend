@@ -121,6 +121,7 @@ impl FileOps {
         let display_path = crate::clean_path(path).to_string_lossy().to_string();
         if !path.exists() {
             return Ok(ReadFileResponse {
+                success: false,
                 file: display_path,
                 content: String::new(),
                 start_line: 0,
@@ -142,6 +143,7 @@ impl FileOps {
 
         if metadata.is_dir() {
             return Ok(ReadFileResponse {
+                success: false,
                 file: display_path,
                 content: String::new(),
                 start_line: 0,
@@ -174,6 +176,7 @@ impl FileOps {
 
         if probe[..bytes_read].contains(&0x00) {
             return Ok(ReadFileResponse {
+                success: true,
                 file: display_path,
                 content: format!("[Binary file omitted ({} bytes)]", size_bytes),
                 start_line: 0,
@@ -284,6 +287,7 @@ impl FileOps {
 
         if total_lines == 0 {
             return Ok(ReadFileResponse {
+                success: true,
                 file: display_path,
                 content: String::new(),
                 start_line: 1,
@@ -298,6 +302,7 @@ impl FileOps {
 
         if start_line > total_lines {
             return Ok(ReadFileResponse {
+                success: true,
                 file: display_path,
                 content: String::new(),
                 start_line,
@@ -326,6 +331,7 @@ impl FileOps {
         }
 
         Ok(ReadFileResponse {
+            success: true,
             file: display_path,
             content,
             start_line,
@@ -347,8 +353,8 @@ impl FileOps {
 
         if exists && req.overwrite != Some(true) {
             return Ok(WriteFileResponse {
-                file: display_path,
                 success: false,
+                file: display_path,
                 bytes_written: 0,
                 created_new: false,
                 message: format!(
@@ -399,8 +405,8 @@ impl FileOps {
         }
 
         Ok(WriteFileResponse {
-            file: display_path,
             success: true,
+            file: display_path,
             bytes_written: req.content.len(),
             created_new: !exists,
             message: if exists {

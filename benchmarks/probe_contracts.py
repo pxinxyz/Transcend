@@ -52,19 +52,27 @@ def run_probes(s: McpSession, scratch: str) -> None:
     empty = os.path.join(scratch, "empty.rs")
     open(empty, "w").close()
 
-    # ---- read_file: does a failure look like success? --------------------
-    r = j(s.call("read_file", {"path": os.path.join(scratch, "nope.rs")}))
+    # ---- read_file: can a failure be told from an empty file? ------------
+    # Before `success` existed these were identical in every field a caller would gate on --
+    # empty content, truncated false, zero line counts -- so an agent reading `content` saw a
+    # missing file as an empty one.
+    missing = j(s.call("read_file", {"path": os.path.join(scratch, "nope.rs")}))
+    empty_res = j(s.call("read_file", {"path": empty}))
+    directory_res = j(s.call("read_file", {"path": scratch}))
     check(
-        "read_file", "a missing file is distinguishable from an empty file",
-        f"missing-file response keys={sorted(r.keys())} content={r.get('content')!r} "
-        f"message={r.get('message')!r}",
-        "success" in r or "error" in r,
+        "read_file", "a missing file reports success=false",
+        f"success={missing.get('success')} content={missing.get('content')!r}",
+        missing.get("success") is False,
     )
-    r = j(s.call("read_file", {"path": empty}))
     check(
-        "read_file", "no success field means callers cannot gate on it",
-        f"keys={sorted(r.keys())}",
-        "success" in r,
+        "read_file", "a directory reports success=false",
+        f"success={directory_res.get('success')}",
+        directory_res.get("success") is False,
+    )
+    check(
+        "read_file", "an empty file reports success=true, not a failure",
+        f"success={empty_res.get('success')} content={empty_res.get('content')!r}",
+        empty_res.get("success") is True,
     )
 
     # ---- read_symbol: does a miss look like a hit? -----------------------
