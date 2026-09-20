@@ -20,15 +20,15 @@ use thiserror::Error;
 use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, DeletePathRequest, DeletePathResponse, ExecRequest,
     ExecResponse, FindRequest, FindResponse, FindSymbolRequest, FindSymbolResponse,
-    GitStatusRequest, GitStatusResponse,
-    LspDefinitionRequest, LspDefinitionResponse, LspDiagnosticsRequest, LspDiagnosticsResponse,
-    LspHoverRequest, LspHoverResponse, LspInstallRequest, LspInstallResponse, LspReferencesRequest,
-    LspReferencesResponse, LspStatusRequest, LspStatusResponse, OutlineRequest,
-    OutlineResponse, PatchRequest, PatchResponse, ReadFileRequest, ReadFileResponse,
-    ReadSymbolRequest, ReadSymbolResponse, SearchRequest, SearchResponse, SetWorkspaceRequest,
-    SetWorkspaceResponse, TerminalKillRequest, TerminalKillResponse, TerminalReadRequest,
-    TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse, TerminalWriteRequest,
-    TerminalWriteResponse, WriteFileRequest, WriteFileResponse,
+    GitStatusRequest, GitStatusResponse, LspDefinitionRequest, LspDefinitionResponse,
+    LspDiagnosticsRequest, LspDiagnosticsResponse, LspHoverRequest, LspHoverResponse,
+    LspInstallRequest, LspInstallResponse, LspReferencesRequest, LspReferencesResponse,
+    LspStatusRequest, LspStatusResponse, OutlineRequest, OutlineResponse, PatchRequest,
+    PatchResponse, ReadFileRequest, ReadFileResponse, ReadSymbolRequest, ReadSymbolResponse,
+    SearchRequest, SearchResponse, SetWorkspaceRequest, SetWorkspaceResponse, TerminalKillRequest,
+    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
+    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, WriteFileRequest,
+    WriteFileResponse,
 };
 
 use crate::file_ops::FileOps;
@@ -97,37 +97,67 @@ pub trait Engine: Send + Sync {
     fn batch_patch(&self, req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse>;
 
     /// Go to compiler-resolved definition of a symbol or position.
-    fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>>;
+    fn lsp_definition<'a>(
+        &'a self,
+        req: &'a LspDefinitionRequest,
+    ) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>>;
 
     /// Find all compiler-resolved references and call sites across the workspace.
-    fn lsp_references<'a>(&'a self, req: &'a LspReferencesRequest) -> BoxFuture<'a, CoreResult<LspReferencesResponse>>;
+    fn lsp_references<'a>(
+        &'a self,
+        req: &'a LspReferencesRequest,
+    ) -> BoxFuture<'a, CoreResult<LspReferencesResponse>>;
 
     /// Inspect inferred type signature and documentation.
-    fn lsp_hover<'a>(&'a self, req: &'a LspHoverRequest) -> BoxFuture<'a, CoreResult<LspHoverResponse>>;
+    fn lsp_hover<'a>(
+        &'a self,
+        req: &'a LspHoverRequest,
+    ) -> BoxFuture<'a, CoreResult<LspHoverResponse>>;
 
     /// Retrieve active compiler diagnostics for file or workspace.
-    fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>>;
+    fn lsp_diagnostics<'a>(
+        &'a self,
+        req: &'a LspDiagnosticsRequest,
+    ) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>>;
 
     /// Check current installation status and recipes for language servers.
-    fn lsp_status<'a>(&'a self, req: &'a LspStatusRequest) -> BoxFuture<'a, CoreResult<LspStatusResponse>>;
+    fn lsp_status<'a>(
+        &'a self,
+        req: &'a LspStatusRequest,
+    ) -> BoxFuture<'a, CoreResult<LspStatusResponse>>;
 
     /// Automatically install a language server using host package managers.
-    fn lsp_install<'a>(&'a self, req: &'a LspInstallRequest) -> BoxFuture<'a, CoreResult<LspInstallResponse>>;
+    fn lsp_install<'a>(
+        &'a self,
+        req: &'a LspInstallRequest,
+    ) -> BoxFuture<'a, CoreResult<LspInstallResponse>>;
 
     /// Execute a command using the hybrid terminal runner.
     fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>>;
 
     /// Read incremental output from an active terminal session.
-    fn terminal_read<'a>(&'a self, req: &'a TerminalReadRequest) -> BoxFuture<'a, CoreResult<TerminalReadResponse>>;
+    fn terminal_read<'a>(
+        &'a self,
+        req: &'a TerminalReadRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalReadResponse>>;
 
     /// Send interactive input to an active terminal session.
-    fn terminal_write<'a>(&'a self, req: &'a TerminalWriteRequest) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>>;
+    fn terminal_write<'a>(
+        &'a self,
+        req: &'a TerminalWriteRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>>;
 
     /// Resize terminal dimensions.
-    fn terminal_resize<'a>(&'a self, req: &'a TerminalResizeRequest) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>>;
+    fn terminal_resize<'a>(
+        &'a self,
+        req: &'a TerminalResizeRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>>;
 
     /// Terminate an active terminal session and its process tree.
-    fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>>;
+    fn terminal_kill<'a>(
+        &'a self,
+        req: &'a TerminalKillRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalKillResponse>>;
 
     /// Configure or update the active workspace root path.
     fn set_workspace(&self, req: &SetWorkspaceRequest) -> CoreResult<SetWorkspaceResponse>;
@@ -136,7 +166,10 @@ pub trait Engine: Send + Sync {
     fn get_workspace(&self) -> PathBuf;
 
     /// Inspect structured git status for a repository directory.
-    fn git_status<'a>(&'a self, req: &'a GitStatusRequest) -> BoxFuture<'a, CoreResult<GitStatusResponse>>;
+    fn git_status<'a>(
+        &'a self,
+        req: &'a GitStatusRequest,
+    ) -> BoxFuture<'a, CoreResult<GitStatusResponse>>;
 }
 
 /// Default in-process engine implementation.
@@ -165,6 +198,26 @@ pub fn clean_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Find the outermost ancestor of `start` carrying a project root marker.
+///
+/// Climbing to the outermost (rather than nearest) marker matters in workspaces where
+/// every crate has its own `Cargo.toml`: a nearest-match rule would scope every
+/// operation to a single crate and silently hide the rest of the repository.
+pub fn outermost_anchor(start: &Path) -> Option<&Path> {
+    let mut found: Option<&Path> = None;
+    let mut curr = Some(start);
+    while let Some(dir) = curr {
+        if dir.join("Cargo.toml").exists()
+            || dir.join(".git").exists()
+            || dir.join("package.json").exists()
+        {
+            found = Some(dir);
+        }
+        curr = dir.parent();
+    }
+    found
+}
+
 impl NativeEngine {
     pub fn new() -> Self {
         Self {
@@ -175,27 +228,27 @@ impl NativeEngine {
     }
 
     /// Retrieve the current workspace root, consulting explicit config, environment, or root anchors.
+    ///
+    /// Anchor discovery climbs to the *outermost* directory carrying a project marker
+    /// rather than stopping at the first one. In a Cargo workspace every crate has its
+    /// own `Cargo.toml`, so a nearest-match rule would scope every operation to the one
+    /// crate the daemon happened to start in, silently hiding the rest of the repo.
     pub fn get_workspace(&self) -> PathBuf {
-        if let Ok(guard) = self.workspace_root.read() {
-            if let Some(ref root) = *guard {
-                return clean_path(root);
-            }
+        if let Ok(guard) = self.workspace_root.read()
+            && let Some(ref root) = *guard
+        {
+            return clean_path(root);
         }
-        if let Ok(env_root) = std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT")) {
+        if let Ok(env_root) =
+            std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT"))
+        {
             let p = PathBuf::from(env_root);
             if p.exists() {
                 return clean_path(&p);
             }
         }
         if let Ok(cwd) = std::env::current_dir() {
-            let mut curr = Some(cwd.as_path());
-            while let Some(dir) = curr {
-                if dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("package.json").exists() {
-                    return clean_path(dir);
-                }
-                curr = dir.parent();
-            }
-            return clean_path(&cwd);
+            return clean_path(outermost_anchor(&cwd).unwrap_or(cwd.as_path()));
         }
         PathBuf::from(".")
     }
@@ -220,6 +273,96 @@ impl NativeEngine {
             }
         };
         clean_path(&target)
+    }
+
+    /// Enforce that `target` cannot escape the workspace boundary.
+    ///
+    /// Used by every mutating primitive (`write_file`, `patch`, `batch_patch`,
+    /// `delete_path`) so that a relative path containing `..`, or an absolute path
+    /// pointing elsewhere, cannot modify files outside the active workspace.
+    ///
+    /// `explicit_root` is a caller-supplied boundary (used by tests and by callers
+    /// holding several workspaces); when absent the engine's active root applies.
+    /// Comparison is done on canonicalized paths, which resolves symlinks so that a
+    /// symlink farm cannot be used to hop the boundary. If the target does not exist
+    /// yet (a `write_file` creating a new file), its nearest existing ancestor is
+    /// canonicalized instead.
+    pub fn ensure_within_workspace(
+        &self,
+        target: &Path,
+        explicit_root: Option<&str>,
+    ) -> CoreResult<PathBuf> {
+        let root_raw = match explicit_root {
+            Some(r) if !r.trim().is_empty() => PathBuf::from(r.trim()),
+            _ => self.get_workspace(),
+        };
+        let root = clean_path(&root_raw);
+
+        // Canonicalize the root; a boundary we cannot resolve is treated as a hard
+        // error rather than an implicit "allow everything".
+        let canonical_root = root.canonicalize().map_err(|e| {
+            CoreError::General(format!(
+                "Cannot resolve workspace boundary '{}': {e}",
+                root.display()
+            ))
+        })?;
+        let canonical_root = clean_path(&canonical_root);
+
+        let resolved_target = Self::canonicalize_existing_ancestor(target)?;
+        if !resolved_target.starts_with(&canonical_root) {
+            return Err(CoreError::General(format!(
+                "Access denied: path '{}' escapes workspace boundary '{}'. \
+                 Pass an absolute path inside the workspace, or call set_workspace first.",
+                target.display(),
+                canonical_root.display()
+            )));
+        }
+        Ok(canonical_root)
+    }
+
+    /// Canonicalize `path`, walking up to the nearest existing ancestor when the leaf
+    /// (or an intermediate directory) does not exist yet.
+    fn canonicalize_existing_ancestor(path: &Path) -> CoreResult<PathBuf> {
+        if let Ok(c) = path.canonicalize() {
+            return Ok(clean_path(&c));
+        }
+
+        let mut ancestor = path.to_path_buf();
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        loop {
+            match ancestor.parent() {
+                Some(parent) if parent.as_os_str().is_empty() => break,
+                Some(parent) => {
+                    let file_name = ancestor
+                        .file_name()
+                        .map(|n| n.to_os_string())
+                        .unwrap_or_default();
+                    if file_name.is_empty() {
+                        break;
+                    }
+                    tail.push(file_name);
+                    ancestor = parent.to_path_buf();
+                }
+                None => break,
+            }
+            if let Ok(c) = ancestor.canonicalize() {
+                let mut resolved = clean_path(&c);
+                for part in tail.iter().rev() {
+                    resolved.push(part);
+                }
+                return Ok(resolved);
+            }
+        }
+
+        // Nothing along the chain exists: fall back to the lexical absolute form.
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map_err(|e| CoreError::General(format!("Cannot resolve current directory: {e}")))?
+                .join(path)
+        };
+        Ok(clean_path(&absolute))
     }
 }
 
@@ -256,169 +399,244 @@ impl Engine for NativeEngine {
 
     fn search(&self, req: &SearchRequest) -> CoreResult<SearchResponse> {
         let mut resolved = req.clone();
-        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        resolved.path = Some(
+            self.resolve_path(req.path.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
         SearchScanner::scan(&resolved)
     }
 
     fn find(&self, req: &FindRequest) -> CoreResult<FindResponse> {
         let mut resolved = req.clone();
-        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        resolved.path = Some(
+            self.resolve_path(req.path.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
         FindScanner::scan(&resolved)
     }
 
     fn outline(&self, req: &OutlineRequest) -> CoreResult<OutlineResponse> {
         let mut resolved = req.clone();
-        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        resolved.path = Some(
+            self.resolve_path(req.path.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
         OutlineScanner::scan(&resolved)
     }
 
     fn read_symbol(&self, req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
         let mut resolved = req.clone();
-        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        resolved.path = Some(
+            self.resolve_path(req.path.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
         SymbolReader::read(&resolved)
     }
 
     fn patch(&self, req: &PatchRequest) -> CoreResult<PatchResponse> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        resolved.workspace_root = Some(
+            self.ensure_within_workspace(Path::new(&resolved.path), req.workspace_root.as_deref())?
+                .to_string_lossy()
+                .to_string(),
+        );
         Patcher::patch(&resolved)
     }
 
     fn find_symbol(&self, req: &FindSymbolRequest) -> CoreResult<FindSymbolResponse> {
         let mut resolved = req.clone();
-        resolved.path = Some(self.resolve_path(req.path.as_deref()).to_string_lossy().to_string());
+        resolved.path = Some(
+            self.resolve_path(req.path.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
         SymbolFinder::find(&resolved)
     }
 
     fn read_file(&self, req: &ReadFileRequest) -> CoreResult<ReadFileResponse> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
         FileOps::read_file(&resolved)
     }
 
     fn write_file(&self, req: &WriteFileRequest) -> CoreResult<WriteFileResponse> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        resolved.workspace_root = Some(
+            self.ensure_within_workspace(Path::new(&resolved.path), req.workspace_root.as_deref())?
+                .to_string_lossy()
+                .to_string(),
+        );
         FileOps::write_file(&resolved)
     }
 
     fn delete_path(&self, req: &DeletePathRequest) -> CoreResult<DeletePathResponse> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
-        if resolved.workspace_root.is_none() {
-            resolved.workspace_root = Some(self.get_workspace().to_string_lossy().to_string());
-        }
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        resolved.workspace_root = Some(
+            self.ensure_within_workspace(Path::new(&resolved.path), req.workspace_root.as_deref())?
+                .to_string_lossy()
+                .to_string(),
+        );
         FileOps::delete_path(&resolved)
     }
 
     fn batch_patch(&self, req: &BatchPatchRequest) -> CoreResult<BatchPatchResponse> {
         let mut resolved = req.clone();
         for p in &mut resolved.patches {
-            p.path = self.resolve_path(Some(&p.path)).to_string_lossy().to_string();
+            p.path = self
+                .resolve_path(Some(&p.path))
+                .to_string_lossy()
+                .to_string();
+            p.workspace_root = Some(
+                self.ensure_within_workspace(Path::new(&p.path), req.workspace_root.as_deref())?
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
+        resolved.workspace_root = req.workspace_root.clone();
         Patcher::batch_patch(&resolved)
     }
 
-    fn lsp_definition<'a>(&'a self, req: &'a LspDefinitionRequest) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>> {
+    fn lsp_definition<'a>(
+        &'a self,
+        req: &'a LspDefinitionRequest,
+    ) -> BoxFuture<'a, CoreResult<LspDefinitionResponse>> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
-        Box::pin(async move {
-            self.lsp.goto_definition(self, &resolved).await
-        })
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        Box::pin(async move { self.lsp.goto_definition(self, &resolved).await })
     }
 
-    fn lsp_references<'a>(&'a self, req: &'a LspReferencesRequest) -> BoxFuture<'a, CoreResult<LspReferencesResponse>> {
+    fn lsp_references<'a>(
+        &'a self,
+        req: &'a LspReferencesRequest,
+    ) -> BoxFuture<'a, CoreResult<LspReferencesResponse>> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
-        Box::pin(async move {
-            self.lsp.find_references(self, &resolved).await
-        })
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        Box::pin(async move { self.lsp.find_references(self, &resolved).await })
     }
 
-    fn lsp_hover<'a>(&'a self, req: &'a LspHoverRequest) -> BoxFuture<'a, CoreResult<LspHoverResponse>> {
+    fn lsp_hover<'a>(
+        &'a self,
+        req: &'a LspHoverRequest,
+    ) -> BoxFuture<'a, CoreResult<LspHoverResponse>> {
         let mut resolved = req.clone();
-        resolved.path = self.resolve_path(Some(&req.path)).to_string_lossy().to_string();
-        Box::pin(async move {
-            self.lsp.hover(self, &resolved).await
-        })
+        resolved.path = self
+            .resolve_path(Some(&req.path))
+            .to_string_lossy()
+            .to_string();
+        Box::pin(async move { self.lsp.hover(self, &resolved).await })
     }
 
-    fn lsp_diagnostics<'a>(&'a self, req: &'a LspDiagnosticsRequest) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>> {
+    fn lsp_diagnostics<'a>(
+        &'a self,
+        req: &'a LspDiagnosticsRequest,
+    ) -> BoxFuture<'a, CoreResult<LspDiagnosticsResponse>> {
         let mut resolved = req.clone();
         if let Some(ref p) = req.path {
             resolved.path = Some(self.resolve_path(Some(p)).to_string_lossy().to_string());
         }
-        Box::pin(async move {
-            self.lsp.diagnostics(self, &resolved).await
-        })
+        Box::pin(async move { self.lsp.diagnostics(self, &resolved).await })
     }
 
-    fn lsp_status<'a>(&'a self, req: &'a LspStatusRequest) -> BoxFuture<'a, CoreResult<LspStatusResponse>> {
+    fn lsp_status<'a>(
+        &'a self,
+        req: &'a LspStatusRequest,
+    ) -> BoxFuture<'a, CoreResult<LspStatusResponse>> {
         let req = req.clone();
-        Box::pin(async move {
-            self.lsp.status(&req).await
-        })
+        Box::pin(async move { self.lsp.status(&req).await })
     }
 
-    fn lsp_install<'a>(&'a self, req: &'a LspInstallRequest) -> BoxFuture<'a, CoreResult<LspInstallResponse>> {
+    fn lsp_install<'a>(
+        &'a self,
+        req: &'a LspInstallRequest,
+    ) -> BoxFuture<'a, CoreResult<LspInstallResponse>> {
         let req = req.clone();
-        Box::pin(async move {
-            self.lsp.install(&req).await
-        })
+        Box::pin(async move { self.lsp.install(&req).await })
     }
 
     fn exec<'a>(&'a self, req: &'a ExecRequest) -> BoxFuture<'a, CoreResult<ExecResponse>> {
         let mut resolved = req.clone();
-        resolved.cwd = Some(self.resolve_path(req.cwd.as_deref()).to_string_lossy().to_string());
-        Box::pin(async move {
-            self.terminal.exec(&resolved).await
-        })
+        resolved.cwd = Some(
+            self.resolve_path(req.cwd.as_deref())
+                .to_string_lossy()
+                .to_string(),
+        );
+        Box::pin(async move { self.terminal.exec(&resolved).await })
     }
 
-    fn terminal_read<'a>(&'a self, req: &'a TerminalReadRequest) -> BoxFuture<'a, CoreResult<TerminalReadResponse>> {
-        Box::pin(async move {
-            self.terminal.read(req).await
-        })
+    fn terminal_read<'a>(
+        &'a self,
+        req: &'a TerminalReadRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalReadResponse>> {
+        Box::pin(async move { self.terminal.read(req).await })
     }
 
-    fn terminal_write<'a>(&'a self, req: &'a TerminalWriteRequest) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>> {
-        Box::pin(async move {
-            self.terminal.write(req).await
-        })
+    fn terminal_write<'a>(
+        &'a self,
+        req: &'a TerminalWriteRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalWriteResponse>> {
+        Box::pin(async move { self.terminal.write(req).await })
     }
 
-    fn terminal_resize<'a>(&'a self, req: &'a TerminalResizeRequest) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>> {
-        Box::pin(async move {
-            self.terminal.resize(req).await
-        })
+    fn terminal_resize<'a>(
+        &'a self,
+        req: &'a TerminalResizeRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalResizeResponse>> {
+        Box::pin(async move { self.terminal.resize(req).await })
     }
 
-    fn terminal_kill<'a>(&'a self, req: &'a TerminalKillRequest) -> BoxFuture<'a, CoreResult<TerminalKillResponse>> {
-        Box::pin(async move {
-            self.terminal.kill(req).await
-        })
+    fn terminal_kill<'a>(
+        &'a self,
+        req: &'a TerminalKillRequest,
+    ) -> BoxFuture<'a, CoreResult<TerminalKillResponse>> {
+        Box::pin(async move { self.terminal.kill(req).await })
     }
 
-    fn git_status<'a>(&'a self, req: &'a GitStatusRequest) -> BoxFuture<'a, CoreResult<GitStatusResponse>> {
+    fn git_status<'a>(
+        &'a self,
+        req: &'a GitStatusRequest,
+    ) -> BoxFuture<'a, CoreResult<GitStatusResponse>> {
         let target_dir = self.resolve_path(req.path.as_deref());
         Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                crate::git_ops::GitEngine::status(&target_dir)
-            })
-            .await
-            .map_err(|e| CoreError::General(format!("Git task join error: {e}")))?
+            tokio::task::spawn_blocking(move || crate::git_ops::GitEngine::status(&target_dir))
+                .await
+                .map_err(|e| CoreError::General(format!("Git task join error: {e}")))?
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
     use std::path::PathBuf;
-    use super::*;
     use transcend_protocol::{
-        FindOptions, FindSymbolRequest, OutlineFormat, OutlineOptions, OutlineRequest,
-        ParseStatus, PatchRequest, SearchOptions, SymbolKind,
+        FindOptions, FindSymbolRequest, OutlineFormat, OutlineOptions, OutlineRequest, ParseStatus,
+        PatchRequest, SearchOptions, SymbolKind,
     };
 
     static SANDBOX_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -428,12 +646,19 @@ mod tests {
     }
 
     impl TestSandbox {
+        /// Workspace boundary covering this sandbox, so the mutating-op guard accepts
+        /// the absolute temp paths the tests use.
+        fn boundary(&self) -> Option<String> {
+            Some(self.dir.to_string_lossy().to_string())
+        }
+
         fn create() -> Self {
             let pid = std::process::id();
             let count = SANDBOX_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let thread_id = format!("{:?}", std::thread::current().id())
                 .replace(|c: char| !c.is_alphanumeric(), "");
-            let dir = std::env::temp_dir().join(format!("transcend_test_{}_{}_{}", pid, thread_id, count));
+            let dir = std::env::temp_dir()
+                .join(format!("transcend_test_{}_{}_{}", pid, thread_id, count));
             fs::create_dir_all(&dir).unwrap();
 
             // 1. Regular UTF-8 file
@@ -448,14 +673,16 @@ mod tests {
             // 2. Binary file with NUL byte
             fs::write(
                 dir.join("image.bin"),
-                &[b'f', b'n', 0x00, b'b', b'i', b'n', 0x00],
+                [b'f', b'n', 0x00, b'b', b'i', b'n', 0x00],
             )
             .unwrap();
 
             // 3. Non-UTF-8 Latin-1 text file with 0xE9 (é in Latin-1, invalid standalone in UTF-8)
             fs::write(
                 dir.join("latin1.txt"),
-                &[b'f', b'n', b' ', b'c', 0xE9, b'l', b'e', b'b', b'r', b'e', b'\n'],
+                [
+                    b'f', b'n', b' ', b'c', 0xE9, b'l', b'e', b'b', b'r', b'e', b'\n',
+                ],
             )
             .unwrap();
 
@@ -501,7 +728,11 @@ mod tests {
         assert_eq!(res.files.len(), 1);
         assert_eq!(res.files[0].matches.len(), 1);
         assert_eq!(res.files[0].matches[0].line_number, 1);
-        assert!(res.files[0].matches[0].line_text.contains("fn hello_world()"));
+        assert!(
+            res.files[0].matches[0]
+                .line_text
+                .contains("fn hello_world()")
+        );
         assert!(!res.truncated);
     }
 
@@ -575,7 +806,7 @@ mod tests {
         assert_eq!(res.total_matches, 1);
         assert_eq!(res.files.len(), 1);
         assert_eq!(res.files[0].matches.len(), 1);
-        // Lossy UTF-8 turns 0xE9 into replacement char 
+        // Lossy UTF-8 turns 0xE9 into replacement char
         assert!(res.files[0].matches[0].line_text.contains("c\u{FFFD}lebre"));
     }
 
@@ -698,8 +929,16 @@ mod tests {
         assert_eq!(res.total_matches, 25);
         assert_eq!(res.total_files, 2);
 
-        let monster = res.files.iter().find(|f| f.file.contains("monster.txt")).unwrap();
-        let regular = res.files.iter().find(|f| f.file.contains("regular.txt")).unwrap();
+        let monster = res
+            .files
+            .iter()
+            .find(|f| f.file.contains("monster.txt"))
+            .unwrap();
+        let regular = res
+            .files
+            .iter()
+            .find(|f| f.file.contains("regular.txt"))
+            .unwrap();
         assert_eq!(monster.match_count, 20);
         assert_eq!(monster.matches.len(), 3);
         assert_eq!(regular.match_count, 5);
@@ -781,7 +1020,8 @@ mod tests {
         let sandbox = TestSandbox::create();
         let engine = NativeEngine::new();
 
-        let content = "line 1 before\nline 2 before\nmatched_needle_target\nline 4 after\nline 5 after\n";
+        let content =
+            "line 1 before\nline 2 before\nmatched_needle_target\nline 4 after\nline 5 after\n";
         fs::write(sandbox.dir.join("context.txt"), content).unwrap();
 
         let res = engine
@@ -832,6 +1072,124 @@ mod tests {
         assert_eq!(res.extension_breakdown.get("rs"), Some(&1));
         assert_eq!(res.extension_breakdown.get("txt"), Some(&2));
         assert_eq!(res.extension_breakdown.get("bin"), Some(&1));
+    }
+
+    /// `respect_gitignore: false` must reach gitignored paths without also pulling in
+    /// hidden directories — the two concerns are independent.
+    #[test]
+    fn test_search_and_find_respect_gitignore_toggle() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Build an ignored directory plus a hidden one inside a real git work tree.
+        let repo = sandbox.dir.join("repo");
+        let ignored = repo.join("vendored");
+        let hidden = repo.join(".hidden_dir");
+        fs::create_dir_all(&ignored).unwrap();
+        fs::create_dir_all(&hidden).unwrap();
+        fs::write(ignored.join("lib.rs"), "pub fn vendored_marker() {}\n").unwrap();
+        fs::write(hidden.join("secret.rs"), "pub fn hidden_marker() {}\n").unwrap();
+        fs::write(repo.join(".gitignore"), "vendored/\n").unwrap();
+        fs::write(repo.join("src.rs"), "pub fn visible_marker() {}\n").unwrap();
+        // A `.git` directory makes `ignore` treat this as a work tree root.
+        fs::create_dir_all(repo.join(".git")).unwrap();
+
+        let repo_str = repo.to_string_lossy().to_string();
+
+        // Default: gitignore honoured, so the vendored file is invisible.
+        let default_search = engine
+            .search(&SearchRequest {
+                pattern: "vendored_marker".to_string(),
+                path: Some(repo_str.clone()),
+                options: None,
+            })
+            .unwrap();
+        assert_eq!(
+            default_search.total_matches, 0,
+            "gitignored file must not be searched by default"
+        );
+
+        // Opting out must find it.
+        let opted_out = engine
+            .search(&SearchRequest {
+                pattern: "vendored_marker".to_string(),
+                path: Some(repo_str.clone()),
+                options: Some(SearchOptions {
+                    respect_gitignore: Some(false),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert_eq!(
+            opted_out.total_matches, 1,
+            "respect_gitignore:false must search ignored paths"
+        );
+
+        // ...but must NOT drag in hidden directories.
+        let hidden_search = engine
+            .search(&SearchRequest {
+                pattern: "hidden_marker".to_string(),
+                path: Some(repo_str.clone()),
+                options: Some(SearchOptions {
+                    respect_gitignore: Some(false),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert_eq!(
+            hidden_search.total_matches, 0,
+            "respect_gitignore must be independent of include_hidden"
+        );
+
+        // Both flags together see everything.
+        let everything = engine
+            .search(&SearchRequest {
+                pattern: "marker".to_string(),
+                path: Some(repo_str.clone()),
+                options: Some(SearchOptions {
+                    respect_gitignore: Some(false),
+                    include_hidden: Some(true),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert_eq!(everything.total_matches, 3);
+
+        // `find` must behave identically.
+        let find_default = engine
+            .find(&FindRequest {
+                pattern: Some("*.rs".to_string()),
+                path: Some(repo_str.clone()),
+                options: None,
+            })
+            .unwrap();
+        assert!(
+            !find_default
+                .entries
+                .iter()
+                .any(|e| e.path.contains("vendored")),
+            "find must skip gitignored paths by default: {:?}",
+            find_default.entries
+        );
+
+        let find_opted_out = engine
+            .find(&FindRequest {
+                pattern: Some("*.rs".to_string()),
+                path: Some(repo_str),
+                options: Some(FindOptions {
+                    respect_gitignore: Some(false),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+        assert!(
+            find_opted_out
+                .entries
+                .iter()
+                .any(|e| e.path.contains("vendored")),
+            "find must reach gitignored paths when asked: {:?}",
+            find_opted_out.entries
+        );
     }
 
     #[test]
@@ -953,7 +1311,12 @@ mod tests {
                 options: None,
             })
             .unwrap();
-        assert!(!res_default.entries.iter().any(|e| e.path.contains(".github") || e.path.contains(".env")));
+        assert!(
+            !res_default
+                .entries
+                .iter()
+                .any(|e| e.path.contains(".github") || e.path.contains(".env"))
+        );
 
         // 2. Find with include_hidden: true
         let res_hidden = engine
@@ -966,7 +1329,12 @@ mod tests {
                 }),
             })
             .unwrap();
-        assert!(res_hidden.entries.iter().any(|e| e.path.contains(".github") || e.path.contains(".env")));
+        assert!(
+            res_hidden
+                .entries
+                .iter()
+                .any(|e| e.path.contains(".github") || e.path.contains(".env"))
+        );
 
         // 3. Search default (should omit hidden files)
         let search_default = engine
@@ -1020,7 +1388,11 @@ mod tests {
         assert_eq!(res.total_count, 6);
         // But heavy contributed at most 2, src contributed 1 -> 3 entries returned
         assert_eq!(res.entries.len(), 3);
-        let heavy_count = res.entries.iter().filter(|e| e.path.starts_with("heavy/")).count();
+        let heavy_count = res
+            .entries
+            .iter()
+            .filter(|e| e.path.starts_with("heavy/"))
+            .count();
         assert_eq!(heavy_count, 2);
     }
 
@@ -1117,9 +1489,16 @@ impl User {
         assert_eq!(file.parse_status, ParseStatus::Complete);
 
         // 1. Struct User
-        let user_struct = file.symbols.iter().find(|s| s.name == "User" && s.kind == SymbolKind::Struct).unwrap();
+        let user_struct = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "User" && s.kind == SymbolKind::Struct)
+            .unwrap();
         assert_eq!(user_struct.visibility.as_deref(), Some("pub"));
-        assert_eq!(user_struct.doc_comment.as_deref(), Some("Primary user entity."));
+        assert_eq!(
+            user_struct.doc_comment.as_deref(),
+            Some("Primary user entity.")
+        );
         assert_eq!(user_struct.children.len(), 2);
         assert_eq!(user_struct.children[0].name, "id");
         assert_eq!(user_struct.children[0].kind, SymbolKind::Field);
@@ -1133,21 +1512,43 @@ impl User {
         assert!(user_struct.span.end_byte > user_struct.span.start_byte);
 
         // 2. Enum Role
-        let role_enum = file.symbols.iter().find(|s| s.name == "Role" && s.kind == SymbolKind::Enum).unwrap();
+        let role_enum = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "Role" && s.kind == SymbolKind::Enum)
+            .unwrap();
         assert_eq!(role_enum.children.len(), 2);
         assert_eq!(role_enum.children[0].name, "Admin");
 
         // 3. Trait Authenticator
-        let auth_trait = file.symbols.iter().find(|s| s.name == "Authenticator" && s.kind == SymbolKind::Trait).unwrap();
+        let auth_trait = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "Authenticator" && s.kind == SymbolKind::Trait)
+            .unwrap();
         assert_eq!(auth_trait.children.len(), 1);
         assert_eq!(auth_trait.children[0].name, "authenticate");
 
         // 4. Impl Authenticator for User
-        let impl_auth = file.symbols.iter().find(|s| s.name.contains("Authenticator for User")).unwrap();
+        let impl_auth = file
+            .symbols
+            .iter()
+            .find(|s| s.name.contains("Authenticator for User"))
+            .unwrap();
         assert_eq!(impl_auth.kind, SymbolKind::Implementation);
         assert_eq!(impl_auth.relationships.len(), 2);
-        assert!(impl_auth.relationships.iter().any(|r| r.relation == "implements" && r.target == "Authenticator"));
-        assert!(impl_auth.relationships.iter().any(|r| r.relation == "targets" && r.target == "User"));
+        assert!(
+            impl_auth
+                .relationships
+                .iter()
+                .any(|r| r.relation == "implements" && r.target == "Authenticator")
+        );
+        assert!(
+            impl_auth
+                .relationships
+                .iter()
+                .any(|r| r.relation == "targets" && r.target == "User")
+        );
         assert_eq!(impl_auth.children.len(), 1);
         assert_eq!(impl_auth.children[0].name, "authenticate");
 
@@ -1190,7 +1591,11 @@ pub async fn dispatch_event() {}
             Some("Model representing a database record.")
         );
 
-        let dispatch = file.symbols.iter().find(|s| s.name == "dispatch_event").unwrap();
+        let dispatch = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "dispatch_event")
+            .unwrap();
         assert_eq!(
             dispatch.doc_comment.as_deref(),
             Some("Dispatches an asynchronous event.")
@@ -1238,16 +1643,30 @@ export class WebServer implements IService {
         let iface = file.symbols.iter().find(|s| s.name == "IService").unwrap();
         assert_eq!(iface.kind, SymbolKind::Interface);
         assert_eq!(iface.visibility.as_deref(), Some("exported"));
-        assert!(iface.doc_comment.as_deref().unwrap().contains("Service contract"));
+        assert!(
+            iface
+                .doc_comment
+                .as_deref()
+                .unwrap()
+                .contains("Service contract")
+        );
         assert_eq!(iface.children.len(), 2);
 
         // Class WebServer
         let cls = file.symbols.iter().find(|s| s.name == "WebServer").unwrap();
         assert_eq!(cls.kind, SymbolKind::Class);
         assert_eq!(cls.visibility.as_deref(), Some("exported"));
-        assert!(cls.relationships.iter().any(|r| r.relation == "implements" && r.target == "IService"));
+        assert!(
+            cls.relationships
+                .iter()
+                .any(|r| r.relation == "implements" && r.target == "IService")
+        );
         assert!(cls.children.iter().any(|c| c.name == "constructor"));
-        assert!(cls.children.iter().any(|c| c.name == "start" && c.kind == SymbolKind::Method));
+        assert!(
+            cls.children
+                .iter()
+                .any(|c| c.name == "start" && c.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1283,7 +1702,11 @@ const INTERNAL_SECRET = 42;
         assert_eq!(handler.kind, SymbolKind::TypeAlias);
         assert_eq!(handler.visibility.as_deref(), Some("exported"));
 
-        let secret = file.symbols.iter().find(|s| s.name == "INTERNAL_SECRET").unwrap();
+        let secret = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "INTERNAL_SECRET")
+            .unwrap();
         assert_eq!(secret.kind, SymbolKind::Constant);
         assert_eq!(secret.visibility, None);
     }
@@ -1317,10 +1740,21 @@ class SearchPipeline(BasePipeline):
         let file = &res.files[0];
         assert_eq!(file.language, "python");
 
-        let cls = file.symbols.iter().find(|s| s.name == "SearchPipeline").unwrap();
+        let cls = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "SearchPipeline")
+            .unwrap();
         assert_eq!(cls.kind, SymbolKind::Class);
-        assert_eq!(cls.doc_comment.as_deref(), Some("Executes distributed code searches."));
-        assert!(cls.relationships.iter().any(|r| r.relation == "extends" && r.target == "BasePipeline"));
+        assert_eq!(
+            cls.doc_comment.as_deref(),
+            Some("Executes distributed code searches.")
+        );
+        assert!(
+            cls.relationships
+                .iter()
+                .any(|r| r.relation == "extends" && r.target == "BasePipeline")
+        );
 
         let init_m = cls.children.iter().find(|c| c.name == "__init__").unwrap();
         assert_eq!(init_m.kind, SymbolKind::Constructor);
@@ -1329,7 +1763,11 @@ class SearchPipeline(BasePipeline):
         assert_eq!(run_m.kind, SymbolKind::Method);
         assert_eq!(run_m.visibility.as_deref(), Some("public"));
 
-        let helper_m = cls.children.iter().find(|c| c.name == "_internal_clean").unwrap();
+        let helper_m = cls
+            .children
+            .iter()
+            .find(|c| c.name == "_internal_clean")
+            .unwrap();
         assert_eq!(helper_m.visibility.as_deref(), Some("private"));
     }
 
@@ -1381,7 +1819,11 @@ class User:
 
         assert!(read_res.found);
         let src = read_res.source_code.unwrap();
-        assert!(src.starts_with("@app.get"), "read_symbol should include decorators: {}", src);
+        assert!(
+            src.starts_with("@app.get"),
+            "read_symbol should include decorators: {}",
+            src
+        );
 
         // 4. Decorated class User
         let cls_sym = file.symbols.iter().find(|s| s.name == "User").unwrap();
@@ -1425,9 +1867,18 @@ func internalHelper() {}
         let exec_method = file.symbols.iter().find(|s| s.name == "Execute").unwrap();
         assert_eq!(exec_method.kind, SymbolKind::Method);
         assert_eq!(exec_method.visibility.as_deref(), Some("exported"));
-        assert!(exec_method.relationships.iter().any(|r| r.relation == "receiver" && r.target == "Engine"));
+        assert!(
+            exec_method
+                .relationships
+                .iter()
+                .any(|r| r.relation == "receiver" && r.target == "Engine")
+        );
 
-        let helper_fn = file.symbols.iter().find(|s| s.name == "internalHelper").unwrap();
+        let helper_fn = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "internalHelper")
+            .unwrap();
         assert_eq!(helper_fn.visibility, None);
     }
 
@@ -1464,11 +1915,19 @@ var (
         let file = &res.files[0];
         assert_eq!(file.language, "go");
 
-        let pending = file.symbols.iter().find(|s| s.name == "StatusPending").unwrap();
+        let pending = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "StatusPending")
+            .unwrap();
         assert_eq!(pending.kind, SymbolKind::Constant);
         assert_eq!(pending.visibility.as_deref(), Some("exported"));
 
-        let done = file.symbols.iter().find(|s| s.name == "StatusDone").unwrap();
+        let done = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "StatusDone")
+            .unwrap();
         assert_eq!(done.kind, SymbolKind::Constant);
         assert_eq!(done.visibility.as_deref(), Some("exported"));
 
@@ -1476,11 +1935,19 @@ var (
         assert_eq!(id.kind, SymbolKind::TypeAlias);
         assert_eq!(id.visibility.as_deref(), Some("exported"));
 
-        let handler = file.symbols.iter().find(|s| s.name == "HandlerFunc").unwrap();
+        let handler = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "HandlerFunc")
+            .unwrap();
         assert_eq!(handler.kind, SymbolKind::TypeAlias);
         assert_eq!(handler.visibility.as_deref(), Some("exported"));
 
-        let err = file.symbols.iter().find(|s| s.name == "ErrNotFound").unwrap();
+        let err = file
+            .symbols
+            .iter()
+            .find(|s| s.name == "ErrNotFound")
+            .unwrap();
         assert_eq!(err.kind, SymbolKind::Variable);
         assert_eq!(err.visibility.as_deref(), Some("exported"));
     }
@@ -1515,8 +1982,18 @@ pub fn public_toplevel() {}
             })
             .unwrap();
 
-        assert!(!res_exported.files[0].symbols.iter().any(|s| s.name == "private_toplevel"));
-        assert!(res_exported.files[0].symbols.iter().any(|s| s.name == "public_toplevel"));
+        assert!(
+            !res_exported.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "private_toplevel")
+        );
+        assert!(
+            res_exported.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "public_toplevel")
+        );
 
         // 2. Symbol kinds filter
         let res_kinds = engine
@@ -1545,8 +2022,15 @@ pub fn public_toplevel() {}
             })
             .unwrap();
 
-        let s = res_depth.files[0].symbols.iter().find(|sym| sym.name == "Service").unwrap();
-        assert!(s.children.is_empty(), "Children should be pruned at depth 1");
+        let s = res_depth.files[0]
+            .symbols
+            .iter()
+            .find(|sym| sym.name == "Service")
+            .unwrap();
+        assert!(
+            s.children.is_empty(),
+            "Children should be pruned at depth 1"
+        );
     }
 
     #[test]
@@ -1634,7 +2118,11 @@ pub struct Delta { pub g: u32, pub h: u32 }
 
         assert!(res.truncated, "Should be truncated by byte budget");
         let json_size = serde_json::to_vec(&res.files).unwrap().len();
-        assert!(json_size <= 600, "Output size {} should be capped", json_size);
+        assert!(
+            json_size <= 600,
+            "Output size {} should be capped",
+            json_size
+        );
     }
 
     #[test]
@@ -1661,7 +2149,11 @@ impl Contract {
             })
             .unwrap();
 
-        let contract_sym = res_docs.files[0].symbols.iter().find(|s| s.name == "Contract").unwrap();
+        let contract_sym = res_docs.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "Contract")
+            .unwrap();
         assert_eq!(
             contract_sym.doc_comment.as_deref(),
             Some("First line summary of contract.")
@@ -1679,8 +2171,15 @@ impl Contract {
             })
             .unwrap();
 
-        let impl_sym = res_no_rels.files[0].symbols.iter().find(|s| s.name == "impl Contract").unwrap();
-        assert!(impl_sym.relationships.is_empty(), "Relationships should be empty when include_relationships is false");
+        let impl_sym = res_no_rels.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "impl Contract")
+            .unwrap();
+        assert!(
+            impl_sym.relationships.is_empty(),
+            "Relationships should be empty when include_relationships is false"
+        );
     }
 
     #[test]
@@ -1699,15 +2198,27 @@ struct Point {
     int y;
 };
 "#;
-        let c_res = engine.outline(&OutlineRequest {
-            path: Some("math.c".to_string()),
-            content: Some(c_code.to_string()),
-            options: None,
-        }).expect("C outline should succeed");
+        let c_res = engine
+            .outline(&OutlineRequest {
+                path: Some("math.c".to_string()),
+                content: Some(c_code.to_string()),
+                options: None,
+            })
+            .expect("C outline should succeed");
 
         assert_eq!(c_res.files[0].language, "c");
-        assert!(c_res.files[0].symbols.iter().any(|s| s.name == "add" && s.kind == SymbolKind::Function));
-        assert!(c_res.files[0].symbols.iter().any(|s| s.name == "Point" && s.kind == SymbolKind::Struct));
+        assert!(
+            c_res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "add" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            c_res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "Point" && s.kind == SymbolKind::Struct)
+        );
 
         let header_code = r#"
 #define MAX_BUFFER 1024
@@ -1717,15 +2228,32 @@ typedef struct _ENTRY {
 
 int process_data(ENTRY *e);
 "#;
-        let h_res = engine.outline(&OutlineRequest {
-            path: Some("header.h".to_string()),
-            content: Some(header_code.to_string()),
-            options: None,
-        }).expect("C header outline should succeed");
+        let h_res = engine
+            .outline(&OutlineRequest {
+                path: Some("header.h".to_string()),
+                content: Some(header_code.to_string()),
+                options: None,
+            })
+            .expect("C header outline should succeed");
         assert_eq!(h_res.files[0].language, "c");
-        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "MAX_BUFFER" && s.kind == SymbolKind::Macro));
-        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "ENTRY" && s.kind == SymbolKind::Struct));
-        assert!(h_res.files[0].symbols.iter().any(|s| s.name == "process_data" && s.kind == SymbolKind::Function));
+        assert!(
+            h_res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "MAX_BUFFER" && s.kind == SymbolKind::Macro)
+        );
+        assert!(
+            h_res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "ENTRY" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            h_res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "process_data" && s.kind == SymbolKind::Function)
+        );
 
         // 2. Test C++
         let cpp_code = r#"
@@ -1737,17 +2265,33 @@ private:
     int age;
 };
 "#;
-        let cpp_res = engine.outline(&OutlineRequest {
-            path: Some("animal.cpp".to_string()),
-            content: Some(cpp_code.to_string()),
-            options: None,
-        }).expect("C++ outline should succeed");
+        let cpp_res = engine
+            .outline(&OutlineRequest {
+                path: Some("animal.cpp".to_string()),
+                content: Some(cpp_code.to_string()),
+                options: None,
+            })
+            .expect("C++ outline should succeed");
 
         assert_eq!(cpp_res.files[0].language, "cpp");
-        let class_sym = cpp_res.files[0].symbols.iter().find(|s| s.name == "Animal").unwrap();
+        let class_sym = cpp_res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "Animal")
+            .unwrap();
         assert_eq!(class_sym.kind, SymbolKind::Class);
-        assert!(class_sym.children.iter().any(|c| c.name == "speak" && c.visibility.as_deref() == Some("public")));
-        assert!(class_sym.children.iter().any(|c| c.name == "age" && c.visibility.as_deref() == Some("private")));
+        assert!(
+            class_sym
+                .children
+                .iter()
+                .any(|c| c.name == "speak" && c.visibility.as_deref() == Some("public"))
+        );
+        assert!(
+            class_sym
+                .children
+                .iter()
+                .any(|c| c.name == "age" && c.visibility.as_deref() == Some("private"))
+        );
     }
 
     #[test]
@@ -1768,21 +2312,46 @@ namespace Services {
     }
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("Worker.cs".to_string()),
-            content: Some(cs_code.to_string()),
-            options: None,
-        }).expect("C# outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("Worker.cs".to_string()),
+                content: Some(cs_code.to_string()),
+                options: None,
+            })
+            .expect("C# outline should succeed");
 
         assert_eq!(res.files[0].language, "csharp");
         let ns = &res.files[0].symbols[0];
         assert_eq!(ns.kind, SymbolKind::Namespace);
-        assert!(ns.children.iter().any(|s| s.name == "IWorker" && s.kind == SymbolKind::Interface));
-        let worker_class = ns.children.iter().find(|s| s.name == "BackgroundWorker").unwrap();
+        assert!(
+            ns.children
+                .iter()
+                .any(|s| s.name == "IWorker" && s.kind == SymbolKind::Interface)
+        );
+        let worker_class = ns
+            .children
+            .iter()
+            .find(|s| s.name == "BackgroundWorker")
+            .unwrap();
         assert_eq!(worker_class.kind, SymbolKind::Class);
-        assert!(worker_class.relationships.iter().any(|r| r.relation == "implements" && r.target == "IWorker"));
-        assert!(worker_class.children.iter().any(|c| c.name == "Name" && c.kind == SymbolKind::Property));
-        assert!(worker_class.children.iter().any(|c| c.name == "Execute" && c.kind == SymbolKind::Method));
+        assert!(
+            worker_class
+                .relationships
+                .iter()
+                .any(|r| r.relation == "implements" && r.target == "IWorker")
+        );
+        assert!(
+            worker_class
+                .children
+                .iter()
+                .any(|c| c.name == "Name" && c.kind == SymbolKind::Property)
+        );
+        assert!(
+            worker_class
+                .children
+                .iter()
+                .any(|c| c.name == "Execute" && c.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1805,19 +2374,43 @@ public class ApplicationService implements Runnable {
     }
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("ApplicationService.java".to_string()),
-            content: Some(java_code.to_string()),
-            options: None,
-        }).expect("Java outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("ApplicationService.java".to_string()),
+                content: Some(java_code.to_string()),
+                options: None,
+            })
+            .expect("Java outline should succeed");
 
         assert_eq!(res.files[0].language, "java");
-        let app_class = res.files[0].symbols.iter().find(|s| s.name == "ApplicationService").unwrap();
+        let app_class = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "ApplicationService")
+            .unwrap();
         assert_eq!(app_class.kind, SymbolKind::Class);
-        assert_eq!(app_class.doc_comment.as_deref(), Some("Main application service"));
-        assert!(app_class.relationships.iter().any(|r| r.relation == "implements" && r.target == "Runnable"));
-        assert!(app_class.children.iter().any(|c| c.name == "run" && c.kind == SymbolKind::Method));
-        assert!(app_class.children.iter().any(|c| c.name == "ApplicationService" && c.kind == SymbolKind::Constructor));
+        assert_eq!(
+            app_class.doc_comment.as_deref(),
+            Some("Main application service")
+        );
+        assert!(
+            app_class
+                .relationships
+                .iter()
+                .any(|r| r.relation == "implements" && r.target == "Runnable")
+        );
+        assert!(
+            app_class
+                .children
+                .iter()
+                .any(|c| c.name == "run" && c.kind == SymbolKind::Method)
+        );
+        assert!(
+            app_class
+                .children
+                .iter()
+                .any(|c| c.name == "ApplicationService" && c.kind == SymbolKind::Constructor)
+        );
     }
 
     #[test]
@@ -1835,17 +2428,31 @@ class User(val id: String) {
     }
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("User.kt".to_string()),
-            content: Some(kt_code.to_string()),
-            options: None,
-        }).expect("Kotlin outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("User.kt".to_string()),
+                content: Some(kt_code.to_string()),
+                options: None,
+            })
+            .expect("Kotlin outline should succeed");
 
         assert_eq!(res.files[0].language, "kotlin");
-        let user_class = res.files[0].symbols.iter().find(|s| s.name == "User").unwrap();
+        let user_class = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "User")
+            .unwrap();
         assert_eq!(user_class.kind, SymbolKind::Class);
-        assert_eq!(user_class.doc_comment.as_deref(), Some("User account model"));
-        assert!(user_class.children.iter().any(|c| c.name == "getDisplayName" && c.kind == SymbolKind::Method));
+        assert_eq!(
+            user_class.doc_comment.as_deref(),
+            Some("User account model")
+        );
+        assert!(
+            user_class
+                .children
+                .iter()
+                .any(|c| c.name == "getDisplayName" && c.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1863,18 +2470,28 @@ class HomeController {
     }
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("HomeController.php".to_string()),
-            content: Some(php_code.to_string()),
-            options: None,
-        }).expect("PHP outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("HomeController.php".to_string()),
+                content: Some(php_code.to_string()),
+                options: None,
+            })
+            .expect("PHP outline should succeed");
 
         assert_eq!(res.files[0].language, "php");
         let ns = &res.files[0].symbols[0];
         assert_eq!(ns.kind, SymbolKind::Namespace);
-        let ctrl = ns.children.iter().find(|s| s.name == "HomeController").unwrap();
+        let ctrl = ns
+            .children
+            .iter()
+            .find(|s| s.name == "HomeController")
+            .unwrap();
         assert_eq!(ctrl.kind, SymbolKind::Class);
-        assert!(ctrl.children.iter().any(|m| m.name == "index" && m.kind == SymbolKind::Method));
+        assert!(
+            ctrl.children
+                .iter()
+                .any(|m| m.name == "index" && m.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1890,20 +2507,34 @@ module Authentication
   end
 end
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("auth.rb".to_string()),
-            content: Some(rb_code.to_string()),
-            options: None,
-        }).expect("Ruby outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("auth.rb".to_string()),
+                content: Some(rb_code.to_string()),
+                options: None,
+            })
+            .expect("Ruby outline should succeed");
 
         assert_eq!(res.files[0].language, "ruby");
         let m = &res.files[0].symbols[0];
         assert_eq!(m.name, "Authentication");
         assert_eq!(m.kind, SymbolKind::Module);
-        let cls = m.children.iter().find(|s| s.name == "SessionManager").unwrap();
+        let cls = m
+            .children
+            .iter()
+            .find(|s| s.name == "SessionManager")
+            .unwrap();
         assert_eq!(cls.kind, SymbolKind::Class);
-        assert!(cls.relationships.iter().any(|r| r.relation == "extends" && r.target == "BaseManager"));
-        assert!(cls.children.iter().any(|c| c.name == "create_session" && c.kind == SymbolKind::Method));
+        assert!(
+            cls.relationships
+                .iter()
+                .any(|r| r.relation == "extends" && r.target == "BaseManager")
+        );
+        assert!(
+            cls.children
+                .iter()
+                .any(|c| c.name == "create_session" && c.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1916,18 +2547,32 @@ public class SportsCar {
     public func accelerate() {}
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("Car.swift".to_string()),
-            content: Some(swift_code.to_string()),
-            options: None,
-        }).expect("Swift outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("Car.swift".to_string()),
+                content: Some(swift_code.to_string()),
+                options: None,
+            })
+            .expect("Swift outline should succeed");
 
         assert_eq!(res.files[0].language, "swift");
-        let car = res.files[0].symbols.iter().find(|s| s.name == "SportsCar").unwrap();
+        let car = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "SportsCar")
+            .unwrap();
         assert_eq!(car.kind, SymbolKind::Class);
         assert_eq!(car.doc_comment.as_deref(), Some("High performance vehicle"));
-        assert!(car.children.iter().any(|c| c.name == "init" && c.kind == SymbolKind::Constructor));
-        assert!(car.children.iter().any(|c| c.name == "accelerate" && c.kind == SymbolKind::Method));
+        assert!(
+            car.children
+                .iter()
+                .any(|c| c.name == "init" && c.kind == SymbolKind::Constructor)
+        );
+        assert!(
+            car.children
+                .iter()
+                .any(|c| c.name == "accelerate" && c.kind == SymbolKind::Method)
+        );
     }
 
     #[test]
@@ -1941,15 +2586,27 @@ deploy_service() {
     echo "Deploying..."
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("deploy.sh".to_string()),
-            content: Some(bash_code.to_string()),
-            options: None,
-        }).expect("Bash outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("deploy.sh".to_string()),
+                content: Some(bash_code.to_string()),
+                options: None,
+            })
+            .expect("Bash outline should succeed");
 
         assert_eq!(res.files[0].language, "bash");
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "deploy_service" && s.kind == SymbolKind::Function));
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "DEPLOY_ENV" && s.kind == SymbolKind::Constant));
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "deploy_service" && s.kind == SymbolKind::Function)
+        );
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "DEPLOY_ENV" && s.kind == SymbolKind::Constant)
+        );
     }
 
     #[test]
@@ -1964,17 +2621,28 @@ CREATE TABLE customers (
 
 CREATE VIEW active_customers AS SELECT * FROM customers;
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("schema.sql".to_string()),
-            content: Some(sql_code.to_string()),
-            options: None,
-        }).expect("SQL outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("schema.sql".to_string()),
+                content: Some(sql_code.to_string()),
+                options: None,
+            })
+            .expect("SQL outline should succeed");
 
         assert_eq!(res.files[0].language, "sql");
-        let tbl = res.files[0].symbols.iter().find(|s| s.name == "customers").unwrap();
+        let tbl = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "customers")
+            .unwrap();
         assert_eq!(tbl.kind, SymbolKind::Struct);
         assert_eq!(tbl.doc_comment.as_deref(), Some("Customer accounts table"));
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "active_customers" && s.kind == SymbolKind::Interface));
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "active_customers" && s.kind == SymbolKind::Interface)
+        );
     }
 
     #[test]
@@ -1987,18 +2655,32 @@ class UserRepository {
     void fetchUser() {}
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("repo.dart".to_string()),
-            content: Some(dart_code.to_string()),
-            options: None,
-        }).expect("Dart outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("repo.dart".to_string()),
+                content: Some(dart_code.to_string()),
+                options: None,
+            })
+            .expect("Dart outline should succeed");
 
         assert_eq!(res.files[0].language, "dart");
-        let repo = res.files[0].symbols.iter().find(|s| s.name == "UserRepository").unwrap();
+        let repo = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "UserRepository")
+            .unwrap();
         assert_eq!(repo.kind, SymbolKind::Class);
         assert_eq!(repo.doc_comment.as_deref(), Some("User repository"));
-        assert!(repo.children.iter().any(|c| c.name == "fetchUser" && c.visibility.as_deref() == Some("public")));
-        assert!(repo.children.iter().any(|c| c.name == "_internalSync" && c.visibility.as_deref() == Some("private")));
+        assert!(
+            repo.children
+                .iter()
+                .any(|c| c.name == "fetchUser" && c.visibility.as_deref() == Some("public"))
+        );
+        assert!(
+            repo.children
+                .iter()
+                .any(|c| c.name == "_internalSync" && c.visibility.as_deref() == Some("private"))
+        );
     }
 
     #[test]
@@ -2013,15 +2695,27 @@ pub const AppConfig = struct {
 pub fn startServer() void {
 }
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("main.zig".to_string()),
-            content: Some(zig_code.to_string()),
-            options: None,
-        }).expect("Zig outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("main.zig".to_string()),
+                content: Some(zig_code.to_string()),
+                options: None,
+            })
+            .expect("Zig outline should succeed");
 
         assert_eq!(res.files[0].language, "zig");
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "AppConfig" && s.kind == SymbolKind::Struct));
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "startServer" && s.kind == SymbolKind::Function));
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "AppConfig" && s.kind == SymbolKind::Struct)
+        );
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "startServer" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -2039,17 +2733,33 @@ end
 
 return M
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("storage.lua".to_string()),
-            content: Some(lua_code.to_string()),
-            options: None,
-        }).expect("Lua outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("storage.lua".to_string()),
+                content: Some(lua_code.to_string()),
+                options: None,
+            })
+            .expect("Lua outline should succeed");
 
         assert_eq!(res.files[0].language, "lua");
-        let save_sym = res.files[0].symbols.iter().find(|s| s.name == "M:save").unwrap();
+        let save_sym = res.files[0]
+            .symbols
+            .iter()
+            .find(|s| s.name == "M:save")
+            .unwrap();
         assert_eq!(save_sym.kind, SymbolKind::Method);
-        assert!(save_sym.relationships.iter().any(|r| r.relation == "receiver" && r.target == "M"));
-        assert!(res.files[0].symbols.iter().any(|s| s.name == "M.load" && s.kind == SymbolKind::Function));
+        assert!(
+            save_sym
+                .relationships
+                .iter()
+                .any(|r| r.relation == "receiver" && r.target == "M")
+        );
+        assert!(
+            res.files[0]
+                .symbols
+                .iter()
+                .any(|s| s.name == "M.load" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -2073,17 +2783,22 @@ Hierarchical symbol index.
 ## Verification
 Automated test suite.
 "#;
-        let res = engine.outline(&OutlineRequest {
-            path: Some("README.md".to_string()),
-            content: Some(md_code.to_string()),
-            options: None,
-        }).expect("Markdown outline should succeed");
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some("README.md".to_string()),
+                content: Some(md_code.to_string()),
+                options: None,
+            })
+            .expect("Markdown outline should succeed");
 
         assert_eq!(res.files[0].language, "markdown");
         let root_h1 = &res.files[0].symbols[0];
         assert_eq!(root_h1.name, "Transcend Documentation");
         assert_eq!(root_h1.kind, SymbolKind::Module);
-        assert_eq!(root_h1.doc_comment.as_deref(), Some("Universal agent-native cartographer."));
+        assert_eq!(
+            root_h1.doc_comment.as_deref(),
+            Some("Universal agent-native cartographer.")
+        );
 
         // H1 should have two H2 children: "Core Features" and "Verification"
         assert_eq!(root_h1.children.len(), 2);
@@ -2117,12 +2832,14 @@ pub fn global_helper() -> i32 {
 "#;
 
         // 1. Bare name lookup of global function
-        let res1 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("calc.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "global_helper".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let res1 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("calc.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "global_helper".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res1.found);
         assert_eq!(res1.symbol.as_ref().unwrap().name, "global_helper");
@@ -2130,36 +2847,50 @@ pub fn global_helper() -> i32 {
         assert_eq!(res1.total_occurrences, 1);
 
         // 2. Qualified name lookup of method: Calculator::add
-        let res2 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("calc.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "Calculator::add".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let res2 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("calc.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "Calculator::add".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res2.found);
         assert_eq!(res2.qualified_name.as_deref(), Some("Calculator::add"));
-        assert!(res2.source_code.as_ref().unwrap().contains("(a + b) * self.scale"));
-        assert_eq!(res2.symbol.as_ref().unwrap().doc_comment.as_deref(), Some("Adds two numbers with scale"));
+        assert!(
+            res2.source_code
+                .as_ref()
+                .unwrap()
+                .contains("(a + b) * self.scale")
+        );
+        assert_eq!(
+            res2.symbol.as_ref().unwrap().doc_comment.as_deref(),
+            Some("Adds two numbers with scale")
+        );
 
         // 3. Normalized dot notation lookup: Calculator.add
-        let res3 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("calc.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "Calculator.add".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let res3 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("calc.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "Calculator.add".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res3.found);
         assert_eq!(res3.qualified_name.as_deref(), Some("Calculator::add"));
 
         // 4. Bare method name lookup
-        let res4 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("calc.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "add".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let res4 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("calc.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "add".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res4.found);
         assert_eq!(res4.symbol.as_ref().unwrap().name, "add");
@@ -2180,14 +2911,16 @@ fn execute() {
 // Line 10: footer"#;
 
         // Occurrence 0 (first) with 1 context line before and after
-        let res0 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("exec.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "execute".to_string(),
-            occurrence: Some(0),
-            context_lines: Some(1),
-            ..Default::default()
-        }).unwrap();
+        let res0 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("exec.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "execute".to_string(),
+                occurrence: Some(0),
+                context_lines: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res0.found);
         assert_eq!(res0.total_occurrences, 2);
@@ -2196,25 +2929,29 @@ fn execute() {
         assert!(res0.context_after.as_ref().unwrap().contains("Line 6"));
 
         // Occurrence 1 (second)
-        let res1 = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("exec.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "execute".to_string(),
-            occurrence: Some(1),
-            ..Default::default()
-        }).unwrap();
+        let res1 = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("exec.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "execute".to_string(),
+                occurrence: Some(1),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(res1.found);
         assert!(res1.source_code.as_ref().unwrap().contains("second"));
 
         // Occurrence out of range
-        let res_out = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("exec.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "execute".to_string(),
-            occurrence: Some(99),
-            ..Default::default()
-        }).unwrap();
+        let res_out = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("exec.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "execute".to_string(),
+                occurrence: Some(99),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(!res_out.found);
         assert!(res_out.message.as_ref().unwrap().contains("out of range"));
@@ -2227,12 +2964,14 @@ fn execute() {
 pub fn parse_header() {}
 pub fn parse_body() {}
 "#;
-        let res = engine.read_symbol(&ReadSymbolRequest {
-            path: Some("parser.rs".to_string()),
-            content: Some(code.to_string()),
-            symbol: "parse_footer".to_string(),
-            ..Default::default()
-        }).unwrap();
+        let res = engine
+            .read_symbol(&ReadSymbolRequest {
+                path: Some("parser.rs".to_string()),
+                content: Some(code.to_string()),
+                symbol: "parse_footer".to_string(),
+                ..Default::default()
+            })
+            .unwrap();
 
         assert!(!res.found);
         assert_eq!(res.total_occurrences, 0);
@@ -2364,6 +3103,7 @@ impl Calculator {
             path: file_path.to_string_lossy().to_string(),
             target_symbol: Some("Calculator::add".to_string()),
             replacement: "    pub fn add(&self, a: i32, b: i32) -> i32 {\n        // Optimized add\n        a.wrapping_add(b)\n    }".to_string(),
+            workspace_root: sandbox.boundary(),
             ..Default::default()
         };
 
@@ -2396,6 +3136,7 @@ pub fn greet() {
             path: file_path.to_string_lossy().to_string(),
             target_symbol: Some("greet".to_string()),
             replacement: "pub fn greet( { let = ;".to_string(),
+            workspace_root: sandbox.boundary(),
             ..Default::default()
         };
 
@@ -2407,7 +3148,10 @@ pub fn greet() {
 
         // Crucial guarantee: disk MUST NOT be modified!
         let untouched_code = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(untouched_code, initial_code, "Disk contents must remain untouched on AST failure");
+        assert_eq!(
+            untouched_code, initial_code,
+            "Disk contents must remain untouched on AST failure"
+        );
     }
 
     #[test]
@@ -2431,14 +3175,27 @@ pub fn run() {
             target_occurrence: Some(1), // Second "false"
             replacement: "true".to_string(),
             dry_run: Some(true),
+            workspace_root: sandbox.boundary(),
             ..Default::default()
         };
 
         let dry_res = engine.patch(&dry_req).unwrap();
         assert!(dry_res.success);
         assert!(dry_res.ast_valid);
-        assert!(dry_res.diff.as_ref().unwrap().contains("-    let mode = false;"));
-        assert!(dry_res.diff.as_ref().unwrap().contains("+    let mode = true;"));
+        assert!(
+            dry_res
+                .diff
+                .as_ref()
+                .unwrap()
+                .contains("-    let mode = false;")
+        );
+        assert!(
+            dry_res
+                .diff
+                .as_ref()
+                .unwrap()
+                .contains("+    let mode = true;")
+        );
 
         // Confirm file on disk is unchanged after dry_run
         let unchanged = fs::read_to_string(&file_path).unwrap();
@@ -2710,7 +3467,11 @@ pub fn caller_two() {
             .expect("lsp_references should succeed");
 
         assert!(res.total_found >= 2);
-        assert!(res.references.iter().any(|r| r.line_text.contains("caller_one") || r.line_text.contains("run_task()")));
+        assert!(
+            res.references
+                .iter()
+                .any(|r| r.line_text.contains("caller_one") || r.line_text.contains("run_task()"))
+        );
     }
 
     #[tokio::test]
@@ -2802,6 +3563,24 @@ pub fn compute_checksum(val: u32) -> u32 {
         let new_path = sandbox.dir.join("deep").join("nested").join("module.rs");
         let path_str = new_path.to_string_lossy().to_string();
 
+        // 0. Boundary guard: a path outside the sandbox must be refused
+        let escape_attempt = engine.write_file(&transcend_protocol::WriteFileRequest {
+            path: sandbox
+                .dir
+                .join("..")
+                .join("transcend_escape_probe.rs")
+                .to_string_lossy()
+                .to_string(),
+            content: "malicious".to_string(),
+            overwrite: Some(true),
+            create_parents: Some(true),
+            workspace_root: sandbox.boundary(),
+        });
+        assert!(
+            escape_attempt.is_err(),
+            "write_file must reject a path escaping the workspace boundary"
+        );
+
         // 1. Create net-new file with parent directories
         let create_res = engine
             .write_file(&transcend_protocol::WriteFileRequest {
@@ -2809,6 +3588,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 content: "pub fn add(a: i32, b: i32) -> i32 { a + b }\n".to_string(),
                 overwrite: Some(false),
                 create_parents: Some(true),
+                workspace_root: sandbox.boundary(),
             })
             .expect("write_file create should succeed");
 
@@ -2823,6 +3603,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 content: "corrupt".to_string(),
                 overwrite: Some(false),
                 create_parents: Some(true),
+                workspace_root: sandbox.boundary(),
             })
             .expect("write_file should return result without panic");
 
@@ -2837,6 +3618,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 content: "pub fn updated() {}\n".to_string(),
                 overwrite: Some(true),
                 create_parents: Some(true),
+                workspace_root: sandbox.boundary(),
             })
             .expect("write_file overwrite should succeed");
 
@@ -2936,6 +3718,137 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert!(prepend_res.diff.unwrap().contains("id: u64,"));
     }
 
+    /// Anchor discovery must climb to the outermost project marker, not the nearest.
+    /// In a Cargo workspace every crate has a `Cargo.toml`; a nearest-match rule would
+    /// scope every operation to one crate and silently hide the rest of the repo.
+    #[test]
+    fn test_outermost_anchor_climbs_past_nested_manifests() {
+        let sandbox = TestSandbox::create();
+
+        // repo/  (Cargo.toml + .git)
+        //   crates/inner/       (Cargo.toml)
+        //     src/              <- discovery starts here
+        let repo = sandbox.dir.join("repo");
+        let inner_src = repo.join("crates").join("inner").join("src");
+        fs::create_dir_all(&inner_src).unwrap();
+        fs::write(repo.join("Cargo.toml"), "[workspace]\n").unwrap();
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::write(
+            repo.join("crates").join("inner").join("Cargo.toml"),
+            "[package]\n",
+        )
+        .unwrap();
+
+        let found = outermost_anchor(&inner_src).expect("an anchor must be found");
+        assert_eq!(
+            found.canonicalize().unwrap(),
+            repo.canonicalize().unwrap(),
+            "discovery must climb past the nested crate manifest to the workspace root"
+        );
+
+        // A directory with no marker anywhere above the sandbox still terminates.
+        let bare = sandbox.dir.join("bare").join("deep");
+        fs::create_dir_all(&bare).unwrap();
+        // `sandbox.dir` lives under the OS temp dir, which normally has no anchor, but
+        // tolerate an anchor being found further up: the contract is "no panic", plus
+        // "never returns something below the start path".
+        if let Some(anchor) = outermost_anchor(&bare) {
+            assert!(
+                bare.starts_with(anchor),
+                "anchor {anchor:?} must be an ancestor of the start path"
+            );
+        }
+    }
+
+    /// `get_workspace` must respect an explicit root, and `resolve_path` must resolve
+    /// relative paths against it.
+    #[test]
+    fn test_workspace_resolution_prefers_explicit_root() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        engine
+            .set_workspace(&SetWorkspaceRequest {
+                path: sandbox.path_str(),
+            })
+            .expect("set_workspace should succeed");
+
+        assert_eq!(
+            engine.get_workspace().canonicalize().unwrap(),
+            sandbox.dir.canonicalize().unwrap()
+        );
+
+        let resolved = engine.resolve_path(Some("src/main.rs"));
+        assert!(resolved.starts_with(&sandbox.dir));
+        assert!(resolved.ends_with("main.rs"));
+
+        // An absolute path is passed through untouched.
+        let absolute = sandbox.dir.join("absolute.txt");
+        assert_eq!(
+            engine.resolve_path(Some(&absolute.to_string_lossy())),
+            absolute
+        );
+
+        // `.` and empty both mean "the workspace root".
+        assert_eq!(engine.resolve_path(Some(".")), engine.get_workspace());
+        assert_eq!(engine.resolve_path(None), engine.get_workspace());
+    }
+
+    /// A bounded search must report an exact count; the capped flag exists so an
+    /// agent can tell a truthful `total_matches` from a traversal-dependent lower bound.
+    #[test]
+    fn test_search_count_capped_flag_is_false_for_bounded_searches() {
+        let sandbox = TestSandbox::create();
+        fs::write(sandbox.dir.join("a.txt"), "needle\nneedle\nneedle\n").unwrap();
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "needle".to_string(),
+                path: Some(sandbox.path_str()),
+                options: Some(SearchOptions {
+                    max_matches: Some(2),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        // Budget truncation affects `truncated`, never the count.
+        assert!(res.truncated, "line budget should be reported as truncated");
+        assert!(
+            !res.count_capped,
+            "a small workspace must never report a capped count"
+        );
+        assert_eq!(res.total_matches, 3, "count must be exact and truthful");
+    }
+
+    /// `count_capped` must survive a JSON round trip, since MCP clients parse it.
+    #[test]
+    fn test_search_response_json_includes_count_capped() {
+        let res = SearchResponse {
+            total_matches: 1,
+            total_files: 1,
+            files: Vec::new(),
+            directory_radar: Vec::new(),
+            truncated: false,
+            count_capped: false,
+        };
+        let json = serde_json::to_value(&res).expect("serialize");
+        assert_eq!(json["count_capped"], serde_json::json!(false));
+
+        // Payloads produced before the field existed must still deserialize.
+        let legacy = serde_json::json!({
+            "total_matches": 1,
+            "total_files": 1,
+            "files": [],
+            "directory_radar": [],
+            "truncated": false
+        });
+        let parsed: SearchResponse =
+            serde_json::from_value(legacy).expect("legacy payload must deserialize");
+        assert!(!parsed.count_capped);
+    }
+
     #[test]
     fn test_batch_patch_transactional_rollback() {
         let sandbox = TestSandbox::create();
@@ -2967,6 +3880,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 ],
                 validate_ast: Some(true),
                 dry_run: Some(false),
+                workspace_root: sandbox.boundary(),
             })
             .expect("batch_patch should return response");
 
@@ -2974,7 +3888,10 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert!(!batch_fail.all_ast_valid);
         assert!(!batch_fail.syntax_errors.is_empty());
         // Verify file1 was NOT changed on disk due to transaction abort
-        assert_eq!(fs::read_to_string(&file1).unwrap(), "fn first() -> i32 { 1 }\n");
+        assert_eq!(
+            fs::read_to_string(&file1).unwrap(),
+            "fn first() -> i32 { 1 }\n"
+        );
 
         // 2. Successful batch patch across multiple files
         let batch_ok = engine
@@ -2997,20 +3914,31 @@ pub fn compute_checksum(val: u32) -> u32 {
                 ],
                 validate_ast: Some(true),
                 dry_run: Some(false),
+                workspace_root: sandbox.boundary(),
             })
             .expect("batch_patch should succeed");
 
         assert!(batch_ok.success);
         assert_eq!(batch_ok.total_files_patched, 2);
-        assert_eq!(fs::read_to_string(&file1).unwrap(), "fn first() -> i32 { 100 }\n");
-        assert_eq!(fs::read_to_string(&file2).unwrap(), "fn second() -> i32 { 200 }\n");
+        assert_eq!(
+            fs::read_to_string(&file1).unwrap(),
+            "fn first() -> i32 { 100 }\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&file2).unwrap(),
+            "fn second() -> i32 { 200 }\n"
+        );
     }
 
     #[test]
     fn test_batch_patch_cumulative_same_file() {
         let sandbox = TestSandbox::create();
         let target = sandbox.dir.join("target.rs");
-        fs::write(&target, "fn alpha() -> i32 {\n    1\n}\n\nfn beta() -> i32 {\n    2\n}\n").unwrap();
+        fs::write(
+            &target,
+            "fn alpha() -> i32 {\n    1\n}\n\nfn beta() -> i32 {\n    2\n}\n",
+        )
+        .unwrap();
 
         let engine = NativeEngine::new();
         let res = engine
@@ -3033,6 +3961,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 ],
                 validate_ast: Some(true),
                 dry_run: Some(false),
+                workspace_root: sandbox.boundary(),
             })
             .expect("batch_patch should succeed");
 
@@ -3073,7 +4002,11 @@ pub fn compute_checksum(val: u32) -> u32 {
 
         // Error on non-existent directory
         let err_res = engine.set_workspace(&SetWorkspaceRequest {
-            path: sandbox.dir.join("non_existent_folder_xyz").to_string_lossy().to_string(),
+            path: sandbox
+                .dir
+                .join("non_existent_folder_xyz")
+                .to_string_lossy()
+                .to_string(),
         });
         assert!(err_res.is_err());
     }
@@ -3082,7 +4015,11 @@ pub fn compute_checksum(val: u32) -> u32 {
     fn test_patch_auto_indentation_modes() {
         let sandbox = TestSandbox::create();
         let target = sandbox.dir.join("indent.rs");
-        fs::write(&target, "fn compute() {\n    let a = 1;\n    let b = 2;\n}\n").unwrap();
+        fs::write(
+            &target,
+            "fn compute() {\n    let a = 1;\n    let b = 2;\n}\n",
+        )
+        .unwrap();
 
         let engine = NativeEngine::new();
         let patch_res = engine
@@ -3093,6 +4030,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 replacement: "let c = 3;".to_string(),
                 validate_ast: Some(true),
                 dry_run: Some(false),
+                workspace_root: sandbox.boundary(),
                 ..Default::default()
             })
             .expect("append_to_symbol should succeed");
@@ -3116,7 +4054,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 pattern: "needle".to_string(),
                 path: Some(sandbox.path_str()),
                 options: Some(SearchOptions {
-                    max_matches: Some(2), // File 1 and 2 take the 2 matches
+                    max_matches: Some(2),        // File 1 and 2 take the 2 matches
                     max_empty_clusters: Some(1), // Retain only 1 empty cluster
                     ..Default::default()
                 }),
@@ -3137,7 +4075,10 @@ pub fn compute_checksum(val: u32) -> u32 {
 
         let slash_verbatim = PathBuf::from("//?/C:/projects/transcend/src/main.rs");
         let cleaned_slash = clean_path(&slash_verbatim);
-        assert_eq!(cleaned_slash, PathBuf::from("C:/projects/transcend/src/main.rs"));
+        assert_eq!(
+            cleaned_slash,
+            PathBuf::from("C:/projects/transcend/src/main.rs")
+        );
 
         let normal_path = PathBuf::from("C:/projects/transcend/src/main.rs");
         assert_eq!(clean_path(&normal_path), normal_path);
@@ -3163,7 +4104,11 @@ pub fn compute_checksum(val: u32) -> u32 {
             .expect("search with invalid regex should fall back to literal match");
 
         assert_eq!(res.total_matches, 1);
-        assert!(res.files[0].matches[0].line_text.contains("fn calculate(x: i32)"));
+        assert!(
+            res.files[0].matches[0]
+                .line_text
+                .contains("fn calculate(x: i32)")
+        );
     }
 
     #[test]
@@ -3195,8 +4140,10 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert_eq!(read_req.path, "src/main.rs");
 
         // ExecRequest: "cmd" alias for "command", "working_directory" for "cwd"
-        let exec_req: transcend_protocol::ExecRequest =
-            serde_json::from_value(json!({ "cmd": "cargo check", "working_directory": "crates/core" })).unwrap();
+        let exec_req: transcend_protocol::ExecRequest = serde_json::from_value(
+            json!({ "cmd": "cargo check", "working_directory": "crates/core" }),
+        )
+        .unwrap();
         assert_eq!(exec_req.command, "cargo check");
         assert_eq!(exec_req.cwd, Some("crates/core".to_string()));
 
@@ -3244,6 +4191,7 @@ pub fn compute_checksum(val: u32) -> u32 {
                 ],
                 validate_ast: Some(true),
                 dry_run: Some(false),
+                workspace_root: sandbox.boundary(),
             })
             .expect("batch_patch should succeed");
 
@@ -3309,7 +4257,12 @@ pub fn compute_checksum(val: u32) -> u32 {
             })
             .expect("find_symbol should succeed");
 
-        assert!(res_exact.symbols.iter().any(|s| s.name == "SetupVmcs" && s.is_exact));
+        assert!(
+            res_exact
+                .symbols
+                .iter()
+                .any(|s| s.name == "SetupVmcs" && s.is_exact)
+        );
 
         // 2. Fuzzy subsequence match: "setup_vmcs" -> "SetupVmcsForProcessor"
         let res_fuzzy = engine
@@ -3322,7 +4275,12 @@ pub fn compute_checksum(val: u32) -> u32 {
             })
             .expect("find_symbol should succeed");
 
-        assert!(res_fuzzy.symbols.iter().any(|s| s.name == "SetupVmcsForProcessor"));
+        assert!(
+            res_fuzzy
+                .symbols
+                .iter()
+                .any(|s| s.name == "SetupVmcsForProcessor")
+        );
     }
 
     #[test]
@@ -3342,16 +4300,25 @@ u UU N... 100644 100644 100644 abc def conflict.rs
         let parsed = crate::git_ops::GitEngine::parse_porcelain_v2(mock_output).unwrap();
         assert!(parsed.is_git_repo);
         assert_eq!(parsed.branch, "feature/mcp-hardening");
-        assert_eq!(parsed.upstream.as_deref(), Some("origin/feature/mcp-hardening"));
+        assert_eq!(
+            parsed.upstream.as_deref(),
+            Some("origin/feature/mcp-hardening")
+        );
         assert_eq!(parsed.ahead, 2);
         assert_eq!(parsed.behind, 1);
         assert_eq!(parsed.unstaged.len(), 1);
         assert_eq!(parsed.unstaged[0].path, "crates/core/src/lib.rs");
-        assert_eq!(parsed.unstaged[0].status, transcend_protocol::GitFileStatus::Modified);
+        assert_eq!(
+            parsed.unstaged[0].status,
+            transcend_protocol::GitFileStatus::Modified
+        );
         assert_eq!(parsed.staged.len(), 2);
         assert_eq!(parsed.staged[0].path, "crates/protocol/src/lib.rs");
         assert_eq!(parsed.staged[1].path, "new_name.rs");
-        assert_eq!(parsed.staged[1].original_path.as_deref(), Some("old_name.rs"));
+        assert_eq!(
+            parsed.staged[1].original_path.as_deref(),
+            Some("old_name.rs")
+        );
         assert_eq!(parsed.conflicted, vec!["conflict.rs".to_string()]);
         assert_eq!(parsed.untracked, vec!["untracked_file.txt".to_string()]);
         assert!(!parsed.is_clean);
@@ -3369,6 +4336,3 @@ u UU N... 100644 100644 100644 abc def conflict.rs
         assert!(!res.branch.is_empty());
     }
 }
-
-
-

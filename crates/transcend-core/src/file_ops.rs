@@ -18,6 +18,93 @@ use crate::{CoreError, CoreResult};
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 const DEFAULT_MAX_READ_BYTES: usize = 65_536;
 
+/// Resolve the workspace boundary used by the file operations.
+///
+/// Prefers an explicit request root, then `TRANSCEND_WORKSPACE` / `WORKSPACE_ROOT`,
+/// then the nearest ancestor containing a root anchor.
+fn resolve_boundary_root(explicit: Option<&str>) -> std::path::PathBuf {
+    if let Some(r) = explicit
+        && !r.trim().is_empty()
+    {
+        return std::path::PathBuf::from(r.trim());
+    }
+    if let Ok(env_root) =
+        std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT"))
+    {
+        return std::path::PathBuf::from(env_root);
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        let mut curr = Some(cwd.as_path());
+        while let Some(dir) = curr {
+            if dir.join("Cargo.toml").exists()
+                || dir.join(".git").exists()
+                || dir.join("package.json").exists()
+            {
+                return dir.to_path_buf();
+            }
+            curr = dir.parent();
+        }
+        return cwd;
+    }
+    std::path::PathBuf::from(".")
+}
+
+/// Reject any target that resolves outside `boundary` when a boundary is known.
+///
+/// Shared by all mutating operations so the guard cannot be forgotten by one of them.
+pub fn ensure_within(boundary: Option<&str>, target: &Path) -> CoreResult<()> {
+    let Some(boundary) = boundary.filter(|b| !b.trim().is_empty()) else {
+        return Ok(());
+    };
+    let root = resolve_boundary_root(Some(boundary));
+    let Ok(canonical_root) = root.canonicalize() else {
+        return Err(CoreError::General(format!(
+            "Cannot resolve workspace boundary '{}'",
+            root.display()
+        )));
+    };
+    let canonical_root = crate::clean_path(&canonical_root);
+
+    // Canonicalize the target, or its nearest existing ancestor for not-yet-created files.
+    let mut probe = target.to_path_buf();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    let resolved = loop {
+        if let Ok(c) = probe.canonicalize() {
+            let mut resolved = crate::clean_path(&c);
+            for part in tail.iter().rev() {
+                resolved.push(part);
+            }
+            break resolved;
+        }
+        let Some(name) = probe.file_name().map(|n| n.to_os_string()) else {
+            return Err(CoreError::General(format!(
+                "Cannot resolve path '{}' for boundary check",
+                target.display()
+            )));
+        };
+        tail.push(name);
+        match probe.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => probe = parent.to_path_buf(),
+            _ => {
+                return Err(CoreError::General(format!(
+                    "Cannot resolve path '{}' for boundary check",
+                    target.display()
+                )));
+            }
+        }
+    };
+
+    if resolved.starts_with(&canonical_root) {
+        Ok(())
+    } else {
+        Err(CoreError::General(format!(
+            "Access denied: path '{}' escapes workspace boundary '{}'",
+            target.display(),
+            canonical_root.display()
+        )))
+    }
+}
+
 pub struct FileOps;
 
 impl FileOps {
@@ -40,7 +127,10 @@ impl FileOps {
         }
 
         let metadata = fs::metadata(path).map_err(|e| {
-            CoreError::General(format!("Failed to read file metadata for {}: {e}", path.display()))
+            CoreError::General(format!(
+                "Failed to read file metadata for {}: {e}",
+                path.display()
+            ))
         })?;
 
         if metadata.is_dir() {
@@ -53,7 +143,10 @@ impl FileOps {
                 size_bytes: metadata.len(),
                 truncated: false,
                 is_binary: false,
-                message: Some(format!("Target is a directory, not a file: {}", path.display())),
+                message: Some(format!(
+                    "Target is a directory, not a file: {}",
+                    path.display()
+                )),
             });
         }
 
@@ -66,7 +159,10 @@ impl FileOps {
 
         let mut probe = [0u8; 1024];
         let bytes_read = file.read(&mut probe).map_err(|e| {
-            CoreError::General(format!("Failed to probe file header for {}: {e}", path.display()))
+            CoreError::General(format!(
+                "Failed to probe file header for {}: {e}",
+                path.display()
+            ))
         })?;
 
         if probe[..bytes_read].contains(&0x00) {
@@ -105,58 +201,61 @@ impl FileOps {
 
         while reader.read_until(b'\n', &mut line_buf).map_err(|e| {
             CoreError::General(format!("Failed to read line from {}: {e}", path.display()))
-        })? > 0 {
+        })? > 0
+        {
             total_lines += 1;
             let line_no = total_lines;
 
-            if line_no >= start_line && end_line_req.map_or(true, |el| line_no <= el) {
-                if !truncated {
-                    let decoded_line = String::from_utf8_lossy(&line_buf);
-                    let formatted_line = if line_numbers {
-                        format!("{:5} | {}", line_no, decoded_line)
-                    } else {
-                        decoded_line.into_owned()
-                    };
+            if line_no >= start_line && end_line_req.is_none_or(|el| line_no <= el) && !truncated {
+                let decoded_line = String::from_utf8_lossy(&line_buf);
+                let formatted_line = if line_numbers {
+                    format!("{:5} | {}", line_no, decoded_line)
+                } else {
+                    decoded_line.into_owned()
+                };
 
-                    if content.len() + formatted_line.len() > max_bytes {
-                        let remaining_budget = max_bytes.saturating_sub(content.len());
-                        if remaining_budget > 0 {
-                            let clipped: String = formatted_line.chars().take(remaining_budget).collect();
-                            content.push_str(&clipped);
-                        }
-                        truncated = true;
-                    } else {
-                        content.push_str(&formatted_line);
-                        actual_end_line = line_no;
-                        collected_any = true;
+                if content.len() + formatted_line.len() > max_bytes {
+                    let remaining_budget = max_bytes.saturating_sub(content.len());
+                    if remaining_budget > 0 {
+                        let clipped: String =
+                            formatted_line.chars().take(remaining_budget).collect();
+                        content.push_str(&clipped);
                     }
+                    truncated = true;
+                } else {
+                    content.push_str(&formatted_line);
+                    actual_end_line = line_no;
+                    collected_any = true;
                 }
             }
 
             line_buf.clear();
 
             // Fast-path: once target end_line has been collected, switch to fast chunked newline counting
-            if let Some(el) = end_line_req {
-                if line_no >= el {
-                    let mut chunk = [0u8; 65536];
-                    let mut has_bytes_after = false;
-                    let mut last_byte = 0u8;
-                    loop {
-                        let n = reader.read(&mut chunk).map_err(|e| {
-                            CoreError::General(format!("Failed to count remaining lines in {}: {e}", path.display()))
-                        })?;
-                        if n == 0 {
-                            break;
-                        }
-                        has_bytes_after = true;
-                        last_byte = chunk[n - 1];
-                        total_lines += chunk[..n].iter().filter(|&&b| b == b'\n').count();
+            if let Some(el) = end_line_req
+                && line_no >= el
+            {
+                let mut chunk = [0u8; 65536];
+                let mut has_bytes_after = false;
+                let mut last_byte = 0u8;
+                loop {
+                    let n = reader.read(&mut chunk).map_err(|e| {
+                        CoreError::General(format!(
+                            "Failed to count remaining lines in {}: {e}",
+                            path.display()
+                        ))
+                    })?;
+                    if n == 0 {
+                        break;
                     }
-                    if has_bytes_after && last_byte != b'\n' {
-                        total_lines += 1;
-                    }
-                    break;
+                    has_bytes_after = true;
+                    last_byte = chunk[n - 1];
+                    total_lines += chunk[..n].iter().filter(|&&b| b == b'\n').count();
                 }
+                if has_bytes_after && last_byte != b'\n' {
+                    total_lines += 1;
+                }
+                break;
             }
         }
 
@@ -191,7 +290,10 @@ impl FileOps {
             });
         }
 
-        let target_end_line = end_line_req.unwrap_or(total_lines).min(total_lines).max(start_line);
+        let target_end_line = end_line_req
+            .unwrap_or(total_lines)
+            .min(total_lines)
+            .max(start_line);
         if actual_end_line < target_end_line {
             truncated = true;
         }
@@ -217,6 +319,7 @@ impl FileOps {
     pub fn write_file(req: &WriteFileRequest) -> CoreResult<WriteFileResponse> {
         let target_path = Path::new(&req.path);
         let display_path = crate::clean_path(target_path).to_string_lossy().to_string();
+        ensure_within(req.workspace_root.as_deref(), target_path)?;
         let exists = target_path.exists();
 
         if exists && req.overwrite != Some(true) {
@@ -250,7 +353,10 @@ impl FileOps {
             .unwrap_or("file");
         let pid = std::process::id();
         let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let tmp_path = parent.join(format!(".{}.transcend_write_tmp_{}_{}", file_stem, pid, counter));
+        let tmp_path = parent.join(format!(
+            ".{}.transcend_write_tmp_{}_{}",
+            file_stem, pid, counter
+        ));
 
         let write_result = (|| -> std::io::Result<()> {
             let mut tmp_file = fs::File::create(&tmp_path)?;
@@ -297,47 +403,17 @@ impl FileOps {
         }
 
         // Security boundary check: ensure canonical path does not escape workspace_root
-        let root_buf = if let Some(ref r) = req.workspace_root {
-            std::path::PathBuf::from(r)
-        } else if let Ok(env_root) = std::env::var("TRANSCEND_WORKSPACE").or_else(|_| std::env::var("WORKSPACE_ROOT")) {
-            std::path::PathBuf::from(env_root)
-        } else if let Ok(cwd) = std::env::current_dir() {
-            let mut curr = Some(cwd.as_path());
-            let mut found = cwd.clone();
-            while let Some(dir) = curr {
-                if dir.join("Cargo.toml").exists() || dir.join(".git").exists() || dir.join("package.json").exists() {
-                    found = dir.to_path_buf();
-                    break;
-                }
-                curr = dir.parent();
-            }
-            found
-        } else {
-            std::path::PathBuf::from(".")
-        };
-        let root_path = root_buf.as_path();
-
-        if let (Ok(canonical_target), Ok(canonical_root)) = (
-            target_path.canonicalize(),
-            root_path.canonicalize(),
-        ) {
-            let clean_canonical_target = crate::clean_path(&canonical_target);
-            let clean_canonical_root = crate::clean_path(&canonical_root);
-            if !clean_canonical_target.starts_with(&clean_canonical_root) {
-                return Err(CoreError::General(format!(
-                    "Access denied: path '{}' escapes workspace boundary '{}'",
-                    display_path,
-                    clean_canonical_root.display()
-                )));
-            }
-        }
+        ensure_within(req.workspace_root.as_deref(), target_path)?;
 
         let is_dir = target_path.is_dir();
         if is_dir {
             if req.recursive != Some(true) {
                 // Check if directory is empty
                 let mut read_dir = fs::read_dir(target_path).map_err(|e| {
-                    CoreError::General(format!("Failed to read directory {}: {e}", target_path.display()))
+                    CoreError::General(format!(
+                        "Failed to read directory {}: {e}",
+                        target_path.display()
+                    ))
                 })?;
                 if read_dir.next().is_some() {
                     return Ok(DeletePathResponse {
@@ -352,7 +428,10 @@ impl FileOps {
                     });
                 }
                 fs::remove_dir(target_path).map_err(|e| {
-                    CoreError::General(format!("Failed to remove directory {}: {e}", target_path.display()))
+                    CoreError::General(format!(
+                        "Failed to remove directory {}: {e}",
+                        target_path.display()
+                    ))
                 })?;
                 return Ok(DeletePathResponse {
                     path: display_path,
@@ -366,7 +445,10 @@ impl FileOps {
             // Recursive deletion
             let count = Self::count_entries_recursive(target_path).unwrap_or(1);
             fs::remove_dir_all(target_path).map_err(|e| {
-                CoreError::General(format!("Failed to remove directory tree {}: {e}", target_path.display()))
+                CoreError::General(format!(
+                    "Failed to remove directory tree {}: {e}",
+                    target_path.display()
+                ))
             })?;
 
             Ok(DeletePathResponse {
@@ -378,7 +460,10 @@ impl FileOps {
             })
         } else {
             fs::remove_file(target_path).map_err(|e| {
-                CoreError::General(format!("Failed to remove file {}: {e}", target_path.display()))
+                CoreError::General(format!(
+                    "Failed to remove file {}: {e}",
+                    target_path.display()
+                ))
             })?;
 
             Ok(DeletePathResponse {
