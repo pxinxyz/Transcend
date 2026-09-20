@@ -14,7 +14,7 @@ Note on ownership: none of these are caught by the existing suite.
 | 2 | `outline` panicked truncating a multibyte skeleton | **fixed** (`520f9d4`) |
 | 3 | `lsp_diagnostics` with `path` always returns zero | **fixed** (`8c22e92`) |
 | 4 | `outline` drops files past `max_files`, reports `truncated:false` | **fixed** (`2d85618`) |
-| 5 | `find_symbol` can omit the exact match (cap before sort) | open |
+| 5 | `find_symbol` can omit the exact match (cap before sort) | **fixed** (`92c6c90`) |
 | 6 | `find_symbol.case_sensitive` default | **withdrawn** — doc was wrong, see below |
 | 7 | `exec` ignored `max_output_bytes` on the kill path | **fixed** (`b867a5e`) |
 | 8 | `lsp_references.include_declaration` ignored on fallback | open |
@@ -28,10 +28,34 @@ Note on ownership: none of these are caught by the existing suite.
 | — | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
 | — | `lsp_diagnostics` fell back to `cargo check` on an empty LSP verdict | **fixed** (`8c22e92`) |
 
-8 of 16 fixed. Every fix carries a regression test that was confirmed to fail against the
+9 of 16 fixed. Every fix carries a regression test that was confirmed to fail against the
 pre-fix code. Two findings were corrected during the work: item 6 was withdrawn (the code
 was right, the doc was unsatisfiable), and the `lsp_diagnostics` fallback plus the
 `total_files_patched` / dry-run miscounts were found while fixing items 3 and 1.
+
+### Remaining, in suggested order
+
+- **9** `read_file.max_bytes` is a char budget, so a multi-byte file can return up to 4x the
+  documented bytes. Note this one needs a decision on the `success` field first (see below).
+- **8** `lsp_references.include_declaration` is dropped by the heuristic fallback, so the
+  default `false` and `true` return identical sets including the definition.
+- **12** `symbol_kinds`/`exported_only` are no-ops for SQL, Markdown, Ruby and Bash. Best
+  fixed centrally in `OutlineScanner::parse_bytes` so no adapter can forget them.
+- **13** `ast_valid: true` is asserted for extensions with no grammar (`.json`, `.toml`,
+  `.txt`), where nothing was validated. Needs a contract decision: a new `ast_validated`
+  field, or reject `validate_ast` when no grammar exists.
+- **14** `lsp_status` returns an empty list for an unknown language while `lsp_install`
+  errors, so a typo is indistinguishable from "nothing installed".
+- **15** Shared workspace root is process-global; read-only requests expose no
+  `workspace_root` to pin, so concurrent calls can resolve against different roots. Lowest
+  urgency of the set and the most invasive to change.
+
+### Deliberately not fixed
+
+`read_file` returning no `success` discriminator (a missing file, a directory and an empty
+file are all `content: "", truncated: false`) is a real defect, but the fix adds a field to
+a response contract and deserves a decision rather than a drive-by change.
+
 
 ---
 
