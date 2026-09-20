@@ -1171,7 +1171,19 @@ pub fn compute() -> i32 {
             .expect("batch_patch should succeed");
 
         assert!(res.0.success);
-        assert_eq!(res.0.total_files_patched, 1);
+        // This is a dry run over an in-memory buffer, so nothing is written to disk and
+        // nothing was patched. It previously reported 1 here, which counted the *requested*
+        // files rather than the files actually written.
+        assert_eq!(res.0.total_files_patched, 0);
+        assert!(
+            res.0.message.contains("No changes written to disk"),
+            "dry run must disclose that nothing was written: {}",
+            res.0.message
+        );
+        assert!(
+            !res.0.all_ast_valid || res.0.success,
+            "dry run over valid content should validate cleanly"
+        );
     }
 
     #[tokio::test]

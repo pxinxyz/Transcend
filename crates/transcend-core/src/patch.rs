@@ -470,12 +470,21 @@ impl Patcher {
         let mut accumulated_syntax_errors = Vec::new();
         let mut any_failed = false;
 
+        // Paths whose source came from a caller-supplied in-memory `content` buffer rather
+        // than from disk. These must never be written back: `PatchRequest.content` is
+        // documented as an unsaved-buffer facility, and single `patch` already refuses to
+        // persist such a buffer. Without this set the batch path wrote the buffer to disk
+        // while each inner result still reported "No changes written to disk".
+        let mut in_memory_paths: std::collections::HashSet<std::path::PathBuf> =
+            std::collections::HashSet::new();
+
         for patch_req in &req.patches {
             let path_buf = Path::new(&patch_req.path).to_path_buf();
 
             // Load initial file bytes into working_buffers & original_contents if not present
             if !working_buffers.contains_key(&path_buf) {
                 let initial_bytes = if let Some(ref content) = patch_req.content {
+                    in_memory_paths.insert(path_buf.clone());
                     content.as_bytes().to_vec()
                 } else {
                     if !path_buf.exists() {
@@ -531,9 +540,6 @@ impl Patcher {
             simulated_results.push(res);
         }
 
-        let distinct_files: std::collections::HashSet<_> =
-            req.patches.iter().map(|p| &p.path).collect();
-
         // Phase 1.5: Compute Consolidated Cumulative Diff per File
         let mut consolidated_diff = String::new();
         let mut sorted_paths: Vec<_> = working_buffers.keys().cloned().collect();
@@ -575,7 +581,9 @@ impl Patcher {
             return Ok(BatchPatchResponse {
                 success: true,
                 results: simulated_results,
-                total_files_patched: distinct_files.len(),
+                // A dry run writes nothing, so nothing was patched. Reporting the requested
+                // file count here overstated what happened.
+                total_files_patched: 0,
                 all_ast_valid: true,
                 syntax_errors: vec![],
                 diff: final_diff,
@@ -588,6 +596,12 @@ impl Patcher {
         let mut write_error = None;
 
         for (target_path, final_bytes) in &working_buffers {
+            // Never persist a buffer the caller supplied in memory. `PatchRequest.content`
+            // means "this is my unsaved editor state", not "write this file".
+            if in_memory_paths.contains(target_path) {
+                continue;
+            }
+
             let parent = target_path.parent().unwrap_or_else(|| Path::new("."));
             let file_stem = target_path
                 .file_name()
@@ -638,16 +652,31 @@ impl Patcher {
             });
         }
 
+        let in_memory_note = if in_memory_paths.is_empty() {
+            String::new()
+        } else {
+            format!(
+                " {} in-memory buffer(s) were validated but not written to disk: {}.",
+                in_memory_paths.len(),
+                in_memory_paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
         Ok(BatchPatchResponse {
             success: true,
             results: simulated_results,
-            total_files_patched: distinct_files.len(),
+            // Only files actually written to disk count as patched.
+            total_files_patched: written_files.len(),
             all_ast_valid: true,
             syntax_errors: vec![],
             diff: final_diff,
             message: format!(
-                "Successfully applied batch patch across {} files.",
-                distinct_files.len()
+                "Successfully applied batch patch across {} file(s).{in_memory_note}",
+                written_files.len()
             ),
         })
     }
@@ -910,5 +939,130 @@ impl Patcher {
         }
 
         diff
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use transcend_protocol::PatchRequest;
+
+    /// A scratch directory under the build tree. `AGENTS.md` forbids tests from writing
+    /// outside the build directory or depending on the process cwd.
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("patch-tests")
+            .join(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn in_memory_patch(path: &str, content: &str) -> PatchRequest {
+        PatchRequest {
+            path: path.to_string(),
+            target_symbol: Some("main".to_string()),
+            replacement: "fn main() { REPLACED }".to_string(),
+            content: Some(content.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Regression: `batch_patch` used to write a caller-supplied in-memory buffer to disk
+    /// while each inner result reported "No changes written to disk". `PatchRequest.content`
+    /// means "this is unsaved editor state", so the batch path must not persist it -- and
+    /// must not create a file that did not previously exist.
+    #[test]
+    fn batch_patch_does_not_write_in_memory_content_to_disk() {
+        let dir = scratch_dir("batch-inmemory");
+        let path = dir.join("unsaved.rs");
+        assert!(!path.exists(), "fixture must start absent");
+
+        let batch = BatchPatchRequest {
+            patches: vec![in_memory_patch(
+                &path.to_string_lossy(),
+                "fn main() { ORIGINAL_IN_MEMORY }",
+            )],
+            ..Default::default()
+        };
+
+        let res = Patcher::batch_patch(&batch).expect("batch_patch should succeed");
+        assert!(res.success, "patch itself should validate: {}", res.message);
+
+        assert!(
+            !path.exists(),
+            "in-memory content was written to disk at {} -- it must not be",
+            path.display()
+        );
+        assert_eq!(
+            res.total_files_patched, 0,
+            "nothing was written, so nothing was patched"
+        );
+        assert!(
+            res.message.contains("not written to disk"),
+            "response must disclose that the buffer was not persisted: {}",
+            res.message
+        );
+    }
+
+    /// The same content supplied WITHOUT `content` should still be written normally, so the
+    /// guard above does not disable real batch patching.
+    #[test]
+    fn batch_patch_still_writes_when_content_is_absent() {
+        let dir = scratch_dir("batch-ondisk");
+        let path = dir.join("on_disk.rs");
+        std::fs::write(&path, "fn main() { ORIGINAL_ON_DISK }").expect("seed fixture");
+
+        let batch = BatchPatchRequest {
+            patches: vec![PatchRequest {
+                path: path.to_string_lossy().to_string(),
+                target_symbol: Some("main".to_string()),
+                replacement: "fn main() { REPLACED }".to_string(),
+                content: None,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let res = Patcher::batch_patch(&batch).expect("batch_patch should succeed");
+        assert!(res.success, "{}", res.message);
+        assert_eq!(res.total_files_patched, 1);
+        let written = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            written.contains("REPLACED"),
+            "on-disk source should have been patched, got: {written}"
+        );
+    }
+
+    /// A dry run writes nothing, so it must not claim files were patched.
+    #[test]
+    fn batch_patch_dry_run_reports_zero_files_patched() {
+        let dir = scratch_dir("batch-dryrun");
+        let path = dir.join("dry.rs");
+        std::fs::write(&path, "fn main() { ORIGINAL }").expect("seed fixture");
+
+        let batch = BatchPatchRequest {
+            patches: vec![PatchRequest {
+                path: path.to_string_lossy().to_string(),
+                target_symbol: Some("main".to_string()),
+                replacement: "fn main() { DRY }".to_string(),
+                content: None,
+                ..Default::default()
+            }],
+            dry_run: Some(true),
+            ..Default::default()
+        };
+
+        let res = Patcher::batch_patch(&batch).expect("dry run should succeed");
+        assert!(res.success, "{}", res.message);
+        assert_eq!(res.total_files_patched, 0, "a dry run patches nothing");
+        let after = std::fs::read_to_string(&path).expect("read back");
+        assert!(
+            after.contains("ORIGINAL"),
+            "dry run must not modify the file, got: {after}"
+        );
     }
 }
