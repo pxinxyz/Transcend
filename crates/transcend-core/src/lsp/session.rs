@@ -518,6 +518,32 @@ impl LspSession {
         self.warmed.load(Ordering::Relaxed)
     }
 
+    /// Whether any diagnostics are cached for `path_filter`.
+    ///
+    /// Diagnostics arrive as `textDocument/publishDiagnostics` notifications rather than as a
+    /// response to a request, and nothing here sets `warmed` for them. Reading the cache
+    /// therefore yields an empty set both when the file is genuinely clean AND when the
+    /// server has not finished indexing -- and an empty set reads as "no problems". A caller
+    /// asking "does this compile?" was told yes while `cargo check` reported two errors in
+    /// the same file.
+    ///
+    /// The caller must distinguish the two cases with [`Self::is_warmed`]: a warmed server
+    /// that published nothing has genuinely found nothing.
+    pub async fn has_cached_diagnostics(&self, path_filter: Option<&str>) -> bool {
+        let cache = self.diagnostics_cache.read().await;
+        match path_filter {
+            None => cache.values().any(|v| !v.is_empty()),
+            Some(pf) => {
+                let want = pf.replace('\\', "/");
+                cache.iter().any(|(k, v)| {
+                    let have = k.replace('\\', "/");
+                    !v.is_empty()
+                        && (have == want || have.ends_with(&want) || want.ends_with(&have))
+                })
+            }
+        }
+    }
+
     /// Retrieve active compiler diagnostics from the cache.
     pub async fn get_diagnostics(
         &self,

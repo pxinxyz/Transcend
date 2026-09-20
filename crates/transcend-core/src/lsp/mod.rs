@@ -190,15 +190,29 @@ impl LspEngine {
     ) -> Result<LspDiagnosticsResponse, CoreError> {
         let workspace_root = engine.get_workspace();
 
-        // 1. If path is provided, attempt to auto-warm / spawn the language server for that file
+        // 1. If path is provided, attempt to auto-warm / spawn the language server for that
+        //    file. Diagnostics arrive as notifications, so the debounce below only gives a
+        //    warm server a moment to publish.
+        let mut lsp_verdict_usable = true;
         if let Some(ref path_str) = req.path {
             let file_path = Path::new(path_str);
             if file_path.exists()
                 && let Ok(Some((session, _profile))) = self.pool.get_or_spawn(file_path).await
             {
                 let _ = session.ensure_document_open(file_path).await;
-                // Bounded debounce to allow server to publish diagnostics
+                // Bounded debounce to allow a warm server to publish diagnostics.
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+
+                // An empty cache is only a verdict if the server has finished indexing.
+                // While it is cold, "no diagnostics yet" is not "no problems", and treating
+                // it as one let lsp_diagnostics report a file as clean while `cargo check`
+                // found real errors in it. Report no verdict so the compiler fallback below
+                // can answer instead of inventing a clean bill of health.
+                if !session.is_warmed()
+                    && !session.has_cached_diagnostics(req.path.as_deref()).await
+                {
+                    lsp_verdict_usable = false;
+                }
             }
         }
 
@@ -217,9 +231,11 @@ impl LspEngine {
             all_diags.extend(res.diagnostics);
         }
 
-        // 2. Only fall back to native compiler JSON when no language server was available.
-        //    An empty-but-consulted LSP result must be returned as-is.
-        if !lsp_consulted {
+        // 2. Use the native compiler JSON fallback when no language server was available, OR
+        //    when a server was consulted but had not finished indexing. In the second case an
+        //    empty result carries no information, so answering with it would be a confident
+        //    false negative; the compiler can answer the same question honestly.
+        if !lsp_consulted || !lsp_verdict_usable {
             let path_filter = req.path.clone();
             let sev_filter = req.severity;
             let root = workspace_root.clone();

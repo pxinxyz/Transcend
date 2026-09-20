@@ -275,12 +275,10 @@ impl LspDistiller {
         let mut severity_breakdown = BTreeMap::new();
 
         for diag in all_diags {
-            if let Some(pf) = path_filter {
-                let clean_pf = pf.replace('\\', "/");
-                let clean_diag_file = diag.file.replace('\\', "/");
-                if !clean_diag_file.contains(&clean_pf) {
-                    continue;
-                }
+            if let Some(pf) = path_filter
+                && !Self::path_matches(&diag.file, pf)
+            {
+                continue;
             }
 
             if let Some(sf) = severity_filter
@@ -305,6 +303,47 @@ impl LspDistiller {
             diagnostics: filtered,
             severity_breakdown,
         }
+    }
+
+    /// Whether a cached diagnostic path satisfies a caller's path filter.
+    ///
+    /// Both sides arrive in one of two shapes -- absolute, as the engine resolves them, or
+    /// relative to the session root, as a language server reports them -- and either side may
+    /// be either shape. `LspDiagnosticsRequest.path` is documented as "file or directory", so
+    /// the filter may also name a directory that a cached file sits under.
+    ///
+    /// A substring test (`cached.contains(filter)`) handles none of that: `"src/lib.rs"`
+    /// contains neither `"/abs/src"` nor `"/abs/proj/src/lib.rs"`, which is why a filtered
+    /// call returned zero diagnostics while the file really had errors in it.
+    ///
+    /// The rule is therefore: match on a path-SEGMENT basis, accepting the filter as an
+    /// ancestor of the cached file, or the two as the same file written in different shapes.
+    fn path_matches(diag_file: &str, filter: &str) -> bool {
+        fn segments(p: &str) -> Vec<String> {
+            p.replace('\\', "/")
+                .split('/')
+                .filter(|s| !s.is_empty() && *s != ".")
+                .map(str::to_string)
+                .collect()
+        }
+        let cached = segments(diag_file);
+        let wanted = segments(filter);
+        if cached.is_empty() || wanted.is_empty() {
+            return false;
+        }
+
+        // Same depth: identical paths, or the same file in two shapes.
+        if cached.len() == wanted.len() {
+            return cached == wanted;
+        }
+        // Deeper filter than cache: the filter names the file (or something under it) and
+        // the cache holds a relative prefix, so the cache must lead the filter.
+        if wanted.len() > cached.len() {
+            return wanted[..cached.len()] == cached[..]
+                || wanted[wanted.len() - cached.len()..] == cached[..];
+        }
+        // Deeper cache than filter: the filter names a directory the cached file sits under.
+        cached[..wanted.len()] == wanted[..] || cached[cached.len() - wanted.len()..] == wanted[..]
     }
 }
 
@@ -375,9 +414,102 @@ mod tests {
         let by_dir = LspDistiller::distill_diagnostics(&all, Some("/home/dev/project"), None);
         assert_eq!(by_dir.diagnostics.len(), 2);
 
-        // An unrelated path must still filter everything out.
-        let by_other = LspDistiller::distill_diagnostics(&all, Some("/elsewhere/src/lib.rs"), None);
+        // An unrelated path that shares no tail must still filter everything out.
+        let by_other =
+            LspDistiller::distill_diagnostics(&all, Some("/elsewhere/src/other.rs"), None);
         assert_eq!(by_other.diagnostics.len(), 0);
+
+        // A filter naming an unrelated project with the same tail must NOT match: the paths
+        // differ in their middle segments, so neither is a prefix of the other.
+        let by_same_tail =
+            LspDistiller::distill_diagnostics(&all, Some("/elsewhere/src/lib.rs"), None);
+        assert_eq!(
+            by_same_tail.diagnostics.len(),
+            0,
+            "an unrelated absolute root must not match on a shared tail"
+        );
+    }
+
+    /// Regression: filtering by the DIRECTORY containing a file returned zero diagnostics,
+    /// while filtering by the file itself returned the real errors. Verified against a live
+    /// rust-analyzer: a file with two compiler errors answered `total_count: 2` when named
+    /// Both sides absolute -- the shape the compiler fallback produces, and what a server
+    /// reporting absolute URIs produces.
+    ///
+    /// What actually occurs with rust-analyzer is different and is pinned in the
+    /// relative-cache test below: the cache holds `src/lib.rs` while the filter is absolute.
+    /// This test previously claimed to cover the observed directory defect while using
+    /// absolute paths on both sides, which nothing produces -- so it passed while the real
+    /// directory case still returned zero. Keep the two shapes separate.
+    #[test]
+    fn test_diagnostics_directory_filter_finds_nested_files() {
+        let root = "/abs/project";
+        let all = vec![
+            diag("/abs/project/src/lib.rs", DiagnosticSeverity::Error),
+            diag(
+                "/abs/project/src/nested/deep.rs",
+                DiagnosticSeverity::Warning,
+            ),
+            diag("/abs/project/tests/it.rs", DiagnosticSeverity::Hint),
+        ];
+
+        let by_dir = LspDistiller::distill_diagnostics(&all, Some("/abs/project/src"), None);
+        assert_eq!(
+            by_dir.diagnostics.len(),
+            2,
+            "directory filter must match files beneath it, got {:?}",
+            by_dir
+                .diagnostics
+                .iter()
+                .map(|d| d.file.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // The project root matches everything.
+        let by_root = LspDistiller::distill_diagnostics(&all, Some(root), None);
+        assert_eq!(by_root.diagnostics.len(), 3);
+
+        // A directory that contains nothing must still match nothing.
+        let by_empty = LspDistiller::distill_diagnostics(&all, Some("/abs/project/vendor"), None);
+        assert_eq!(by_empty.diagnostics.len(), 0);
+
+        // Filtering by one file must not drag in its siblings.
+        let by_file =
+            LspDistiller::distill_diagnostics(&all, Some("/abs/project/src/lib.rs"), None);
+        assert_eq!(by_file.diagnostics.len(), 1);
+    }
+
+    /// The shapes that actually occur, verified against a live rust-analyzer on a crate with
+    /// two real compiler errors: the cache holds the server's RELATIVE path (`src/lib.rs`)
+    /// while the engine resolves the filter ABSOLUTELY. A file filter works (the cache is the
+    /// filter's tail); a directory filter cannot be resolved, because placing `src/lib.rs`
+    /// under an absolute directory requires the session root, which is not threaded here.
+    ///
+    /// This test exists because an earlier version of it used absolute paths on both sides --
+    /// a shape nothing produces -- and so passed while the real directory case still returned
+    /// zero. Assert the observed reality, not a convenient fiction.
+    #[test]
+    fn test_diagnostics_relative_cache_matches_absolute_filter_by_tail() {
+        let rel = vec![diag("src/lib.rs", DiagnosticSeverity::Error)];
+
+        // Same file, two shapes: the documented and common case, and it works.
+        let same_file =
+            LspDistiller::distill_diagnostics(&rel, Some("/abs/project/src/lib.rs"), None);
+        assert_eq!(same_file.diagnostics.len(), 1);
+
+        // Ancestor at a different depth: NOT resolvable without the session root.
+        let dir_of_rel = LspDistiller::distill_diagnostics(&rel, Some("/abs/project/src"), None);
+        assert_eq!(
+            dir_of_rel.diagnostics.len(),
+            0,
+            "a relative cache cannot be placed under an absolute directory without the root"
+        );
+
+        // The absolute-cache + absolute-directory-filter case does work, and is what the
+        // segmentation fixes for callers whose server reports absolute paths.
+        let abs = vec![diag("/abs/project/src/lib.rs", DiagnosticSeverity::Error)];
+        let abs_dir = LspDistiller::distill_diagnostics(&abs, Some("/abs/project/src"), None);
+        assert_eq!(abs_dir.diagnostics.len(), 1);
     }
 
     /// The filter normalises separators on both sides, so a Windows-style path matches the
