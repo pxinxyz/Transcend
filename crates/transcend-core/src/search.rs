@@ -4,14 +4,14 @@
 //! with NUL-byte binary detection, lossy UTF-8 decoding, atomic match budgeting,
 //! cross-file diversity sampling, context-line harvesting, and directory radar clustering.
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use ignore::overrides::OverrideBuilder;
 use ignore::{WalkBuilder, WalkState};
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use transcend_protocol::{
     DirectoryRadar, FileCluster, SearchMatch, SearchOptions, SearchRequest, SearchResponse,
 };
@@ -68,13 +68,14 @@ impl SearchScanner {
 
         // Build file walker
         let include_hidden = opts.include_hidden.unwrap_or(false);
+        let respect_gitignore = opts.respect_gitignore.unwrap_or(true);
         let mut walk_builder = WalkBuilder::new(root_path);
         walk_builder
             .hidden(!include_hidden)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .parents(true);
+            .git_ignore(respect_gitignore)
+            .git_global(respect_gitignore)
+            .git_exclude(respect_gitignore)
+            .parents(respect_gitignore);
 
         // Apply optional file pattern glob
         if let Some(pattern) = &opts.file_pattern {
@@ -162,14 +163,14 @@ impl SearchScanner {
                     tracing::debug!(path = %path.display(), error = %err, "Search failed for path");
                 }
 
-                if file_match_count > 0 {
-                    if let Ok(mut c_guard) = clusters.lock() {
-                        c_guard.push(FileCluster {
-                            file: relative_path,
-                            match_count: file_match_count,
-                            matches: local_matches,
-                        });
-                    }
+                if file_match_count > 0
+                    && let Ok(mut c_guard) = clusters.lock()
+                {
+                    c_guard.push(FileCluster {
+                        file: relative_path,
+                        match_count: file_match_count,
+                        matches: local_matches,
+                    });
                 }
 
                 WalkState::Continue
@@ -260,6 +261,10 @@ impl SearchScanner {
             files,
             directory_radar,
             truncated,
+            // The walker quits once the safety ceiling is reached, so the observed
+            // total can never exceed it. Reaching it means the count is a lower bound
+            // whose exact value depends on traversal scheduling.
+            count_capped: total >= MAX_SAFETY_MATCH_LIMIT,
         })
     }
 }
@@ -302,7 +307,16 @@ impl<'a> Sink for ThreadMatchCollector<'a> {
         self.total_matches.fetch_add(1, Ordering::Relaxed);
         *self.file_match_count += 1;
 
-        if self.local_matches.len() < self.max_per_file && self.local_matches.len() < self.max_matches {
+        // Counting is cheap; decoding and formatting a line is not. Once this file has
+        // filled its share of the budget the match is counted for the directory radar
+        // but its text is deliberately never materialized. The traversal still visits
+        // every file (so `total_matches` and `directory_radar` stay truthful), but the
+        // per-match UTF-8 decode, truncation and allocation are skipped for the
+        // overwhelming majority of matches in a low-budget query.
+        let within_budget = self.local_matches.len() < self.max_per_file
+            && self.local_matches.len() < self.max_matches;
+
+        if within_budget {
             let line_number = mat.line_number().unwrap_or(0) as usize;
             let line_text = format_line(mat.bytes(), self.max_line_length);
 
@@ -316,6 +330,8 @@ impl<'a> Sink for ThreadMatchCollector<'a> {
                 context_after: Vec::new(),
             });
         } else {
+            // Dropping the pending context is what keeps `context_lines` from doing
+            // formatting work for matches that will never be returned.
             self.pending_before.clear();
             self.pending_after_count = 0;
         }
@@ -328,6 +344,16 @@ impl<'a> Sink for ThreadMatchCollector<'a> {
         _searcher: &grep_searcher::Searcher,
         ctx: &SinkContext<'_>,
     ) -> Result<bool, Self::Error> {
+        // Context is only ever attached to a retained match, so skip the formatting
+        // entirely when the budget is exhausted (the common case in a large work tree).
+        if self.pending_after_count == 0
+            && (self.context_lines == 0
+                || (self.local_matches.len() >= self.max_per_file
+                    || self.local_matches.len() >= self.max_matches))
+        {
+            return Ok(true);
+        }
+
         let line_text = format_line(ctx.bytes(), self.max_line_length);
         if self.pending_after_count > 0 {
             if let Some(last) = self.local_matches.last_mut() {
