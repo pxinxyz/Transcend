@@ -10,8 +10,8 @@ use transcend_protocol::{
     OutlineOptions, ReadSymbolRequest, ReadSymbolResponse, Symbol, SymbolKind,
 };
 
-use crate::{CoreError, CoreResult};
 use super::scanner::{OutlineScanner, SupportedLang};
+use crate::{CoreError, CoreResult};
 
 pub struct SymbolReader;
 
@@ -22,11 +22,16 @@ pub(crate) struct SymbolMatch<'a> {
 }
 
 impl<'a> SymbolMatch<'a> {
-    pub(crate) fn matches(&self, query: &str, query_norm: &str, kind_filter: Option<&SymbolKind>) -> bool {
-        if let Some(kind) = kind_filter {
-            if &self.symbol.kind != kind {
-                return false;
-            }
+    pub(crate) fn matches(
+        &self,
+        query: &str,
+        query_norm: &str,
+        kind_filter: Option<&SymbolKind>,
+    ) -> bool {
+        if let Some(kind) = kind_filter
+            && &self.symbol.kind != kind
+        {
+            return false;
         }
         if self.qualified_name == query
             || self.qualified_name == query_norm
@@ -38,42 +43,61 @@ impl<'a> SymbolMatch<'a> {
         false
     }
 
-    pub(crate) fn matches_case_insensitive(&self, query_lower: &str, query_norm_lower: &str, kind_filter: Option<&SymbolKind>) -> bool {
-        if let Some(kind) = kind_filter {
-            if &self.symbol.kind != kind {
-                return false;
-            }
+    pub(crate) fn matches_case_insensitive(
+        &self,
+        query_lower: &str,
+        query_norm_lower: &str,
+        kind_filter: Option<&SymbolKind>,
+    ) -> bool {
+        if let Some(kind) = kind_filter
+            && &self.symbol.kind != kind
+        {
+            return false;
         }
         if self.qualified_name.to_lowercase() == query_lower
             || self.qualified_name.to_lowercase() == query_norm_lower
             || self.symbol.name.to_lowercase() == query_lower
-            || self.aliases.iter().any(|a| a.to_lowercase() == query_lower || a.to_lowercase() == query_norm_lower)
+            || self
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase() == query_lower || a.to_lowercase() == query_norm_lower)
         {
             return true;
         }
         false
     }
 
-    pub(crate) fn matches_partial(&self, query_lower: &str, kind_filter: Option<&SymbolKind>) -> bool {
-        if let Some(kind) = kind_filter {
-            if &self.symbol.kind != kind {
-                return false;
-            }
+    pub(crate) fn matches_partial(
+        &self,
+        query_lower: &str,
+        kind_filter: Option<&SymbolKind>,
+    ) -> bool {
+        if let Some(kind) = kind_filter
+            && &self.symbol.kind != kind
+        {
+            return false;
         }
         if self.symbol.name.to_lowercase().contains(query_lower)
             || self.qualified_name.to_lowercase().contains(query_lower)
-            || self.aliases.iter().any(|a| a.to_lowercase().contains(query_lower))
+            || self
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase().contains(query_lower))
         {
             return true;
         }
         false
     }
 
-    pub(crate) fn matches_token_casing(&self, query_tokens: &[String], kind_filter: Option<&SymbolKind>) -> bool {
-        if let Some(kind) = kind_filter {
-            if &self.symbol.kind != kind {
-                return false;
-            }
+    pub(crate) fn matches_token_casing(
+        &self,
+        query_tokens: &[String],
+        kind_filter: Option<&SymbolKind>,
+    ) -> bool {
+        if let Some(kind) = kind_filter
+            && &self.symbol.kind != kind
+        {
+            return false;
         }
         let sym_tokens = tokenize_identifier(&self.symbol.name);
         if sym_tokens == query_tokens {
@@ -87,11 +111,15 @@ impl<'a> SymbolMatch<'a> {
         false
     }
 
-    pub(crate) fn matches_fuzzy_subsequence(&self, query_tokens: &[String], kind_filter: Option<&SymbolKind>) -> bool {
-        if let Some(kind) = kind_filter {
-            if &self.symbol.kind != kind {
-                return false;
-            }
+    pub(crate) fn matches_fuzzy_subsequence(
+        &self,
+        query_tokens: &[String],
+        kind_filter: Option<&SymbolKind>,
+    ) -> bool {
+        if let Some(kind) = kind_filter
+            && &self.symbol.kind != kind
+        {
+            return false;
         }
         let sym_tokens = tokenize_identifier(&self.symbol.name);
         if is_token_subsequence(query_tokens, &sym_tokens) {
@@ -128,7 +156,9 @@ pub fn tokenize_identifier(s: &str) -> Vec<String> {
             let next_is_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
             let prev_is_upper = i > 0 && chars[i - 1].is_uppercase();
 
-            if (prev_is_lower && !current.is_empty()) || (prev_is_upper && next_is_lower && !current.is_empty()) {
+            if (prev_is_lower && !current.is_empty())
+                || (prev_is_upper && next_is_lower && !current.is_empty())
+            {
                 tokens.push(current.to_lowercase());
                 current.clear();
             }
@@ -151,15 +181,14 @@ pub fn is_token_subsequence(query_tokens: &[String], target_tokens: &[String]) -
     }
     let mut q_idx = 0;
     for t in target_tokens {
-        if q_idx < query_tokens.len() {
-            if t == &query_tokens[q_idx] || t.starts_with(&query_tokens[q_idx]) {
-                q_idx += 1;
-            }
+        if q_idx < query_tokens.len()
+            && (t == &query_tokens[q_idx] || t.starts_with(&query_tokens[q_idx]))
+        {
+            q_idx += 1;
         }
     }
     q_idx == query_tokens.len()
 }
-
 
 impl SymbolReader {
     pub fn read(req: &ReadSymbolRequest) -> CoreResult<ReadSymbolResponse> {
@@ -171,10 +200,16 @@ impl SymbolReader {
         } else if let Some(ref path_str) = req.path {
             let path = Path::new(path_str);
             if !path.exists() {
-                return Err(CoreError::General(format!("File does not exist: {}", path.display())));
+                return Err(CoreError::General(format!(
+                    "File does not exist: {}",
+                    path.display()
+                )));
             }
             if !path.is_file() {
-                return Err(CoreError::General(format!("Path is not a file: {}", path.display())));
+                return Err(CoreError::General(format!(
+                    "Path is not a file: {}",
+                    path.display()
+                )));
             }
             let bytes = fs::read(path)?;
             (path_str.clone(), bytes)
@@ -184,7 +219,8 @@ impl SymbolReader {
             ));
         };
 
-        let lang = SupportedLang::from_path(Path::new(&display_path)).unwrap_or(SupportedLang::Rust);
+        let lang =
+            SupportedLang::from_path(Path::new(&display_path)).unwrap_or(SupportedLang::Rust);
         let options = OutlineOptions {
             include_doc_comments: Some(true),
             include_relationships: Some(true),
@@ -212,7 +248,9 @@ impl SymbolReader {
             let query_norm_lower = query_normalized.to_lowercase();
             matches = all_symbols
                 .iter()
-                .filter(|m| m.matches_case_insensitive(&query_lower, &query_norm_lower, req.kind.as_ref()))
+                .filter(|m| {
+                    m.matches_case_insensitive(&query_lower, &query_norm_lower, req.kind.as_ref())
+                })
                 .collect();
         }
 
@@ -304,7 +342,12 @@ impl SymbolReader {
             let mut current_prefixes = Vec::new();
 
             if sym.kind == SymbolKind::Implementation {
-                if let Some(target) = sym.relationships.iter().find(|r| r.relation == "targets").map(|r| &r.target) {
+                if let Some(target) = sym
+                    .relationships
+                    .iter()
+                    .find(|r| r.relation == "targets")
+                    .map(|r| &r.target)
+                {
                     current_prefixes.push(target.clone());
                 } else if let Some(stripped) = sym.name.strip_prefix("impl ") {
                     let target = stripped.split_whitespace().last().unwrap_or(stripped);
@@ -329,7 +372,12 @@ impl SymbolReader {
                 }
             }
 
-            if let Some(trait_target) = sym.relationships.iter().find(|r| r.relation == "implements").map(|r| &r.target) {
+            if let Some(trait_target) = sym
+                .relationships
+                .iter()
+                .find(|r| r.relation == "implements")
+                .map(|r| &r.target)
+            {
                 let trait_alias = format!("{}::{}", trait_target, sym.name);
                 if !aliases.contains(&trait_alias) {
                     aliases.push(trait_alias);

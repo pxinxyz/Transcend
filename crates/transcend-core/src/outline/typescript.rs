@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from TypeScript, TSX, and JavaScript source code.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct TypeScriptOutline;
+
+impl Default for TypeScriptOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TypeScriptOutline {
     pub fn new() -> Self {
@@ -20,7 +26,8 @@ impl TypeScriptOutline {
 
         for line in prefix.lines().rev() {
             let trimmed = line.trim();
-            if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") {
+            if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/")
+            {
                 let clean = trimmed
                     .trim_start_matches("/**")
                     .trim_start_matches("/*")
@@ -48,7 +55,10 @@ impl TypeScriptOutline {
             None
         } else {
             doc_lines.reverse();
-            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+            doc_lines
+                .into_iter()
+                .find(|l| !l.is_empty())
+                .map(|l| l.to_string())
         }
     }
 
@@ -67,7 +77,12 @@ impl TypeScriptOutline {
         }
 
         let first_line = text.lines().next().unwrap_or("").trim();
-        let cleaned = clean_signature(first_line.trim_end_matches('{').trim_end_matches(';').trim());
+        let cleaned = clean_signature(
+            first_line
+                .trim_end_matches('{')
+                .trim_end_matches(';')
+                .trim(),
+        );
         if !cleaned.is_empty() {
             Some(cleaned)
         } else {
@@ -89,10 +104,10 @@ impl TypeScriptOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Function) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Function)
+        {
+            return None;
         }
 
         let doc_comment = if options.include_doc_comments != Some(false) {
@@ -133,10 +148,10 @@ impl TypeScriptOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Class) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Class)
+        {
+            return None;
         }
 
         let mut relationships = Vec::new();
@@ -144,31 +159,28 @@ impl TypeScriptOutline {
             // Check heritage (extends / implements)
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                match child.kind() {
-                    "class_heritage" => {
-                        let mut h_cursor = child.walk();
-                        for h_child in child.named_children(&mut h_cursor) {
-                            if h_child.kind() == "extends_clause" {
-                                if let Some(val) = h_child.child_by_field_name("value") {
+                if child.kind() == "class_heritage" {
+                    let mut h_cursor = child.walk();
+                    for h_child in child.named_children(&mut h_cursor) {
+                        if h_child.kind() == "extends_clause" {
+                            if let Some(val) = h_child.child_by_field_name("value") {
+                                relationships.push(SymbolRelationship {
+                                    relation: "extends".to_string(),
+                                    target: node_text(&val, source).to_string(),
+                                });
+                            }
+                        } else if h_child.kind() == "implements_clause" {
+                            let mut t_cursor = h_child.walk();
+                            for t in h_child.named_children(&mut t_cursor) {
+                                if t.kind() == "type_identifier" {
                                     relationships.push(SymbolRelationship {
-                                        relation: "extends".to_string(),
-                                        target: node_text(&val, source).to_string(),
+                                        relation: "implements".to_string(),
+                                        target: node_text(&t, source).to_string(),
                                     });
-                                }
-                            } else if h_child.kind() == "implements_clause" {
-                                let mut t_cursor = h_child.walk();
-                                for t in h_child.named_children(&mut t_cursor) {
-                                    if t.kind() == "type_identifier" {
-                                        relationships.push(SymbolRelationship {
-                                            relation: "implements".to_string(),
-                                            target: node_text(&t, source).to_string(),
-                                        });
-                                    }
                                 }
                             }
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -205,7 +217,9 @@ impl TypeScriptOutline {
                                 name: f_name,
                                 kind: SymbolKind::Property,
                                 span: node_span(&item),
-                                signature: Some(clean_signature(node_text(&item, source).trim_end_matches(';').trim())),
+                                signature: Some(clean_signature(
+                                    node_text(&item, source).trim_end_matches(';').trim(),
+                                )),
                                 doc_comment: Self::extract_doc_comment(&item, source),
                                 visibility: None,
                                 relationships: vec![],
@@ -250,10 +264,10 @@ impl TypeScriptOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Interface) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Interface)
+        {
+            return None;
         }
 
         let mut relationships = Vec::new();
@@ -285,7 +299,9 @@ impl TypeScriptOutline {
                                 name: node_text(&name_n, source).to_string(),
                                 kind: SymbolKind::Property,
                                 span: node_span(&item),
-                                signature: Some(clean_signature(node_text(&item, source).trim_end_matches(';').trim())),
+                                signature: Some(clean_signature(
+                                    node_text(&item, source).trim_end_matches(';').trim(),
+                                )),
                                 doc_comment: Self::extract_doc_comment(&item, source),
                                 visibility: None,
                                 relationships: vec![],
@@ -299,7 +315,9 @@ impl TypeScriptOutline {
                                 name: node_text(&name_n, source).to_string(),
                                 kind: SymbolKind::Method,
                                 span: node_span(&item),
-                                signature: Some(clean_signature(node_text(&item, source).trim_end_matches(';').trim())),
+                                signature: Some(clean_signature(
+                                    node_text(&item, source).trim_end_matches(';').trim(),
+                                )),
                                 doc_comment: Self::extract_doc_comment(&item, source),
                                 visibility: None,
                                 relationships: vec![],
@@ -344,10 +362,10 @@ impl TypeScriptOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::TypeAlias) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::TypeAlias)
+        {
+            return None;
         }
 
         let visibility = if is_exported {
@@ -360,7 +378,9 @@ impl TypeScriptOutline {
             name,
             kind: SymbolKind::TypeAlias,
             span: node_span(node),
-            signature: Some(clean_signature(node_text(node, source).trim_end_matches(';').trim())),
+            signature: Some(clean_signature(
+                node_text(node, source).trim_end_matches(';').trim(),
+            )),
             doc_comment: Self::extract_doc_comment(node, source),
             visibility,
             relationships: vec![],
@@ -382,10 +402,10 @@ impl TypeScriptOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Enum) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Enum)
+        {
+            return None;
         }
 
         let mut children = Vec::new();
@@ -402,7 +422,9 @@ impl TypeScriptOutline {
                         name: v_name,
                         kind: SymbolKind::Constant,
                         span: node_span(&item),
-                        signature: Some(clean_signature(node_text(&item, source).trim_end_matches(',').trim())),
+                        signature: Some(clean_signature(
+                            node_text(&item, source).trim_end_matches(',').trim(),
+                        )),
                         doc_comment: Self::extract_doc_comment(&item, source),
                         visibility: None,
                         relationships: vec![],
@@ -482,45 +504,52 @@ impl TypeScriptOutline {
             "lexical_declaration" | "variable_declaration" => {
                 let mut cursor = node.walk();
                 for decl in node.named_children(&mut cursor) {
-                    if decl.kind() == "variable_declarator" {
-                        if let Some(name_n) = decl.child_by_field_name("name") {
-                            let name = node_text(&name_n, source).to_string();
-                            if options.exported_only == Some(true) && !is_exported {
-                                continue;
-                            }
-
-                            let is_fn = if let Some(val) = decl.child_by_field_name("value") {
-                                val.kind() == "arrow_function" || val.kind() == "function"
-                            } else {
-                                false
-                            };
-
-                            let kind = if is_fn {
-                                SymbolKind::Function
-                            } else if name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1 {
-                                SymbolKind::Constant
-                            } else {
-                                SymbolKind::Variable
-                            };
-
-                            if let Some(ref allowed) = options.symbol_kinds {
-                                if !allowed.contains(&kind) {
-                                    continue;
-                                }
-                            }
-
-                            let sig = clean_signature(node_text(&decl, source).trim_end_matches(';').trim());
-                            out.push(Symbol {
-                                name,
-                                kind,
-                                span: node_span(&decl),
-                                signature: Some(sig),
-                                doc_comment: Self::extract_doc_comment(node, source),
-                                visibility: if is_exported { Some("exported".to_string()) } else { None },
-                                relationships: vec![],
-                                children: vec![],
-                            });
+                    if decl.kind() == "variable_declarator"
+                        && let Some(name_n) = decl.child_by_field_name("name")
+                    {
+                        let name = node_text(&name_n, source).to_string();
+                        if options.exported_only == Some(true) && !is_exported {
+                            continue;
                         }
+
+                        let is_fn = if let Some(val) = decl.child_by_field_name("value") {
+                            val.kind() == "arrow_function" || val.kind() == "function"
+                        } else {
+                            false
+                        };
+
+                        let kind = if is_fn {
+                            SymbolKind::Function
+                        } else if name.chars().all(|c| c.is_ascii_uppercase() || c == '_')
+                            && name.len() > 1
+                        {
+                            SymbolKind::Constant
+                        } else {
+                            SymbolKind::Variable
+                        };
+
+                        if let Some(ref allowed) = options.symbol_kinds
+                            && !allowed.contains(&kind)
+                        {
+                            continue;
+                        }
+
+                        let sig =
+                            clean_signature(node_text(&decl, source).trim_end_matches(';').trim());
+                        out.push(Symbol {
+                            name,
+                            kind,
+                            span: node_span(&decl),
+                            signature: Some(sig),
+                            doc_comment: Self::extract_doc_comment(node, source),
+                            visibility: if is_exported {
+                                Some("exported".to_string())
+                            } else {
+                                None
+                            },
+                            relationships: vec![],
+                            children: vec![],
+                        });
                     }
                 }
             }

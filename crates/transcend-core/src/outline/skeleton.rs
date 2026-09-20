@@ -31,19 +31,17 @@ impl SkeletonRenderer {
         let indent = "    ".repeat(depth);
 
         // 1. Doc comment
-        if include_docs {
-            if let Some(ref doc) = sym.doc_comment {
-                let doc_line = doc.trim();
-                if !doc_line.is_empty() {
-                    let doc_prefix = match language {
-                        "rust" | "zig" | "dart" | "swift" => "///",
-                        "python" | "bash" | "ruby" => "#",
-                        "sql" | "lua" => "--",
-                        "markdown" => ">",
-                        _ => "//",
-                    };
-                    out.push_str(&format!("{}{} {}\n", indent, doc_prefix, doc_line));
-                }
+        if include_docs && let Some(ref doc) = sym.doc_comment {
+            let doc_line = doc.trim();
+            if !doc_line.is_empty() {
+                let doc_prefix = match language {
+                    "rust" | "zig" | "dart" | "swift" => "///",
+                    "python" | "bash" | "ruby" => "#",
+                    "sql" | "lua" => "--",
+                    "markdown" => ">",
+                    _ => "//",
+                };
+                out.push_str(&format!("{}{} {}\n", indent, doc_prefix, doc_line));
             }
         }
 
@@ -124,14 +122,20 @@ impl SkeletonRenderer {
             | SymbolKind::Namespace
             | SymbolKind::Module => {
                 if sym.children.is_empty() {
-                    let terminator = if language == "c" || language == "cpp" { " {};\n" } else { " {}\n" };
+                    let terminator = if language == "c" || language == "cpp" {
+                        " {};\n"
+                    } else {
+                        " {}\n"
+                    };
                     out.push_str(&format!("{}{}{}", indent, sig, terminator));
                 } else {
                     out.push_str(&format!("{}{} {{\n", indent, sig));
                     for child in &sym.children {
                         Self::render_symbol(child, depth + 1, language, include_docs, out);
                     }
-                    let closer = if (language == "c" || language == "cpp") && (sym.kind == SymbolKind::Struct || sym.kind == SymbolKind::Class) {
+                    let closer = if (language == "c" || language == "cpp")
+                        && (sym.kind == SymbolKind::Struct || sym.kind == SymbolKind::Class)
+                    {
                         "};\n"
                     } else {
                         "}\n"
@@ -148,16 +152,20 @@ impl SkeletonRenderer {
                 out.push_str(&format!("{}}}\n", indent));
             }
             SymbolKind::Function | SymbolKind::Method | SymbolKind::Constructor => {
-                if sig.ends_with(';') {
-                    out.push_str(&format!("{}{}\n", indent, sig));
-                } else if language == "go" && !sig.starts_with("func") {
+                // A declaration (`;`) or a Go `func` line is already complete; anything
+                // else is a body that the skeleton elides.
+                if sig.ends_with(';') || (language == "go" && sig.starts_with("func")) {
                     out.push_str(&format!("{}{}\n", indent, sig));
                 } else {
                     out.push_str(&format!("{}{} {{ ... }}\n", indent, sig));
                 }
             }
             SymbolKind::Field | SymbolKind::Property => {
-                let term = if sig.ends_with(';') || sig.ends_with(',') { "" } else { ";" };
+                let term = if sig.ends_with(';') || sig.ends_with(',') {
+                    ""
+                } else {
+                    ";"
+                };
                 out.push_str(&format!("{}{}{}\n", indent, sig, term));
             }
             SymbolKind::Constant | SymbolKind::Static | SymbolKind::TypeAlias => {

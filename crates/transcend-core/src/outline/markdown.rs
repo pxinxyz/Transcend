@@ -2,12 +2,18 @@
 //!
 //! Extracts hierarchical document structure (ATX headings #, ##, ###) with nested sections.
 
-use tree_sitter::Tree;
 use transcend_protocol::{OutlineOptions, SourceSpan, Symbol, SymbolKind};
+use tree_sitter::Tree;
 
 use super::LanguageOutline;
 
 pub struct MarkdownOutline;
+
+impl Default for MarkdownOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl MarkdownOutline {
     pub fn new() -> Self {
@@ -39,7 +45,7 @@ impl LanguageOutline for MarkdownOutline {
             let trimmed = line.trim_start();
             if trimmed.starts_with('#') {
                 let hashes = trimmed.chars().take_while(|c| *c == '#').count();
-                if hashes <= 6 && trimmed.chars().nth(hashes).map_or(false, |c| c == ' ') {
+                if hashes <= 6 && (trimmed.chars().nth(hashes) == Some(' ')) {
                     let title = trimmed[hashes..].trim();
                     let start_col = line.len() - trimmed.len() + 1;
                     let end_col = line.len() + 1;
@@ -144,7 +150,7 @@ fn build_heading_hierarchy(headings: Vec<HeadingEntry>, options: &OutlineOptions
     root_symbols
 }
 
-fn prune_depth(symbols: &mut Vec<Symbol>, current_depth: usize, max_depth: usize) {
+fn prune_depth(symbols: &mut [Symbol], current_depth: usize, max_depth: usize) {
     if current_depth >= max_depth {
         for sym in symbols.iter_mut() {
             sym.children.clear();

@@ -2,29 +2,29 @@
 //!
 //! Provides language-agnostic semantic symbol extraction using Tree-sitter parsers.
 
-pub mod rust;
-pub mod typescript;
-pub mod python;
-pub mod go;
+pub mod bash;
 pub mod c_cpp;
 pub mod csharp;
+pub mod dart;
+pub mod go;
 pub mod java;
 pub mod kotlin;
-pub mod php;
-pub mod ruby;
-pub mod swift;
-pub mod bash;
-pub mod sql;
-pub mod dart;
-pub mod zig;
 pub mod lua;
 pub mod markdown;
+pub mod php;
+pub mod python;
+pub mod ruby;
+pub mod rust;
 pub mod scanner;
 pub mod skeleton;
+pub mod sql;
+pub mod swift;
 pub mod symbol_reader;
+pub mod typescript;
+pub mod zig;
 
-use tree_sitter::{Node, Point, Tree};
 use transcend_protocol::{OutlineOptions, SourceSpan, Symbol};
+use tree_sitter::{Node, Point, Tree};
 
 /// Trait implemented by language-specific AST adapters.
 pub trait LanguageOutline: Send + Sync {

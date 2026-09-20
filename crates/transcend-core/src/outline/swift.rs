@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Swift source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct SwiftOutline;
+
+impl Default for SwiftOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SwiftOutline {
     pub fn new() -> Self {
@@ -42,7 +48,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
             if !clean.is_empty() {
                 doc_lines.push(clean);
             }
-        } else if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        } else if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -63,16 +73,25 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
 fn extract_visibility(node: &Node, source: &[u8]) -> Option<String> {
-    if let Some(modifiers) = node.children(&mut node.walk()).find(|c| c.kind() == "modifiers" || c.kind() == "attribute") {
+    if let Some(modifiers) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "modifiers" || c.kind() == "attribute")
+    {
         let mut cursor = modifiers.walk();
         for child in modifiers.children(&mut cursor) {
             let text = node_text(&child, source).trim();
-            if matches!(text, "public" | "open" | "internal" | "fileprivate" | "private") {
+            if matches!(
+                text,
+                "public" | "open" | "internal" | "fileprivate" | "private"
+            ) {
                 return Some(text.to_string());
             }
         }
@@ -109,9 +128,19 @@ fn find_swift_name<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "type_identifier" || child.kind() == "simple_identifier" || child.kind() == "identifier" {
+        if child.kind() == "type_identifier"
+            || child.kind() == "simple_identifier"
+            || child.kind() == "identifier"
+        {
             let text = node_text(&child, source).trim();
-            if !text.is_empty() && text != "class" && text != "struct" && text != "protocol" && text != "enum" && text != "extension" && text != "func" {
+            if !text.is_empty()
+                && text != "class"
+                && text != "struct"
+                && text != "protocol"
+                && text != "enum"
+                && text != "extension"
+                && text != "func"
+            {
                 return Some(text);
             }
         }
@@ -125,15 +154,19 @@ fn extract_swift_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
         // Classes, Structs, Protocols, Enums, Extensions
-        "class_declaration" | "struct_declaration" | "protocol_declaration" | "enum_declaration" | "extension_declaration" => {
+        "class_declaration"
+        | "struct_declaration"
+        | "protocol_declaration"
+        | "enum_declaration"
+        | "extension_declaration" => {
             let name = find_swift_name(node, source)?;
             let visibility = extract_visibility(node, source);
 
@@ -150,10 +183,10 @@ fn extract_swift_symbol(
                 _ => SymbolKind::Class,
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -167,7 +200,8 @@ fn extract_swift_symbol(
             let mut children = Vec::new();
             if let Some(body) = node.child_by_field_name("body").or_else(|| {
                 let mut cursor = node.walk();
-                node.children(&mut cursor).find(|c| c.kind().ends_with("_body") || c.kind() == "body")
+                node.children(&mut cursor)
+                    .find(|c| c.kind().ends_with("_body") || c.kind() == "body")
             }) {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
@@ -204,10 +238,10 @@ fn extract_swift_symbol(
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {

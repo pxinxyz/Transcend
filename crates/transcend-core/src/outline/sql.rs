@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols (Tables, Views, Procedures, Functions, Indexes) from SQL.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind};
+use tree_sitter::{Node, Tree};
 
-use super::{node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, node_span, node_text};
 
 pub struct SqlOutline;
+
+impl Default for SqlOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SqlOutline {
     pub fn new() -> Self {
@@ -42,7 +48,8 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
             if !clean.is_empty() {
                 doc_lines.push(clean);
             }
-        } else if trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        } else if trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/*")
                 .trim_end_matches("*/")
@@ -62,7 +69,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -72,20 +82,20 @@ fn extract_sql_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     // Unwrap statement wrapper
     if node.kind() == "statement" {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.is_named() {
-                if let Some(sym) = extract_sql_symbol(&child, source, depth, options) {
-                    return Some(sym);
-                }
+            if child.is_named()
+                && let Some(sym) = extract_sql_symbol(&child, source, depth, options)
+            {
+                return Some(sym);
             }
         }
         return None;
@@ -113,7 +123,8 @@ fn extract_sql_symbol(
                 let mut col_cursor = child.walk();
                 for col_child in child.children(&mut col_cursor) {
                     if col_child.kind() == "column_definition" {
-                        let col_name = col_child.children(&mut col_child.walk())
+                        let col_name = col_child
+                            .children(&mut col_child.walk())
                             .find(|c| c.kind() == "identifier")
                             .map(|c| node_text(&c, source).trim().to_string())
                             .unwrap_or_else(|| "column".to_string());
@@ -130,7 +141,8 @@ fn extract_sql_symbol(
                     }
                 }
             } else if child.kind() == "column_definition" {
-                let col_name = child.children(&mut child.walk())
+                let col_name = child
+                    .children(&mut child.walk())
                     .find(|c| c.kind() == "identifier")
                     .map(|c| node_text(&c, source).trim().to_string())
                     .unwrap_or_else(|| "column".to_string());
@@ -189,7 +201,10 @@ fn extract_sql_symbol(
         });
     }
 
-    if node.kind() == "create_procedure" || text_upper.starts_with("CREATE PROCEDURE") || text_upper.starts_with("CREATE OR REPLACE PROCEDURE") {
+    if node.kind() == "create_procedure"
+        || text_upper.starts_with("CREATE PROCEDURE")
+        || text_upper.starts_with("CREATE OR REPLACE PROCEDURE")
+    {
         let mut name = "unnamed_procedure";
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -215,7 +230,10 @@ fn extract_sql_symbol(
         });
     }
 
-    if node.kind() == "create_function" || text_upper.starts_with("CREATE FUNCTION") || text_upper.starts_with("CREATE OR REPLACE FUNCTION") {
+    if node.kind() == "create_function"
+        || text_upper.starts_with("CREATE FUNCTION")
+        || text_upper.starts_with("CREATE OR REPLACE FUNCTION")
+    {
         let mut name = "unnamed_function";
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -241,7 +259,10 @@ fn extract_sql_symbol(
         });
     }
 
-    if node.kind() == "create_index" || text_upper.starts_with("CREATE INDEX") || text_upper.starts_with("CREATE UNIQUE INDEX") {
+    if node.kind() == "create_index"
+        || text_upper.starts_with("CREATE INDEX")
+        || text_upper.starts_with("CREATE UNIQUE INDEX")
+    {
         let mut name = "unnamed_index";
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {

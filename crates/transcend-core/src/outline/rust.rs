@@ -2,14 +2,18 @@
 //!
 //! Extracts semantic symbols from Rust source code using Tree-sitter.
 
+use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
 use tree_sitter::{Node, Tree};
-use transcend_protocol::{
-    OutlineOptions, Symbol, SymbolKind, SymbolRelationship,
-};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct RustOutline;
+
+impl Default for RustOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RustOutline {
     pub fn new() -> Self {
@@ -30,13 +34,25 @@ impl RustOutline {
                 // Inner doc comments on modules
                 doc_lines.push(trimmed.trim_start_matches("//!").trim());
                 in_attributes = false;
-            } else if trimmed.starts_with("/**") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
-                let clean = trimmed.trim_start_matches("/**").trim_end_matches("*/").trim_start_matches('*').trim();
+            } else if trimmed.starts_with("/**")
+                || trimmed.starts_with("*/")
+                || trimmed.starts_with('*')
+            {
+                let clean = trimmed
+                    .trim_start_matches("/**")
+                    .trim_end_matches("*/")
+                    .trim_start_matches('*')
+                    .trim();
                 if !clean.is_empty() {
                     doc_lines.push(clean);
                 }
                 in_attributes = false;
-            } else if in_attributes && (trimmed.starts_with("#[") || trimmed.starts_with('#') || trimmed.ends_with(']') || trimmed.is_empty()) {
+            } else if in_attributes
+                && (trimmed.starts_with("#[")
+                    || trimmed.starts_with('#')
+                    || trimmed.ends_with(']')
+                    || trimmed.is_empty())
+            {
                 // Skip outer attributes sitting between doc comment and item
                 continue;
             } else if trimmed.is_empty() && doc_lines.is_empty() {
@@ -50,7 +66,10 @@ impl RustOutline {
             None
         } else {
             doc_lines.reverse();
-            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+            doc_lines
+                .into_iter()
+                .find(|l| !l.is_empty())
+                .map(|l| l.to_string())
         }
     }
 
@@ -109,10 +128,10 @@ impl RustOutline {
             SymbolKind::Function
         };
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&kind) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&kind)
+        {
+            return None;
         }
 
         let doc_comment = if options.include_doc_comments != Some(false) {
@@ -133,7 +152,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_struct(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_struct(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -142,32 +166,33 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Struct) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Struct)
+        {
+            return None;
         }
 
         let mut children = Vec::new();
         if let Some(field_list) = node.child_by_field_name("body") {
             let mut cursor = field_list.walk();
             for field in field_list.named_children(&mut cursor) {
-                if field.kind() == "field_declaration" {
-                    if let Some(f_name_node) = field.child_by_field_name("name") {
-                        let f_name = node_text(&f_name_node, source).to_string();
-                        let f_vis = Self::extract_visibility(&field, source);
-                        let f_sig = clean_signature(node_text(&field, source).trim_end_matches(',').trim());
-                        children.push(Symbol {
-                            name: f_name,
-                            kind: SymbolKind::Field,
-                            span: node_span(&field),
-                            signature: Some(f_sig),
-                            doc_comment: Self::extract_doc_comment(&field, source),
-                            visibility: f_vis,
-                            relationships: vec![],
-                            children: vec![],
-                        });
-                    }
+                if field.kind() == "field_declaration"
+                    && let Some(f_name_node) = field.child_by_field_name("name")
+                {
+                    let f_name = node_text(&f_name_node, source).to_string();
+                    let f_vis = Self::extract_visibility(&field, source);
+                    let f_sig =
+                        clean_signature(node_text(&field, source).trim_end_matches(',').trim());
+                    children.push(Symbol {
+                        name: f_name,
+                        kind: SymbolKind::Field,
+                        span: node_span(&field),
+                        signature: Some(f_sig),
+                        doc_comment: Self::extract_doc_comment(&field, source),
+                        visibility: f_vis,
+                        relationships: vec![],
+                        children: vec![],
+                    });
                 }
             }
         }
@@ -193,30 +218,32 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Enum) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Enum)
+        {
+            return None;
         }
 
         let mut children = Vec::new();
         if let Some(variant_list) = node.child_by_field_name("body") {
             let mut cursor = variant_list.walk();
             for variant in variant_list.named_children(&mut cursor) {
-                if variant.kind() == "enum_variant" {
-                    if let Some(v_name_node) = variant.child_by_field_name("name") {
-                        let v_name = node_text(&v_name_node, source).to_string();
-                        children.push(Symbol {
-                            name: v_name,
-                            kind: SymbolKind::Constant,
-                            span: node_span(&variant),
-                            signature: Some(clean_signature(node_text(&variant, source).trim_end_matches(',').trim())),
-                            doc_comment: Self::extract_doc_comment(&variant, source),
-                            visibility: None,
-                            relationships: vec![],
-                            children: vec![],
-                        });
-                    }
+                if variant.kind() == "enum_variant"
+                    && let Some(v_name_node) = variant.child_by_field_name("name")
+                {
+                    let v_name = node_text(&v_name_node, source).to_string();
+                    children.push(Symbol {
+                        name: v_name,
+                        kind: SymbolKind::Constant,
+                        span: node_span(&variant),
+                        signature: Some(clean_signature(
+                            node_text(&variant, source).trim_end_matches(',').trim(),
+                        )),
+                        doc_comment: Self::extract_doc_comment(&variant, source),
+                        visibility: None,
+                        relationships: vec![],
+                        children: vec![],
+                    });
                 }
             }
         }
@@ -233,7 +260,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_trait(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_trait(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -242,20 +274,20 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Trait) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Trait)
+        {
+            return None;
         }
 
         let mut children = Vec::new();
         if let Some(body) = node.child_by_field_name("body") {
             let mut cursor = body.walk();
             for item in body.named_children(&mut cursor) {
-                if item.kind() == "function_item" || item.kind() == "function_signature_item" {
-                    if let Some(sym) = self.extract_function(&item, source, true, options) {
-                        children.push(sym);
-                    }
+                if (item.kind() == "function_item" || item.kind() == "function_signature_item")
+                    && let Some(sym) = self.extract_function(&item, source, true, options)
+                {
+                    children.push(sym);
                 }
             }
         }
@@ -273,10 +305,10 @@ impl RustOutline {
     }
 
     fn extract_impl(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Implementation) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Implementation)
+        {
+            return None;
         }
 
         let type_node = node.child_by_field_name("type")?;
@@ -316,20 +348,20 @@ impl RustOutline {
                     if let Some(sym) = self.extract_function(&item, source, true, options) {
                         children.push(sym);
                     }
-                } else if item.kind() == "type_item" {
-                    if let Some(name_n) = item.child_by_field_name("name") {
-                        let t_name = node_text(&name_n, source).to_string();
-                        children.push(Symbol {
-                            name: t_name,
-                            kind: SymbolKind::TypeAlias,
-                            span: node_span(&item),
-                            signature: Some(clean_signature(node_text(&item, source))),
-                            doc_comment: None,
-                            visibility: None,
-                            relationships: vec![],
-                            children: vec![],
-                        });
-                    }
+                } else if item.kind() == "type_item"
+                    && let Some(name_n) = item.child_by_field_name("name")
+                {
+                    let t_name = node_text(&name_n, source).to_string();
+                    children.push(Symbol {
+                        name: t_name,
+                        kind: SymbolKind::TypeAlias,
+                        span: node_span(&item),
+                        signature: Some(clean_signature(node_text(&item, source))),
+                        doc_comment: None,
+                        visibility: None,
+                        relationships: vec![],
+                        children: vec![],
+                    });
                 }
             }
         }
@@ -351,7 +383,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_type_alias(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_type_alias(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -360,10 +397,10 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::TypeAlias) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::TypeAlias)
+        {
+            return None;
         }
 
         Some(Symbol {
@@ -378,14 +415,19 @@ impl RustOutline {
         })
     }
 
-    fn extract_macro(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_macro(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Macro) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Macro)
+        {
+            return None;
         }
 
         Some(Symbol {
@@ -400,7 +442,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_module(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_module(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -409,10 +456,10 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Module) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Module)
+        {
+            return None;
         }
 
         let mut children = Vec::new();
@@ -437,7 +484,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_const(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_const(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -446,17 +498,19 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Constant) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Constant)
+        {
+            return None;
         }
 
         Some(Symbol {
             name,
             kind: SymbolKind::Constant,
             span: node_span(node),
-            signature: Some(clean_signature(node_text(node, source).trim_end_matches(';'))),
+            signature: Some(clean_signature(
+                node_text(node, source).trim_end_matches(';'),
+            )),
             doc_comment: Self::extract_doc_comment(node, source),
             visibility,
             relationships: vec![],
@@ -464,7 +518,12 @@ impl RustOutline {
         })
     }
 
-    fn extract_static(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_static(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let visibility = Self::extract_visibility(node, source);
@@ -473,17 +532,19 @@ impl RustOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Static) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Static)
+        {
+            return None;
         }
 
         Some(Symbol {
             name,
             kind: SymbolKind::Static,
             span: node_span(node),
-            signature: Some(clean_signature(node_text(node, source).trim_end_matches(';'))),
+            signature: Some(clean_signature(
+                node_text(node, source).trim_end_matches(';'),
+            )),
             doc_comment: Self::extract_doc_comment(node, source),
             visibility,
             relationships: vec![],
@@ -507,7 +568,13 @@ impl RustOutline {
         }
     }
 
-    fn extract_symbols_from_node(&self, node: &Node, source: &[u8], options: &OutlineOptions, symbols: &mut Vec<Symbol>) {
+    fn extract_symbols_from_node(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+        symbols: &mut Vec<Symbol>,
+    ) {
         if let Some(sym) = self.extract_node(node, source, options) {
             symbols.push(sym);
         } else if node.kind() == "macro_invocation" || node.kind() == "token_tree" {

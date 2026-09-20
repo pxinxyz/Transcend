@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Dart source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct DartOutline;
+
+impl Default for DartOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DartOutline {
     pub fn new() -> Self {
@@ -42,7 +48,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
             if !clean.is_empty() {
                 doc_lines.push(clean);
             }
-        } else if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        } else if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -63,7 +73,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -96,16 +109,23 @@ fn find_dart_name<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
     }
     if node.kind() == "identifier" || node.kind() == "type_identifier" {
         let text = node_text(node, source).trim();
-        if !text.is_empty() && text != "class" && text != "mixin" && text != "enum" && text != "void" {
+        if !text.is_empty()
+            && text != "class"
+            && text != "mixin"
+            && text != "enum"
+            && text != "void"
+        {
             return Some(text);
         }
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() != "function_body" && child.kind() != "block" && child.kind() != "formal_parameter_list" {
-            if let Some(name) = find_dart_name(&child, source) {
-                return Some(name);
-            }
+        if child.kind() != "function_body"
+            && child.kind() != "block"
+            && child.kind() != "formal_parameter_list"
+            && let Some(name) = find_dart_name(&child, source)
+        {
+            return Some(name);
         }
     }
     None
@@ -117,15 +137,19 @@ fn extract_dart_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
         // Classes, Mixins, Enums, Extensions
-        "class_definition" | "class_declaration" | "mixin_declaration" | "enum_declaration" | "extension_declaration" => {
+        "class_definition"
+        | "class_declaration"
+        | "mixin_declaration"
+        | "enum_declaration"
+        | "extension_declaration" => {
             let name = find_dart_name(node, source)?;
             let is_private = name.starts_with('_');
 
@@ -141,10 +165,10 @@ fn extract_dart_symbol(
                 _ => SymbolKind::Class,
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -158,7 +182,8 @@ fn extract_dart_symbol(
             let mut children = Vec::new();
             if let Some(body) = node.child_by_field_name("body").or_else(|| {
                 let mut cursor = node.walk();
-                node.children(&mut cursor).find(|c| c.kind().ends_with("_body") || c.kind() == "body")
+                node.children(&mut cursor)
+                    .find(|c| c.kind().ends_with("_body") || c.kind() == "body")
             }) {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
@@ -174,7 +199,11 @@ fn extract_dart_symbol(
                 span,
                 signature,
                 doc_comment,
-                visibility: Some(if is_private { "private".to_string() } else { "public".to_string() }),
+                visibility: Some(if is_private {
+                    "private".to_string()
+                } else {
+                    "public".to_string()
+                }),
                 relationships: Vec::new(),
                 children,
             })
@@ -184,17 +213,20 @@ fn extract_dart_symbol(
         "class_member" => {
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.is_named() {
-                    if let Some(sym) = extract_dart_symbol(&child, source, depth, options) {
-                        return Some(sym);
-                    }
+                if child.is_named()
+                    && let Some(sym) = extract_dart_symbol(&child, source, depth, options)
+                {
+                    return Some(sym);
                 }
             }
             None
         }
 
         // Functions / Methods
-        "method_declaration" | "function_signature" | "method_signature" | "function_definition" => {
+        "method_declaration"
+        | "function_signature"
+        | "method_signature"
+        | "function_definition" => {
             let name = find_dart_name(node, source)?;
             let is_private = name.starts_with('_');
 
@@ -208,10 +240,10 @@ fn extract_dart_symbol(
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -224,7 +256,11 @@ fn extract_dart_symbol(
                 } else {
                     None
                 },
-                visibility: Some(if is_private { "private".to_string() } else { "public".to_string() }),
+                visibility: Some(if is_private {
+                    "private".to_string()
+                } else {
+                    "public".to_string()
+                }),
                 relationships: Vec::new(),
                 children: Vec::new(),
             })

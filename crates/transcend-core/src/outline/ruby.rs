@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Ruby source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct RubyOutline;
+
+impl Default for RubyOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl RubyOutline {
     pub fn new() -> Self {
@@ -53,7 +59,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -74,10 +83,10 @@ fn extract_ruby_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -120,7 +129,10 @@ fn extract_ruby_symbol(
 
             let mut relationships = Vec::new();
             if let Some(super_node) = node.child_by_field_name("superclass") {
-                let target = node_text(&super_node, source).trim_start_matches('<').trim().to_string();
+                let target = node_text(&super_node, source)
+                    .trim_start_matches('<')
+                    .trim()
+                    .to_string();
                 if !target.is_empty() {
                     relationships.push(SymbolRelationship {
                         relation: "extends".to_string(),
@@ -171,10 +183,10 @@ fn extract_ruby_symbol(
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {

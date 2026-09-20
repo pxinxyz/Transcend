@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Java source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct JavaOutline;
+
+impl Default for JavaOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl JavaOutline {
     pub fn new() -> Self {
@@ -37,7 +43,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
 
     for line in prefix.lines().rev() {
         let trimmed = line.trim();
-        if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -63,12 +73,18 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
 fn extract_visibility(node: &Node, source: &[u8]) -> Option<String> {
-    if let Some(modifiers) = node.children(&mut node.walk()).find(|c| c.kind() == "modifiers") {
+    if let Some(modifiers) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "modifiers")
+    {
         let mut cursor = modifiers.walk();
         for child in modifiers.children(&mut cursor) {
             let text = node_text(&child, source).trim();
@@ -95,7 +111,12 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     }
 
     let first_line = text.lines().next().unwrap_or("").trim();
-    let cleaned = clean_signature(first_line.trim_end_matches('{').trim_end_matches(';').trim());
+    let cleaned = clean_signature(
+        first_line
+            .trim_end_matches('{')
+            .trim_end_matches(';')
+            .trim(),
+    );
     if !cleaned.is_empty() {
         Some(cleaned)
     } else {
@@ -107,8 +128,14 @@ fn extract_java_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelations
     let mut rels = Vec::new();
 
     // Superclass (extends)
-    if let Some(super_node) = node.children(&mut node.walk()).find(|c| c.kind() == "superclass") {
-        let target = node_text(&super_node, source).trim_start_matches("extends").trim().to_string();
+    if let Some(super_node) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "superclass")
+    {
+        let target = node_text(&super_node, source)
+            .trim_start_matches("extends")
+            .trim()
+            .to_string();
         if !target.is_empty() {
             rels.push(SymbolRelationship {
                 relation: "extends".to_string(),
@@ -118,8 +145,13 @@ fn extract_java_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelations
     }
 
     // Interfaces (implements)
-    if let Some(interfaces_node) = node.children(&mut node.walk()).find(|c| c.kind() == "super_interfaces") {
-        let text = node_text(&interfaces_node, source).trim_start_matches("implements").trim();
+    if let Some(interfaces_node) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "super_interfaces")
+    {
+        let text = node_text(&interfaces_node, source)
+            .trim_start_matches("implements")
+            .trim();
         for target in text.split(',') {
             let t = target.trim();
             if !t.is_empty() {
@@ -140,15 +172,18 @@ fn extract_java_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
         // Classes, Interfaces, Records, Annotation Types
-        "class_declaration" | "interface_declaration" | "record_declaration" | "annotation_type_declaration" => {
+        "class_declaration"
+        | "interface_declaration"
+        | "record_declaration"
+        | "annotation_type_declaration" => {
             let name_node = node.child_by_field_name("name")?;
             let name = node_text(&name_node, source).trim().to_string();
             let visibility = extract_visibility(node, source);
@@ -163,10 +198,10 @@ fn extract_java_symbol(
                 _ => SymbolKind::Class,
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -222,7 +257,9 @@ fn extract_java_symbol(
                         if let Some(sym) = extract_java_symbol(&child, source, depth + 1, options) {
                             children.push(sym);
                         }
-                    } else if let Some(sym) = extract_java_symbol(&child, source, depth + 1, options) {
+                    } else if let Some(sym) =
+                        extract_java_symbol(&child, source, depth + 1, options)
+                    {
                         children.push(sym);
                     }
                 }
@@ -274,10 +311,10 @@ fn extract_java_symbol(
             }
 
             let kind = SymbolKind::Method;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -326,10 +363,12 @@ fn extract_java_symbol(
             }
 
             let mut name = "field";
-            if let Some(declarator) = node.children(&mut node.walk()).find(|c| c.kind() == "variable_declarator") {
-                if let Some(n) = declarator.child_by_field_name("name") {
-                    name = node_text(&n, source).trim();
-                }
+            if let Some(declarator) = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "variable_declarator")
+                && let Some(n) = declarator.child_by_field_name("name")
+            {
+                name = node_text(&n, source).trim();
             }
 
             let text = node_text(node, source);

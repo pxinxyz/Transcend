@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Python source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct PythonOutline;
+
+impl Default for PythonOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PythonOutline {
     pub fn new() -> Self {
@@ -17,25 +23,24 @@ impl PythonOutline {
     fn extract_docstring(body_node: &Node, source: &[u8]) -> Option<String> {
         let mut cursor = body_node.walk();
         for child in body_node.named_children(&mut cursor) {
-            if child.kind() == "expression_statement" {
-                if let Some(first) = child.named_child(0) {
-                    if first.kind() == "string" {
-                        let raw = node_text(&first, source).trim();
-                        let clean = raw
-                            .trim_start_matches("\"\"\"")
-                            .trim_end_matches("\"\"\"")
-                            .trim_start_matches("'''")
-                            .trim_end_matches("'''")
-                            .trim_start_matches('"')
-                            .trim_end_matches('"')
-                            .trim_start_matches('\'')
-                            .trim_end_matches('\'')
-                            .trim();
-                        let first_line = clean.lines().next().unwrap_or("").trim();
-                        if !first_line.is_empty() {
-                            return Some(first_line.to_string());
-                        }
-                    }
+            if child.kind() == "expression_statement"
+                && let Some(first) = child.named_child(0)
+                && first.kind() == "string"
+            {
+                let raw = node_text(&first, source).trim();
+                let clean = raw
+                    .trim_start_matches("\"\"\"")
+                    .trim_end_matches("\"\"\"")
+                    .trim_start_matches("'''")
+                    .trim_end_matches("'''")
+                    .trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .trim();
+                let first_line = clean.lines().next().unwrap_or("").trim();
+                if !first_line.is_empty() {
+                    return Some(first_line.to_string());
                 }
             }
             // Only inspect the very first non-comment statement
@@ -46,7 +51,11 @@ impl PythonOutline {
         None
     }
 
-    fn extract_signature(effective_node: &Node, inner_node: &Node, source: &[u8]) -> Option<String> {
+    fn extract_signature(
+        effective_node: &Node,
+        inner_node: &Node,
+        source: &[u8],
+    ) -> Option<String> {
         if let Some(body_node) = inner_node.child_by_field_name("body") {
             let body_start = body_node.start_byte();
             if body_start >= effective_node.start_byte() {
@@ -59,7 +68,11 @@ impl PythonOutline {
             }
         }
 
-        let first_line = node_text(effective_node, source).lines().next().unwrap_or("").trim();
+        let first_line = node_text(effective_node, source)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim();
         let cleaned = clean_signature(first_line.trim_end_matches(':').trim());
         if !cleaned.is_empty() {
             Some(cleaned)
@@ -104,10 +117,10 @@ impl PythonOutline {
             SymbolKind::Function
         };
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&kind) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&kind)
+        {
+            return None;
         }
 
         let doc_comment = if options.include_doc_comments != Some(false) {
@@ -146,24 +159,24 @@ impl PythonOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Class) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Class)
+        {
+            return None;
         }
 
         let mut relationships = Vec::new();
-        if options.include_relationships != Some(false) {
-            if let Some(superclasses) = node.child_by_field_name("superclasses") {
-                let mut cursor = superclasses.walk();
-                for arg in superclasses.named_children(&mut cursor) {
-                    let target = node_text(&arg, source).to_string();
-                    if !target.is_empty() {
-                        relationships.push(SymbolRelationship {
-                            relation: "extends".to_string(),
-                            target,
-                        });
-                    }
+        if options.include_relationships != Some(false)
+            && let Some(superclasses) = node.child_by_field_name("superclasses")
+        {
+            let mut cursor = superclasses.walk();
+            for arg in superclasses.named_children(&mut cursor) {
+                let target = node_text(&arg, source).to_string();
+                if !target.is_empty() {
+                    relationships.push(SymbolRelationship {
+                        relation: "extends".to_string(),
+                        target,
+                    });
                 }
             }
         }
@@ -180,17 +193,19 @@ impl PythonOutline {
             for item in body.named_children(&mut cursor) {
                 match item.kind() {
                     "function_definition" | "async_function_definition" => {
-                        if let Some(sym) = self.extract_function(&item, None, source, true, options) {
+                        if let Some(sym) = self.extract_function(&item, None, source, true, options)
+                        {
                             children.push(sym);
                         }
                     }
                     "decorated_definition" => {
-                        if let Some(inner) = item.child_by_field_name("definition") {
-                            if inner.kind() == "function_definition" || inner.kind() == "async_function_definition" {
-                                if let Some(sym) = self.extract_function(&inner, Some(&item), source, true, options) {
-                                    children.push(sym);
-                                }
-                            }
+                        if let Some(inner) = item.child_by_field_name("definition")
+                            && (inner.kind() == "function_definition"
+                                || inner.kind() == "async_function_definition")
+                            && let Some(sym) =
+                                self.extract_function(&inner, Some(&item), source, true, options)
+                        {
+                            children.push(sym);
                         }
                     }
                     _ => {}
@@ -234,34 +249,37 @@ impl PythonOutline {
                 }
             }
             "expression_statement" => {
-                if let Some(assign) = node.named_child(0) {
-                    if assign.kind() == "assignment" {
-                        if let Some(left) = assign.child_by_field_name("left") {
-                            if left.kind() == "identifier" {
-                                let name = node_text(&left, source).to_string();
-                                let is_constant = name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1;
-                                let kind = if is_constant { SymbolKind::Constant } else { SymbolKind::Variable };
+                if let Some(assign) = node.named_child(0)
+                    && assign.kind() == "assignment"
+                    && let Some(left) = assign.child_by_field_name("left")
+                    && left.kind() == "identifier"
+                {
+                    let name = node_text(&left, source).to_string();
+                    let is_constant =
+                        name.chars().all(|c| c.is_ascii_uppercase() || c == '_') && name.len() > 1;
+                    let kind = if is_constant {
+                        SymbolKind::Constant
+                    } else {
+                        SymbolKind::Variable
+                    };
 
-                                if let Some(ref allowed) = options.symbol_kinds {
-                                    if !allowed.contains(&kind) {
-                                        return None;
-                                    }
-                                }
-
-                                let sig = clean_signature(node_text(node, source).trim());
-                                return Some(Symbol {
-                                    name: name.clone(),
-                                    kind,
-                                    span: node_span(node),
-                                    signature: Some(sig),
-                                    doc_comment: None,
-                                    visibility: Self::determine_visibility(&name),
-                                    relationships: vec![],
-                                    children: vec![],
-                                });
-                            }
-                        }
+                    if let Some(ref allowed) = options.symbol_kinds
+                        && !allowed.contains(&kind)
+                    {
+                        return None;
                     }
+
+                    let sig = clean_signature(node_text(node, source).trim());
+                    return Some(Symbol {
+                        name: name.clone(),
+                        kind,
+                        span: node_span(node),
+                        signature: Some(sig),
+                        doc_comment: None,
+                        visibility: Self::determine_visibility(&name),
+                        relationships: vec![],
+                        children: vec![],
+                    });
                 }
                 None
             }

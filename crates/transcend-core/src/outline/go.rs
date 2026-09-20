@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Go source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct GoOutline;
+
+impl Default for GoOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl GoOutline {
     pub fn new() -> Self {
@@ -33,12 +39,18 @@ impl GoOutline {
             None
         } else {
             doc_lines.reverse();
-            doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+            doc_lines
+                .into_iter()
+                .find(|l| !l.is_empty())
+                .map(|l| l.to_string())
         }
     }
 
     fn is_exported(name: &str) -> bool {
-        name.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+        name.chars()
+            .next()
+            .map(|c| c.is_ascii_uppercase())
+            .unwrap_or(false)
     }
 
     fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
@@ -63,7 +75,12 @@ impl GoOutline {
         }
     }
 
-    fn extract_function(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_function(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let exported = Self::is_exported(&name);
@@ -72,10 +89,10 @@ impl GoOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Function) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Function)
+        {
+            return None;
         }
 
         Some(Symbol {
@@ -84,13 +101,22 @@ impl GoOutline {
             span: node_span(node),
             signature: Self::extract_signature(node, source),
             doc_comment: Self::extract_doc_comment(node, source),
-            visibility: if exported { Some("exported".to_string()) } else { None },
+            visibility: if exported {
+                Some("exported".to_string())
+            } else {
+                None
+            },
             relationships: vec![],
             children: vec![],
         })
     }
 
-    fn extract_method(&self, node: &Node, source: &[u8], options: &OutlineOptions) -> Option<Symbol> {
+    fn extract_method(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+    ) -> Option<Symbol> {
         let name_node = node.child_by_field_name("name")?;
         let name = node_text(&name_node, source).to_string();
         let exported = Self::is_exported(&name);
@@ -99,31 +125,31 @@ impl GoOutline {
             return None;
         }
 
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Method) {
-                return None;
-            }
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Method)
+        {
+            return None;
         }
 
         let mut relationships = Vec::new();
-        if options.include_relationships != Some(false) {
-            if let Some(recv) = node.child_by_field_name("receiver") {
-                let recv_text = clean_signature(node_text(&recv, source));
-                let clean_target = recv_text
-                    .trim_start_matches('(')
-                    .trim_end_matches(')')
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or("")
-                    .trim_start_matches('*')
-                    .to_string();
+        if options.include_relationships != Some(false)
+            && let Some(recv) = node.child_by_field_name("receiver")
+        {
+            let recv_text = clean_signature(node_text(&recv, source));
+            let clean_target = recv_text
+                .trim_start_matches('(')
+                .trim_end_matches(')')
+                .split_whitespace()
+                .last()
+                .unwrap_or("")
+                .trim_start_matches('*')
+                .to_string();
 
-                if !clean_target.is_empty() {
-                    relationships.push(SymbolRelationship {
-                        relation: "receiver".to_string(),
-                        target: clean_target,
-                    });
-                }
+            if !clean_target.is_empty() {
+                relationships.push(SymbolRelationship {
+                    relation: "receiver".to_string(),
+                    target: clean_target,
+                });
             }
         }
 
@@ -133,116 +159,141 @@ impl GoOutline {
             span: node_span(node),
             signature: Self::extract_signature(node, source),
             doc_comment: Self::extract_doc_comment(node, source),
-            visibility: if exported { Some("exported".to_string()) } else { None },
+            visibility: if exported {
+                Some("exported".to_string())
+            } else {
+                None
+            },
             relationships,
             children: vec![],
         })
     }
 
-    fn extract_types(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
+    fn extract_types(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+        out: &mut Vec<Symbol>,
+    ) {
         let mut cursor = node.walk();
         for spec in node.named_children(&mut cursor) {
-            if spec.kind() == "type_spec" {
-                if let Some(name_n) = spec.child_by_field_name("name") {
-                    let name = node_text(&name_n, source).to_string();
-                    let exported = Self::is_exported(&name);
+            if spec.kind() == "type_spec"
+                && let Some(name_n) = spec.child_by_field_name("name")
+            {
+                let name = node_text(&name_n, source).to_string();
+                let exported = Self::is_exported(&name);
 
-                    if options.exported_only == Some(true) && !exported {
-                        continue;
-                    }
-
-                    let type_n = match spec.child_by_field_name("type") {
-                        Some(t) => t,
-                        None => continue,
-                    };
-                    let mut kind = SymbolKind::TypeAlias;
-                    let mut children = Vec::new();
-
-                    match type_n.kind() {
-                        "struct_type" => {
-                            kind = SymbolKind::Struct;
-                            if let Some(field_list) = type_n.child_by_field_name("fields") {
-                                let mut f_cursor = field_list.walk();
-                                for f in field_list.named_children(&mut f_cursor) {
-                                    if f.kind() == "field_declaration" {
-                                        if let Some(f_name_n) = f.child_by_field_name("name") {
-                                            let f_name = node_text(&f_name_n, source).to_string();
-                                            children.push(Symbol {
-                                                name: f_name,
-                                                kind: SymbolKind::Field,
-                                                span: node_span(&f),
-                                                signature: Some(clean_signature(node_text(&f, source))),
-                                                doc_comment: Self::extract_doc_comment(&f, source),
-                                                visibility: if Self::is_exported(&node_text(&f_name_n, source)) {
-                                                    Some("exported".to_string())
-                                                } else {
-                                                    None
-                                                },
-                                                relationships: vec![],
-                                                children: vec![],
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        "interface_type" => {
-                            kind = SymbolKind::Interface;
-                            if let Some(method_list) = type_n.child_by_field_name("methods") {
-                                let mut m_cursor = method_list.walk();
-                                for m in method_list.named_children(&mut m_cursor) {
-                                    if m.kind() == "method_spec" {
-                                        if let Some(m_name_n) = m.child_by_field_name("name") {
-                                            let m_name = node_text(&m_name_n, source).to_string();
-                                            let is_exp = Self::is_exported(&m_name);
-                                            children.push(Symbol {
-                                                name: m_name,
-                                                kind: SymbolKind::Method,
-                                                span: node_span(&m),
-                                                signature: Some(clean_signature(node_text(&m, source))),
-                                                doc_comment: Self::extract_doc_comment(&m, source),
-                                                visibility: if is_exp {
-                                                    Some("exported".to_string())
-                                                } else {
-                                                    None
-                                                },
-                                                relationships: vec![],
-                                                children: vec![],
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-
-                    if let Some(ref allowed) = options.symbol_kinds {
-                        if !allowed.contains(&kind) {
-                            continue;
-                        }
-                    }
-
-                    out.push(Symbol {
-                        name,
-                        kind,
-                        span: node_span(&spec),
-                        signature: Some(clean_signature(node_text(&spec, source).trim_end_matches('{').trim())),
-                        doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
-                        visibility: if exported { Some("exported".to_string()) } else { None },
-                        relationships: vec![],
-                        children,
-                    });
+                if options.exported_only == Some(true) && !exported {
+                    continue;
                 }
+
+                let type_n = match spec.child_by_field_name("type") {
+                    Some(t) => t,
+                    None => continue,
+                };
+                let mut kind = SymbolKind::TypeAlias;
+                let mut children = Vec::new();
+
+                match type_n.kind() {
+                    "struct_type" => {
+                        kind = SymbolKind::Struct;
+                        if let Some(field_list) = type_n.child_by_field_name("fields") {
+                            let mut f_cursor = field_list.walk();
+                            for f in field_list.named_children(&mut f_cursor) {
+                                if f.kind() == "field_declaration"
+                                    && let Some(f_name_n) = f.child_by_field_name("name")
+                                {
+                                    let f_name = node_text(&f_name_n, source).to_string();
+                                    children.push(Symbol {
+                                        name: f_name,
+                                        kind: SymbolKind::Field,
+                                        span: node_span(&f),
+                                        signature: Some(clean_signature(node_text(&f, source))),
+                                        doc_comment: Self::extract_doc_comment(&f, source),
+                                        visibility: if Self::is_exported(node_text(
+                                            &f_name_n, source,
+                                        )) {
+                                            Some("exported".to_string())
+                                        } else {
+                                            None
+                                        },
+                                        relationships: vec![],
+                                        children: vec![],
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    "interface_type" => {
+                        kind = SymbolKind::Interface;
+                        if let Some(method_list) = type_n.child_by_field_name("methods") {
+                            let mut m_cursor = method_list.walk();
+                            for m in method_list.named_children(&mut m_cursor) {
+                                if m.kind() == "method_spec"
+                                    && let Some(m_name_n) = m.child_by_field_name("name")
+                                {
+                                    let m_name = node_text(&m_name_n, source).to_string();
+                                    let is_exp = Self::is_exported(&m_name);
+                                    children.push(Symbol {
+                                        name: m_name,
+                                        kind: SymbolKind::Method,
+                                        span: node_span(&m),
+                                        signature: Some(clean_signature(node_text(&m, source))),
+                                        doc_comment: Self::extract_doc_comment(&m, source),
+                                        visibility: if is_exp {
+                                            Some("exported".to_string())
+                                        } else {
+                                            None
+                                        },
+                                        relationships: vec![],
+                                        children: vec![],
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+
+                if let Some(ref allowed) = options.symbol_kinds
+                    && !allowed.contains(&kind)
+                {
+                    continue;
+                }
+
+                out.push(Symbol {
+                    name,
+                    kind,
+                    span: node_span(&spec),
+                    signature: Some(clean_signature(
+                        node_text(&spec, source).trim_end_matches('{').trim(),
+                    )),
+                    doc_comment: Self::extract_doc_comment(&spec, source)
+                        .or_else(|| Self::extract_doc_comment(node, source)),
+                    visibility: if exported {
+                        Some("exported".to_string())
+                    } else {
+                        None
+                    },
+                    relationships: vec![],
+                    children,
+                });
             }
         }
     }
 
-    fn extract_consts(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Constant) {
-                return;
-            }
+    fn extract_consts(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+        out: &mut Vec<Symbol>,
+    ) {
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Constant)
+        {
+            return;
         }
         let mut cursor = node.walk();
         for spec in node.named_children(&mut cursor) {
@@ -260,8 +311,13 @@ impl GoOutline {
                         kind: SymbolKind::Constant,
                         span: node_span(&spec),
                         signature: Some(sig),
-                        doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
-                        visibility: if exported { Some("exported".to_string()) } else { None },
+                        doc_comment: Self::extract_doc_comment(&spec, source)
+                            .or_else(|| Self::extract_doc_comment(node, source)),
+                        visibility: if exported {
+                            Some("exported".to_string())
+                        } else {
+                            None
+                        },
                         relationships: vec![],
                         children: vec![],
                     });
@@ -270,11 +326,17 @@ impl GoOutline {
         }
     }
 
-    fn extract_vars(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
-        if let Some(ref allowed) = options.symbol_kinds {
-            if !allowed.contains(&SymbolKind::Variable) {
-                return;
-            }
+    fn extract_vars(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+        out: &mut Vec<Symbol>,
+    ) {
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&SymbolKind::Variable)
+        {
+            return;
         }
         let mut cursor = node.walk();
         let mut specs = Vec::new();
@@ -305,8 +367,13 @@ impl GoOutline {
                     kind: SymbolKind::Variable,
                     span: node_span(&spec),
                     signature: Some(sig),
-                    doc_comment: Self::extract_doc_comment(&spec, source).or_else(|| Self::extract_doc_comment(node, source)),
-                    visibility: if exported { Some("exported".to_string()) } else { None },
+                    doc_comment: Self::extract_doc_comment(&spec, source)
+                        .or_else(|| Self::extract_doc_comment(node, source)),
+                    visibility: if exported {
+                        Some("exported".to_string())
+                    } else {
+                        None
+                    },
                     relationships: vec![],
                     children: vec![],
                 });
@@ -314,7 +381,13 @@ impl GoOutline {
         }
     }
 
-    fn extract_nodes(&self, node: &Node, source: &[u8], options: &OutlineOptions, out: &mut Vec<Symbol>) {
+    fn extract_nodes(
+        &self,
+        node: &Node,
+        source: &[u8],
+        options: &OutlineOptions,
+        out: &mut Vec<Symbol>,
+    ) {
         match node.kind() {
             "function_declaration" => {
                 if let Some(sym) = self.extract_function(node, source, options) {

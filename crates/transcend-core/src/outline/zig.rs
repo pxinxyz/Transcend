@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols (functions, structs, enums, unions, constants) from Zig.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct ZigOutline;
+
+impl Default for ZigOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ZigOutline {
     pub fn new() -> Self {
@@ -58,7 +64,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -66,7 +75,8 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     let text = node_text(node, source);
     if let Some(body_node) = node.child_by_field_name("body").or_else(|| {
         let mut cursor = node.walk();
-        node.children(&mut cursor).find(|c| c.kind() == "Block" || c.kind() == "block")
+        node.children(&mut cursor)
+            .find(|c| c.kind() == "Block" || c.kind() == "block")
     }) {
         let body_start = body_node.start_byte();
         if body_start >= node.start_byte() {
@@ -94,10 +104,10 @@ fn extract_zig_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     let text = node_text(node, source).trim();
@@ -120,11 +130,15 @@ fn extract_zig_symbol(
         }
 
         if let Some(name) = name {
-            let kind = if depth > 0 { SymbolKind::Method } else { SymbolKind::Function };
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            let kind = if depth > 0 {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            };
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             return Some(Symbol {
@@ -137,7 +151,11 @@ fn extract_zig_symbol(
                 } else {
                     None
                 },
-                visibility: Some(if is_pub { "pub".to_string() } else { "internal".to_string() }),
+                visibility: Some(if is_pub {
+                    "pub".to_string()
+                } else {
+                    "internal".to_string()
+                }),
                 relationships: Vec::new(),
                 children: Vec::new(),
             });
@@ -145,7 +163,11 @@ fn extract_zig_symbol(
     }
 
     // Zig VarDecl / Container (struct, enum, union, error)
-    if node.kind() == "VarDecl" || node.kind() == "var_decl" || text.starts_with("const ") || text.starts_with("pub const ") {
+    if node.kind() == "VarDecl"
+        || node.kind() == "var_decl"
+        || text.starts_with("const ")
+        || text.starts_with("pub const ")
+    {
         let mut name = None;
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -158,18 +180,17 @@ fn extract_zig_symbol(
         if let Some(name) = name {
             let kind = if text.contains("struct") {
                 SymbolKind::Struct
-            } else if text.contains("enum") {
-                SymbolKind::Enum
-            } else if text.contains("union") {
+            } else if text.contains("enum") || text.contains("union") {
+                // Zig unions are tagged variants, which map onto the enum kind.
                 SymbolKind::Enum
             } else {
                 SymbolKind::Constant
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             // Extract inner members if struct/enum
@@ -193,7 +214,11 @@ fn extract_zig_symbol(
                 } else {
                     None
                 },
-                visibility: Some(if is_pub { "pub".to_string() } else { "internal".to_string() }),
+                visibility: Some(if is_pub {
+                    "pub".to_string()
+                } else {
+                    "internal".to_string()
+                }),
                 relationships: Vec::new(),
                 children,
             });

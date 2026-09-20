@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Kotlin source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct KotlinOutline;
+
+impl Default for KotlinOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl KotlinOutline {
     pub fn new() -> Self {
@@ -37,7 +43,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
 
     for line in prefix.lines().rev() {
         let trimmed = line.trim();
-        if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -63,12 +73,18 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
 fn extract_visibility(node: &Node, source: &[u8]) -> Option<String> {
-    if let Some(modifiers) = node.children(&mut node.walk()).find(|c| c.kind() == "modifiers") {
+    if let Some(modifiers) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "modifiers")
+    {
         let mut cursor = modifiers.walk();
         for child in modifiers.children(&mut cursor) {
             let text = node_text(&child, source).trim();
@@ -82,7 +98,10 @@ fn extract_visibility(node: &Node, source: &[u8]) -> Option<String> {
 
 fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     let text = node_text(node, source);
-    if let Some(body_node) = node.child_by_field_name("body").or_else(|| node.child_by_field_name("class_body")) {
+    if let Some(body_node) = node
+        .child_by_field_name("body")
+        .or_else(|| node.child_by_field_name("class_body"))
+    {
         let body_start = body_node.start_byte();
         if body_start >= node.start_byte() {
             let sig_bytes = &source[node.start_byte()..body_start];
@@ -106,7 +125,10 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
 fn find_kt_name<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "simple_identifier" || child.kind() == "type_identifier" || child.kind() == "identifier" {
+        if child.kind() == "simple_identifier"
+            || child.kind() == "type_identifier"
+            || child.kind() == "identifier"
+        {
             let name = node_text(&child, source).trim();
             if !name.is_empty() {
                 return Some(name);
@@ -118,8 +140,13 @@ fn find_kt_name<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
 
 fn extract_kt_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelationship> {
     let mut rels = Vec::new();
-    if let Some(delegation) = node.children(&mut node.walk()).find(|c| c.kind() == "delegation_specifier" || c.kind() == "delegation_specifiers") {
-        let text = node_text(&delegation, source).trim_start_matches(':').trim();
+    if let Some(delegation) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "delegation_specifier" || c.kind() == "delegation_specifiers")
+    {
+        let text = node_text(&delegation, source)
+            .trim_start_matches(':')
+            .trim();
         for item in text.split(',') {
             let target = item.trim().split('(').next().unwrap_or("").trim();
             if !target.is_empty() {
@@ -139,10 +166,10 @@ fn extract_kt_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -164,10 +191,10 @@ fn extract_kt_symbol(
                 SymbolKind::Class
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -184,7 +211,10 @@ fn extract_kt_symbol(
             };
 
             let mut children = Vec::new();
-            if let Some(body) = node.children(&mut node.walk()).find(|c| c.kind() == "class_body") {
+            if let Some(body) = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "class_body")
+            {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
                     if let Some(sym) = extract_kt_symbol(&child, source, depth + 1, options) {
@@ -220,10 +250,10 @@ fn extract_kt_symbol(
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {

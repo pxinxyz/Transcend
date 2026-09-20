@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols (functions, methods, module tables) from Lua source code.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct LuaOutline;
+
+impl Default for LuaOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl LuaOutline {
     pub fn new() -> Self {
@@ -58,7 +64,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -94,10 +103,10 @@ fn extract_lua_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -113,20 +122,21 @@ fn extract_lua_symbol(
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let mut relationships = Vec::new();
-            if is_method && options.include_relationships != Some(false) {
-                if let Some(receiver) = name.split(':').next() {
-                    relationships.push(SymbolRelationship {
-                        relation: "receiver".to_string(),
-                        target: receiver.to_string(),
-                    });
-                }
+            if is_method
+                && options.include_relationships != Some(false)
+                && let Some(receiver) = name.split(':').next()
+            {
+                relationships.push(SymbolRelationship {
+                    relation: "receiver".to_string(),
+                    target: receiver.to_string(),
+                });
             }
 
             Some(Symbol {
@@ -155,10 +165,10 @@ fn extract_lua_symbol(
             }
 
             let kind = SymbolKind::Function;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {

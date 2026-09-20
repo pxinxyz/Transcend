@@ -2,17 +2,29 @@
 //!
 //! Extracts semantic symbols from C and C++ source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct COutline;
 pub struct CppOutline;
 
+impl Default for COutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl COutline {
     pub fn new() -> Self {
         Self
+    }
+}
+
+impl Default for CppOutline {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -29,7 +41,7 @@ impl LanguageOutline for COutline {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            if let Some(sym) = extract_c_symbol(&child, source, 0, options, false, None) {
+            if let Some(sym) = extract_c_symbol(&child, source, 0, options, None) {
                 symbols.push(sym);
             }
         }
@@ -45,7 +57,7 @@ impl LanguageOutline for CppOutline {
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
-            if let Some(sym) = extract_c_symbol(&child, source, 0, options, true, None) {
+            if let Some(sym) = extract_c_symbol(&child, source, 0, options, None) {
                 symbols.push(sym);
             }
         }
@@ -91,7 +103,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -110,7 +125,12 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     }
 
     let first_line = text.lines().next().unwrap_or("").trim();
-    let cleaned = clean_signature(first_line.trim_end_matches('{').trim_end_matches(';').trim());
+    let cleaned = clean_signature(
+        first_line
+            .trim_end_matches('{')
+            .trim_end_matches(';')
+            .trim(),
+    );
     if !cleaned.is_empty() {
         Some(cleaned)
     } else {
@@ -125,7 +145,10 @@ fn find_identifier<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
     if let Some(id_node) = node.child_by_field_name("name") {
         return find_identifier(&id_node, source);
     }
-    if node.kind() == "identifier" || node.kind() == "type_identifier" || node.kind() == "field_identifier" {
+    if node.kind() == "identifier"
+        || node.kind() == "type_identifier"
+        || node.kind() == "field_identifier"
+    {
         let text = node_text(node, source).trim();
         if !text.is_empty() {
             return Some(text);
@@ -133,15 +156,22 @@ fn find_identifier<'a>(node: &Node, source: &'a [u8]) -> Option<&'a str> {
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "identifier" || child.kind() == "type_identifier" || child.kind() == "field_identifier" || child.kind() == "destructor_name" {
+        if child.kind() == "identifier"
+            || child.kind() == "type_identifier"
+            || child.kind() == "field_identifier"
+            || child.kind() == "destructor_name"
+        {
             let text = node_text(&child, source).trim();
             if !text.is_empty() {
                 return Some(text);
             }
-        } else if child.kind() == "function_declarator" || child.kind() == "pointer_declarator" || child.kind() == "reference_declarator" || child.kind() == "scoped_identifier" {
-            if let Some(name) = find_identifier(&child, source) {
-                return Some(name);
-            }
+        } else if (child.kind() == "function_declarator"
+            || child.kind() == "pointer_declarator"
+            || child.kind() == "reference_declarator"
+            || child.kind() == "scoped_identifier")
+            && let Some(name) = find_identifier(&child, source)
+        {
+            return Some(name);
         }
     }
     None
@@ -152,13 +182,12 @@ fn extract_c_symbol(
     source: &[u8],
     depth: usize,
     options: &OutlineOptions,
-    is_cpp: bool,
     current_visibility: Option<&str>,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -167,7 +196,7 @@ fn extract_c_symbol(
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() != "template_parameter_list" && child.is_named() {
-                    return extract_c_symbol(&child, source, depth, options, is_cpp, current_visibility);
+                    return extract_c_symbol(&child, source, depth, options, current_visibility);
                 }
             }
             None
@@ -178,19 +207,17 @@ fn extract_c_symbol(
             let name = find_identifier(node, source)?;
             let is_method = depth > 0;
             let kind = if is_method {
-                if name.starts_with('~') {
-                    SymbolKind::Method
-                } else {
-                    SymbolKind::Method
-                }
+                // Destructors (`~Foo`) and ordinary members are both methods; the
+                // distinction is carried by the signature, not the kind.
+                SymbolKind::Method
             } else {
                 SymbolKind::Function
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -220,7 +247,8 @@ fn extract_c_symbol(
 
         // C++ Class
         "class_specifier" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .unwrap_or_else(|| "AnonymousClass".to_string());
 
@@ -233,10 +261,13 @@ fn extract_c_symbol(
             };
 
             let mut relationships = Vec::new();
-            if let Some(base_clause) = node.children(&mut node.walk()).find(|c| c.kind() == "base_class_clause") {
+            if let Some(base_clause) = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "base_class_clause")
+            {
                 let base_text = node_text(&base_clause, source);
                 for part in base_text.trim_start_matches(':').split(',') {
-                    let target = part.trim().split_whitespace().last().unwrap_or("").trim();
+                    let target = part.split_whitespace().last().unwrap_or("").trim();
                     if !target.is_empty() {
                         relationships.push(SymbolRelationship {
                             relation: "extends".to_string(),
@@ -260,7 +291,9 @@ fn extract_c_symbol(
                         } else if text.starts_with("private") {
                             active_vis = "private";
                         }
-                    } else if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, Some(active_vis)) {
+                    } else if let Some(sym) =
+                        extract_c_symbol(&child, source, depth + 1, options, Some(active_vis))
+                    {
                         children.push(sym);
                     }
                 }
@@ -280,7 +313,8 @@ fn extract_c_symbol(
 
         // Struct
         "struct_specifier" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .unwrap_or_else(|| "AnonymousStruct".to_string());
 
@@ -306,7 +340,9 @@ fn extract_c_symbol(
                         } else if text.starts_with("private") {
                             active_vis = "private";
                         }
-                    } else if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, Some(active_vis)) {
+                    } else if let Some(sym) =
+                        extract_c_symbol(&child, source, depth + 1, options, Some(active_vis))
+                    {
                         children.push(sym);
                     }
                 }
@@ -326,7 +362,8 @@ fn extract_c_symbol(
 
         // Enum
         "enum_specifier" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .unwrap_or_else(|| "AnonymousEnum".to_string());
 
@@ -342,10 +379,11 @@ fn extract_c_symbol(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    if child.kind() == "enumerator" {
-                        if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, current_visibility) {
-                            children.push(sym);
-                        }
+                    if child.kind() == "enumerator"
+                        && let Some(sym) =
+                            extract_c_symbol(&child, source, depth + 1, options, current_visibility)
+                    {
+                        children.push(sym);
                     }
                 }
             }
@@ -363,7 +401,8 @@ fn extract_c_symbol(
         }
 
         "enumerator" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .or_else(|| find_identifier(node, source).map(|s| s.to_string()))?;
 
@@ -386,7 +425,13 @@ fn extract_c_symbol(
                 name: name.to_string(),
                 kind: SymbolKind::Field,
                 span: node_span(node),
-                signature: Some(node_text(node, source).trim().trim_end_matches(';').trim().to_string()),
+                signature: Some(
+                    node_text(node, source)
+                        .trim()
+                        .trim_end_matches(';')
+                        .trim()
+                        .to_string(),
+                ),
                 doc_comment: if options.include_doc_comments != Some(false) {
                     extract_doc_comment(node, source)
                 } else {
@@ -400,7 +445,8 @@ fn extract_c_symbol(
 
         // C++ Namespace
         "namespace_definition" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .unwrap_or_else(|| "anonymous_namespace".to_string());
 
@@ -409,7 +455,9 @@ fn extract_c_symbol(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, current_visibility) {
+                    if let Some(sym) =
+                        extract_c_symbol(&child, source, depth + 1, options, current_visibility)
+                    {
                         children.push(sym);
                     }
                 }
@@ -433,7 +481,8 @@ fn extract_c_symbol(
 
         // Union
         "union_specifier" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())
                 .unwrap_or_else(|| "AnonymousUnion".to_string());
 
@@ -449,7 +498,9 @@ fn extract_c_symbol(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    if let Some(sym) = extract_c_symbol(&child, source, depth + 1, options, is_cpp, current_visibility) {
+                    if let Some(sym) =
+                        extract_c_symbol(&child, source, depth + 1, options, current_visibility)
+                    {
                         children.push(sym);
                     }
                 }
@@ -472,29 +523,33 @@ fn extract_c_symbol(
             // A typedef may wrap a struct/enum/union or a primitive type alias
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.kind() == "struct_specifier" || child.kind() == "class_specifier" || child.kind() == "enum_specifier" || child.kind() == "union_specifier" {
-                    if let Some(mut sym) = extract_c_symbol(&child, source, depth, options, is_cpp, current_visibility) {
-                        if let Some(declarator) = node.child_by_field_name("declarator") {
-                            if let Some(alias_name) = find_identifier(&declarator, source) {
-                                if sym.name.starts_with('_') || sym.name.starts_with("Anonymous") {
-                                    sym.name = alias_name.to_string();
-                                }
-                            }
-                        }
-                        return Some(sym);
+                if (child.kind() == "struct_specifier"
+                    || child.kind() == "class_specifier"
+                    || child.kind() == "enum_specifier"
+                    || child.kind() == "union_specifier")
+                    && let Some(mut sym) =
+                        extract_c_symbol(&child, source, depth, options, current_visibility)
+                {
+                    if let Some(declarator) = node.child_by_field_name("declarator")
+                        && let Some(alias_name) = find_identifier(&declarator, source)
+                        && (sym.name.starts_with('_') || sym.name.starts_with("Anonymous"))
+                    {
+                        sym.name = alias_name.to_string();
                     }
+                    return Some(sym);
                 }
             }
-            let name = node.child_by_field_name("declarator")
+            let name = node
+                .child_by_field_name("declarator")
                 .and_then(|d| find_identifier(&d, source))
                 .or_else(|| find_identifier(node, source))
                 .unwrap_or("TypeDef");
             let text = node_text(node, source);
             let kind = SymbolKind::TypeAlias;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
             Some(Symbol {
                 name: name.to_string(),
@@ -514,13 +569,14 @@ fn extract_c_symbol(
 
         // Preprocessor definitions (#define)
         "preproc_def" | "preproc_function_def" => {
-            let name = node.child_by_field_name("name")
+            let name = node
+                .child_by_field_name("name")
                 .map(|n| node_text(&n, source).trim().to_string())?;
             let kind = SymbolKind::Macro;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
             let text = node_text(node, source);
             let first_line = text.lines().next().unwrap_or("").trim();
@@ -545,40 +601,45 @@ fn extract_c_symbol(
             // Check if it wraps a struct/enum/class/union specifier
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.kind() == "struct_specifier" || child.kind() == "class_specifier" || child.kind() == "enum_specifier" || child.kind() == "union_specifier" {
-                    return extract_c_symbol(&child, source, depth, options, is_cpp, current_visibility);
+                if child.kind() == "struct_specifier"
+                    || child.kind() == "class_specifier"
+                    || child.kind() == "enum_specifier"
+                    || child.kind() == "union_specifier"
+                {
+                    return extract_c_symbol(&child, source, depth, options, current_visibility);
                 }
             }
 
             // Function prototype or member method prototype
             let text = node_text(node, source);
-            if text.contains('(') && text.contains(')') {
-                if let Some(name) = find_identifier(node, source) {
-                    let kind = if depth > 0 {
-                        SymbolKind::Method
-                    } else {
-                        SymbolKind::Function
-                    };
-                    if let Some(ref allowed) = options.symbol_kinds {
-                        if !allowed.contains(&kind) {
-                            return None;
-                        }
-                    }
-                    return Some(Symbol {
-                        name: name.to_string(),
-                        kind,
-                        span: node_span(node),
-                        signature: Some(clean_signature(text.trim().trim_end_matches(';').trim())),
-                        doc_comment: if options.include_doc_comments != Some(false) {
-                            extract_doc_comment(node, source)
-                        } else {
-                            None
-                        },
-                        visibility: current_visibility.map(|s| s.to_string()),
-                        relationships: Vec::new(),
-                        children: Vec::new(),
-                    });
+            if text.contains('(')
+                && text.contains(')')
+                && let Some(name) = find_identifier(node, source)
+            {
+                let kind = if depth > 0 {
+                    SymbolKind::Method
+                } else {
+                    SymbolKind::Function
+                };
+                if let Some(ref allowed) = options.symbol_kinds
+                    && !allowed.contains(&kind)
+                {
+                    return None;
                 }
+                return Some(Symbol {
+                    name: name.to_string(),
+                    kind,
+                    span: node_span(node),
+                    signature: Some(clean_signature(text.trim().trim_end_matches(';').trim())),
+                    doc_comment: if options.include_doc_comments != Some(false) {
+                        extract_doc_comment(node, source)
+                    } else {
+                        None
+                    },
+                    visibility: current_visibility.map(|s| s.to_string()),
+                    relationships: Vec::new(),
+                    children: Vec::new(),
+                });
             }
 
             None

@@ -5,9 +5,7 @@
 use std::path::Path;
 use std::process::Command;
 
-use transcend_protocol::{
-    GitFileEntry, GitFileStatus, GitStatusResponse,
-};
+use transcend_protocol::{GitFileEntry, GitFileStatus, GitStatusResponse};
 
 use crate::{CoreError, CoreResult};
 
@@ -120,7 +118,11 @@ impl GitEngine {
                     // 1 <XY> <sub> <mH> <mI> <mW> <hH> <hI> <path>
                     let xy = parts.next().unwrap_or("..");
                     // Path is after the first 8 whitespace-separated tokens
-                    let path = trimmed.split_whitespace().skip(8).collect::<Vec<_>>().join(" ");
+                    let path = trimmed
+                        .split_whitespace()
+                        .skip(8)
+                        .collect::<Vec<_>>()
+                        .join(" ");
                     if path.is_empty() {
                         continue;
                     }
@@ -153,11 +155,18 @@ impl GitEngine {
 
                     let path_part = line.split('\t').collect::<Vec<_>>();
                     let (path, orig_path) = if path_part.len() >= 2 {
-                        let p = path_part[0].split_whitespace().last().unwrap_or("").to_string();
+                        let p = path_part[0]
+                            .split_whitespace()
+                            .last()
+                            .unwrap_or("")
+                            .to_string();
                         let orig = path_part[1].to_string();
                         (p, Some(orig))
                     } else {
-                        (trimmed.split_whitespace().last().unwrap_or("").to_string(), None)
+                        (
+                            trimmed.split_whitespace().last().unwrap_or("").to_string(),
+                            None,
+                        )
                     };
 
                     if let Some(status) = Self::char_to_status(x) {
@@ -194,7 +203,10 @@ impl GitEngine {
             }
         }
 
-        let is_clean = staged.is_empty() && unstaged.is_empty() && untracked.is_empty() && conflicted.is_empty();
+        let is_clean = staged.is_empty()
+            && unstaged.is_empty()
+            && untracked.is_empty()
+            && conflicted.is_empty();
 
         Ok(GitStatusResponse {
             is_git_repo: true,

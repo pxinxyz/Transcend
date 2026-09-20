@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from Bash scripts using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct BashOutline;
+
+impl Default for BashOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl BashOutline {
     pub fn new() -> Self {
@@ -53,7 +59,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -86,10 +95,10 @@ fn extract_bash_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -103,13 +112,16 @@ fn extract_bash_symbol(
                     break;
                 }
             }
-            let name = name.or_else(|| node.child_by_field_name("name").map(|n| node_text(&n, source).trim()))?;
+            let name = name.or_else(|| {
+                node.child_by_field_name("name")
+                    .map(|n| node_text(&n, source).trim())
+            })?;
 
             let kind = SymbolKind::Function;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -149,17 +161,23 @@ fn extract_bash_symbol(
                     break;
                 }
             }
-            let name = name.or_else(|| node.child_by_field_name("name").map(|n| node_text(&n, source).trim()))?;
+            let name = name.or_else(|| {
+                node.child_by_field_name("name")
+                    .map(|n| node_text(&n, source).trim())
+            })?;
             // Only capture UPPERCASE constants or exports to avoid noise
-            if !name.chars().all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit()) {
+            if !name
+                .chars()
+                .all(|c| c.is_uppercase() || c == '_' || c.is_ascii_digit())
+            {
                 return None;
             }
 
             let kind = SymbolKind::Constant;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {

@@ -4,14 +4,14 @@
 //! pattern matching, file-type filtering, depth bounding, directory diversity quotas,
 //! recency/size sorting, metadata extraction, dynamic exclusions, and extension censuses.
 
+use chrono::{DateTime, SecondsFormat, Utc};
+use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
+use ignore::{WalkBuilder, WalkState};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
-use chrono::{DateTime, SecondsFormat, Utc};
-use globset::{GlobBuilder, GlobMatcher, GlobSet, GlobSetBuilder};
-use ignore::{WalkBuilder, WalkState};
 use transcend_protocol::{DirectoryRadar, FindOptions, FindRequest, FindResponse, PathEntry};
 
 use crate::{CoreError, CoreResult};
@@ -89,7 +89,11 @@ impl FindScanner {
                         .map_err(|e| CoreError::InvalidPattern(e.to_string()))?;
                     builder.add(glob);
                 }
-                Some(builder.build().map_err(|e| CoreError::InvalidPattern(e.to_string()))?)
+                Some(
+                    builder
+                        .build()
+                        .map_err(|e| CoreError::InvalidPattern(e.to_string()))?,
+                )
             } else {
                 None
             }
@@ -99,13 +103,14 @@ impl FindScanner {
 
         // 3. Build file walker
         let include_hidden = opts.include_hidden.unwrap_or(false);
+        let respect_gitignore = opts.respect_gitignore.unwrap_or(true);
         let mut walk_builder = WalkBuilder::new(root_path);
         walk_builder
             .hidden(!include_hidden)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .parents(true);
+            .git_ignore(respect_gitignore)
+            .git_global(respect_gitignore)
+            .git_exclude(respect_gitignore)
+            .parents(respect_gitignore);
 
         if let Some(depth) = opts.max_depth {
             walk_builder.max_depth(Some(depth));
@@ -180,10 +185,10 @@ impl FindScanner {
                     .replace('\\', "/");
 
                 // Dynamic exclusion check
-                if let Some(ref matcher) = exclude_matcher {
-                    if matcher.is_match(&*relative_path) || matcher.is_match(&*file_name) {
-                        return WalkState::Continue;
-                    }
+                if let Some(ref matcher) = exclude_matcher
+                    && (matcher.is_match(&*relative_path) || matcher.is_match(&*file_name))
+                {
+                    return WalkState::Continue;
                 }
 
                 let ext = path
@@ -193,17 +198,21 @@ impl FindScanner {
                     .unwrap_or_default();
 
                 // Extension filter check
-                if let Some(ref ext_filter) = extension_filter {
-                    if &ext != ext_filter {
-                        return WalkState::Continue;
-                    }
+                if let Some(ref ext_filter) = extension_filter
+                    && &ext != ext_filter
+                {
+                    return WalkState::Continue;
                 }
 
                 // Positive pattern filter check
                 if let Some(ref matcher) = pattern_matcher {
                     let matched = match matcher {
-                        PatternFilter::Glob(g) => g.is_match(&*file_name) || g.is_match(&*relative_path),
-                        PatternFilter::ExactSubstring(sub) => file_name.contains(sub) || relative_path.contains(sub),
+                        PatternFilter::Glob(g) => {
+                            g.is_match(&*file_name) || g.is_match(&*relative_path)
+                        }
+                        PatternFilter::ExactSubstring(sub) => {
+                            file_name.contains(sub) || relative_path.contains(sub)
+                        }
                         PatternFilter::CaseInsensitiveSubstring(sub) => {
                             file_name.to_lowercase().contains(sub)
                                 || relative_path.to_lowercase().contains(sub)
@@ -230,10 +239,11 @@ impl FindScanner {
                 });
 
                 // Update extension census
-                if is_file && !ext.is_empty() {
-                    if let Ok(mut e_guard) = extension_counts.lock() {
-                        *e_guard.entry(ext).or_insert(0) += 1;
-                    }
+                if is_file
+                    && !ext.is_empty()
+                    && let Ok(mut e_guard) = extension_counts.lock()
+                {
+                    *e_guard.entry(ext).or_insert(0) += 1;
                 }
 
                 // Record parent directory for radar

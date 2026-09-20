@@ -8,13 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
-use tree_sitter::{Language, Parser};
 use transcend_protocol::{
     FileOutline, OutlineFormat, OutlineOptions, OutlineRequest, OutlineResponse, OutlineSummary,
     ParseStatus, Symbol,
 };
+use tree_sitter::{Language, Parser};
 
-use crate::{CoreError, CoreResult};
+use super::LanguageOutline;
 use super::bash::BashOutline;
 use super::c_cpp::{COutline, CppOutline};
 use super::csharp::CSharpOutline;
@@ -32,7 +32,7 @@ use super::sql::SqlOutline;
 use super::swift::SwiftOutline;
 use super::typescript::TypeScriptOutline;
 use super::zig::ZigOutline;
-use super::LanguageOutline;
+use crate::{CoreError, CoreResult};
 
 pub struct OutlineScanner;
 
@@ -173,13 +173,10 @@ impl OutlineScanner {
         // 1. Direct in-memory content parsing
         if let Some(ref content) = req.content {
             let path_hint = req.path.as_deref().unwrap_or("snippet.rs");
-            let lang = SupportedLang::from_path(Path::new(path_hint)).unwrap_or(SupportedLang::Rust);
-            let mut file_outline = Self::parse_bytes(
-                path_hint,
-                content.as_bytes(),
-                &lang,
-                &options,
-            )?;
+            let lang =
+                SupportedLang::from_path(Path::new(path_hint)).unwrap_or(SupportedLang::Rust);
+            let mut file_outline =
+                Self::parse_bytes(path_hint, content.as_bytes(), &lang, &options)?;
 
             // Depth pruning
             if let Some(max_d) = options.max_depth {
@@ -204,7 +201,8 @@ impl OutlineScanner {
                 file_outline.symbols.clear();
             }
 
-            let (files, truncated) = Self::apply_budget(vec![file_outline], max_symbols, options.max_output_bytes);
+            let (files, truncated) =
+                Self::apply_budget(vec![file_outline], max_symbols, options.max_output_bytes);
 
             return Ok(OutlineResponse {
                 summary,
@@ -231,8 +229,13 @@ impl OutlineScanner {
         } else {
             // Traverse directory respecting .gitignore and include_hidden option
             let include_hidden = options.include_hidden.unwrap_or(false);
+            let respect_gitignore = options.respect_gitignore.unwrap_or(true);
             let walker = WalkBuilder::new(target_path)
-                .standard_filters(true)
+                .standard_filters(respect_gitignore)
+                .git_ignore(respect_gitignore)
+                .git_global(respect_gitignore)
+                .git_exclude(respect_gitignore)
+                .parents(respect_gitignore)
                 .hidden(!include_hidden)
                 .build();
 
@@ -246,10 +249,10 @@ impl OutlineScanner {
                         if file_name.ends_with(".min.js") || file_name.ends_with(".bundle.js") {
                             continue;
                         }
-                        if let Ok(meta) = entry.metadata() {
-                            if meta.len() > 1_000_000 {
-                                continue;
-                            }
+                        if let Ok(meta) = entry.metadata()
+                            && meta.len() > 1_000_000
+                        {
+                            continue;
                         }
                         candidate_files.push(path.to_path_buf());
                         if candidate_files.len() >= max_files * 2 {
@@ -320,7 +323,8 @@ impl OutlineScanner {
 
         summary.total_symbols = total_discovered_symbols;
 
-        let (files, truncated) = Self::apply_budget(file_outlines, max_symbols, options.max_output_bytes);
+        let (files, truncated) =
+            Self::apply_budget(file_outlines, max_symbols, options.max_output_bytes);
 
         Ok(OutlineResponse {
             summary,
@@ -369,7 +373,7 @@ impl OutlineScanner {
         })
     }
 
-    fn prune_depth(symbols: &mut Vec<Symbol>, current_depth: usize, max_depth: usize) {
+    fn prune_depth(symbols: &mut [Symbol], current_depth: usize, max_depth: usize) {
         if current_depth >= max_depth {
             for sym in symbols.iter_mut() {
                 sym.children.clear();
@@ -470,7 +474,8 @@ impl OutlineScanner {
                     if symbols_remaining > 0 {
                         let mut trimmed = sym;
                         trimmed.children.clear();
-                        let trimmed_bytes = serde_json::to_vec(&trimmed).map(|v| v.len()).unwrap_or(80);
+                        let trimmed_bytes =
+                            serde_json::to_vec(&trimmed).map(|v| v.len()).unwrap_or(80);
                         if trimmed_bytes <= bytes_remaining {
                             symbols_remaining -= 1;
                             bytes_remaining = bytes_remaining.saturating_sub(trimmed_bytes);

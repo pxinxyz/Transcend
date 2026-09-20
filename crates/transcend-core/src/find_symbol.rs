@@ -15,12 +15,10 @@ use grep_searcher::{BinaryDetection, SearcherBuilder, Sink, SinkMatch};
 use ignore::overrides::OverrideBuilder;
 use ignore::{WalkBuilder, WalkState};
 
-use transcend_protocol::{
-    FindSymbolRequest, FindSymbolResponse, FoundSymbol, OutlineOptions,
-};
+use transcend_protocol::{FindSymbolRequest, FindSymbolResponse, FoundSymbol, OutlineOptions};
 
 use crate::outline::scanner::{OutlineScanner, SupportedLang};
-use crate::outline::symbol_reader::{tokenize_identifier, SymbolReader};
+use crate::outline::symbol_reader::{SymbolReader, tokenize_identifier};
 use crate::{CoreError, CoreResult};
 
 pub struct SymbolFinder;
@@ -83,9 +81,17 @@ impl SymbolFinder {
         // -------------------------------------------------------------
         let pattern = if query_tokens.len() > 1 {
             if fuzzy {
-                query_tokens.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join(".*")
+                query_tokens
+                    .iter()
+                    .map(|t| regex::escape(t))
+                    .collect::<Vec<_>>()
+                    .join(".*")
             } else {
-                let joined_sep = query_tokens.iter().map(|t| regex::escape(t)).collect::<Vec<_>>().join("[_-]?");
+                let joined_sep = query_tokens
+                    .iter()
+                    .map(|t| regex::escape(t))
+                    .collect::<Vec<_>>()
+                    .join("[_-]?");
                 format!(r"({}|{})", regex::escape(leaf), joined_sep)
             }
         } else if exact {
@@ -158,10 +164,10 @@ impl SymbolFinder {
                 let mut sink = CandidateSink { matched: false };
                 let _ = searcher.search_path(&*matcher, path, &mut sink);
 
-                if sink.matched {
-                    if let Ok(mut c) = candidate_files.lock() {
-                        c.push(path.to_path_buf());
-                    }
+                if sink.matched
+                    && let Ok(mut c) = candidate_files.lock()
+                {
+                    c.push(path.to_path_buf());
                 }
 
                 WalkState::Continue
@@ -210,10 +216,11 @@ impl SymbolFinder {
                 file_path.to_string_lossy().replace('\\', "/")
             };
 
-            let outline = match OutlineScanner::parse_bytes(&display_path, &bytes, &lang, &outline_options) {
-                Ok(o) => o,
-                Err(_) => continue,
-            };
+            let outline =
+                match OutlineScanner::parse_bytes(&display_path, &bytes, &lang, &outline_options) {
+                    Ok(o) => o,
+                    Err(_) => continue,
+                };
 
             let mut all_symbols = Vec::new();
             SymbolReader::collect_symbols(&outline.symbols, &[], &mut all_symbols);
@@ -222,14 +229,16 @@ impl SymbolFinder {
                 let is_exact_match = if case_sensitive {
                     sym_match.matches(query, &query_normalized, req.kind.as_ref())
                 } else {
-                    sym_match.matches_case_insensitive(&query_lower, &query_norm_lower, req.kind.as_ref())
-                        || sym_match.matches_token_casing(&query_tokens, req.kind.as_ref())
+                    sym_match.matches_case_insensitive(
+                        &query_lower,
+                        &query_norm_lower,
+                        req.kind.as_ref(),
+                    ) || sym_match.matches_token_casing(&query_tokens, req.kind.as_ref())
                 };
 
-                let is_partial_match = (!exact || fuzzy) && (
-                    sym_match.matches_partial(&query_lower, req.kind.as_ref())
-                        || sym_match.matches_fuzzy_subsequence(&query_tokens, req.kind.as_ref())
-                );
+                let is_partial_match = (!exact || fuzzy)
+                    && (sym_match.matches_partial(&query_lower, req.kind.as_ref())
+                        || sym_match.matches_fuzzy_subsequence(&query_tokens, req.kind.as_ref()));
 
                 if is_exact_match || is_partial_match {
                     total_matches += 1;

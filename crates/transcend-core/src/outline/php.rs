@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from PHP source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct PhpOutline;
+
+impl Default for PhpOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PhpOutline {
     pub fn new() -> Self {
@@ -62,7 +68,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
 
     for line in prefix.lines().rev() {
         let trimmed = line.trim();
-        if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -73,7 +83,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
                 doc_lines.push(clean);
             }
         } else if trimmed.starts_with("//") || trimmed.starts_with('#') {
-            let clean = trimmed.trim_start_matches("//").trim_start_matches('#').trim();
+            let clean = trimmed
+                .trim_start_matches("//")
+                .trim_start_matches('#')
+                .trim();
             if !clean.is_empty() {
                 doc_lines.push(clean);
             }
@@ -88,7 +101,10 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
 
@@ -128,8 +144,14 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
 fn extract_php_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelationship> {
     let mut rels = Vec::new();
 
-    if let Some(base_clause) = node.children(&mut node.walk()).find(|c| c.kind() == "base_clause") {
-        let target = node_text(&base_clause, source).trim_start_matches("extends").trim().to_string();
+    if let Some(base_clause) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "base_clause")
+    {
+        let target = node_text(&base_clause, source)
+            .trim_start_matches("extends")
+            .trim()
+            .to_string();
         if !target.is_empty() {
             rels.push(SymbolRelationship {
                 relation: "extends".to_string(),
@@ -138,8 +160,13 @@ fn extract_php_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelationsh
         }
     }
 
-    if let Some(iface_clause) = node.children(&mut node.walk()).find(|c| c.kind() == "class_interface_clause") {
-        let text = node_text(&iface_clause, source).trim_start_matches("implements").trim();
+    if let Some(iface_clause) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "class_interface_clause")
+    {
+        let text = node_text(&iface_clause, source)
+            .trim_start_matches("implements")
+            .trim();
         for target in text.split(',') {
             let t = target.trim();
             if !t.is_empty() {
@@ -160,10 +187,10 @@ fn extract_php_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -200,7 +227,10 @@ fn extract_php_symbol(
         }
 
         // Classes, Interfaces, Traits, Enums
-        "class_declaration" | "interface_declaration" | "trait_declaration" | "enum_declaration" => {
+        "class_declaration"
+        | "interface_declaration"
+        | "trait_declaration"
+        | "enum_declaration" => {
             let name_node = node.child_by_field_name("name")?;
             let name = node_text(&name_node, source).trim().to_string();
             let visibility = extract_visibility(node, source);
@@ -217,10 +247,10 @@ fn extract_php_symbol(
                 _ => SymbolKind::Class,
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -264,10 +294,10 @@ fn extract_php_symbol(
             let name = node_text(&name_node, source).trim().to_string();
 
             let kind = SymbolKind::Function;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -302,10 +332,10 @@ fn extract_php_symbol(
                 SymbolKind::Method
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -333,10 +363,14 @@ fn extract_php_symbol(
 
             let text = node_text(node, source);
             let mut name = "property";
-            if let Some(elem) = node.children(&mut node.walk()).find(|c| c.kind() == "property_element") {
-                if let Some(var) = elem.children(&mut elem.walk()).find(|c| c.kind() == "variable_name") {
-                    name = node_text(&var, source).trim();
-                }
+            if let Some(elem) = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "property_element")
+                && let Some(var) = elem
+                    .children(&mut elem.walk())
+                    .find(|c| c.kind() == "variable_name")
+            {
+                name = node_text(&var, source).trim();
             }
 
             Some(Symbol {

@@ -2,12 +2,18 @@
 //!
 //! Extracts semantic symbols from C# source code using Tree-sitter.
 
-use tree_sitter::{Node, Tree};
 use transcend_protocol::{OutlineOptions, Symbol, SymbolKind, SymbolRelationship};
+use tree_sitter::{Node, Tree};
 
-use super::{clean_signature, node_span, node_text, LanguageOutline};
+use super::{LanguageOutline, clean_signature, node_span, node_text};
 
 pub struct CSharpOutline;
+
+impl Default for CSharpOutline {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl CSharpOutline {
     pub fn new() -> Self {
@@ -49,7 +55,11 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
             if !clean.is_empty() && !clean.starts_with('<') {
                 doc_lines.push(clean);
             }
-        } else if trimmed.starts_with("/**") || trimmed.starts_with("/*") || trimmed.starts_with("*/") || trimmed.starts_with('*') {
+        } else if trimmed.starts_with("/**")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with("*/")
+            || trimmed.starts_with('*')
+        {
             let clean = trimmed
                 .trim_start_matches("/**")
                 .trim_start_matches("/*")
@@ -70,17 +80,22 @@ fn extract_doc_comment(node: &Node, source: &[u8]) -> Option<String> {
         None
     } else {
         doc_lines.reverse();
-        doc_lines.into_iter().find(|l| !l.is_empty()).map(|l| l.to_string())
+        doc_lines
+            .into_iter()
+            .find(|l| !l.is_empty())
+            .map(|l| l.to_string())
     }
 }
-
 
 fn extract_visibility(node: &Node, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "modifier" {
             let text = node_text(&child, source).trim();
-            if matches!(text, "public" | "private" | "protected" | "internal" | "file") {
+            if matches!(
+                text,
+                "public" | "private" | "protected" | "internal" | "file"
+            ) {
                 return Some(text.to_string());
             }
         }
@@ -103,7 +118,10 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     }
 
     // Check for expression-bodied members (=> ...)
-    if let Some(arrow) = node.children(&mut node.walk()).find(|c| c.kind() == "arrow_expression_clause") {
+    if let Some(arrow) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "arrow_expression_clause")
+    {
         let arrow_start = arrow.start_byte();
         if arrow_start >= node.start_byte() {
             let sig_bytes = &source[node.start_byte()..arrow_start];
@@ -116,7 +134,12 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
     }
 
     let first_line = text.lines().next().unwrap_or("").trim();
-    let cleaned = clean_signature(first_line.trim_end_matches('{').trim_end_matches(';').trim());
+    let cleaned = clean_signature(
+        first_line
+            .trim_end_matches('{')
+            .trim_end_matches(';')
+            .trim(),
+    );
     if !cleaned.is_empty() {
         Some(cleaned)
     } else {
@@ -126,13 +149,18 @@ fn extract_signature(node: &Node, source: &[u8]) -> Option<String> {
 
 fn extract_base_relationships(node: &Node, source: &[u8]) -> Vec<SymbolRelationship> {
     let mut rels = Vec::new();
-    if let Some(base_list) = node.children(&mut node.walk()).find(|c| c.kind() == "base_list") {
+    if let Some(base_list) = node
+        .children(&mut node.walk())
+        .find(|c| c.kind() == "base_list")
+    {
         let mut cursor = base_list.walk();
         for child in base_list.children(&mut cursor) {
             if child.kind() != ":" && child.kind() != "," && child.is_named() {
                 let target = node_text(&child, source).trim().to_string();
                 if !target.is_empty() {
-                    let relation = if target.starts_with('I') && target.chars().nth(1).map_or(false, |c| c.is_uppercase()) {
+                    let relation = if target.starts_with('I')
+                        && target.chars().nth(1).is_some_and(|c| c.is_uppercase())
+                    {
                         "implements"
                     } else {
                         "extends"
@@ -154,10 +182,10 @@ fn extract_cs_symbol(
     depth: usize,
     options: &OutlineOptions,
 ) -> Option<Symbol> {
-    if let Some(max_depth) = options.max_depth {
-        if depth > max_depth {
-            return None;
-        }
+    if let Some(max_depth) = options.max_depth
+        && depth > max_depth
+    {
+        return None;
     }
 
     match node.kind() {
@@ -179,10 +207,12 @@ fn extract_cs_symbol(
                 // file_scoped_namespace_declaration: children are siblings or in declaration list
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
-                    if child.kind() != "name" && child.kind() != "modifier" && child.is_named() {
-                        if let Some(sym) = extract_cs_symbol(&child, source, depth + 1, options) {
-                            children.push(sym);
-                        }
+                    if child.kind() != "name"
+                        && child.kind() != "modifier"
+                        && child.is_named()
+                        && let Some(sym) = extract_cs_symbol(&child, source, depth + 1, options)
+                    {
+                        children.push(sym);
                     }
                 }
             }
@@ -204,7 +234,11 @@ fn extract_cs_symbol(
         }
 
         // Classes, Structs, Interfaces, Records
-        "class_declaration" | "struct_declaration" | "interface_declaration" | "record_declaration" | "record_struct_declaration" => {
+        "class_declaration"
+        | "struct_declaration"
+        | "interface_declaration"
+        | "record_declaration"
+        | "record_struct_declaration" => {
             let name_node = node.child_by_field_name("name")?;
             let name = node_text(&name_node, source).trim().to_string();
             let visibility = extract_visibility(node, source);
@@ -221,10 +255,10 @@ fn extract_cs_symbol(
                 _ => SymbolKind::Class,
             };
 
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             let span = node_span(node);
@@ -276,10 +310,10 @@ fn extract_cs_symbol(
             if let Some(body) = node.child_by_field_name("body") {
                 let mut cursor = body.walk();
                 for child in body.children(&mut cursor) {
-                    if child.kind() == "enum_member_declaration" {
-                        if let Some(sym) = extract_cs_symbol(&child, source, depth + 1, options) {
-                            children.push(sym);
-                        }
+                    if child.kind() == "enum_member_declaration"
+                        && let Some(sym) = extract_cs_symbol(&child, source, depth + 1, options)
+                    {
+                        children.push(sym);
                     }
                 }
             }
@@ -330,10 +364,10 @@ fn extract_cs_symbol(
             }
 
             let kind = SymbolKind::Method;
-            if let Some(ref allowed) = options.symbol_kinds {
-                if !allowed.contains(&kind) {
-                    return None;
-                }
+            if let Some(ref allowed) = options.symbol_kinds
+                && !allowed.contains(&kind)
+            {
+                return None;
             }
 
             Some(Symbol {
@@ -409,12 +443,15 @@ fn extract_cs_symbol(
             }
 
             let mut name = "field";
-            if let Some(var_decl) = node.children(&mut node.walk()).find(|c| c.kind() == "variable_declaration") {
-                if let Some(declarator) = var_decl.children(&mut var_decl.walk()).find(|c| c.kind() == "variable_declarator") {
-                    if let Some(n) = declarator.child_by_field_name("name") {
-                        name = node_text(&n, source).trim();
-                    }
-                }
+            if let Some(var_decl) = node
+                .children(&mut node.walk())
+                .find(|c| c.kind() == "variable_declaration")
+                && let Some(declarator) = var_decl
+                    .children(&mut var_decl.walk())
+                    .find(|c| c.kind() == "variable_declarator")
+                && let Some(n) = declarator.child_by_field_name("name")
+            {
+                name = node_text(&n, source).trim();
             }
 
             Some(Symbol {
