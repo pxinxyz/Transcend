@@ -8,17 +8,24 @@ Note on ownership: none of these were caught by the existing suite when they wer
 
 ## How to re-check any of this
 
-Two harnesses live alongside this document and both run against a live server:
+The verification harnesses live in `benches/`, which is **gitignored**: `benchmarks/` is
+reserved for published statements, and the tooling that produces their numbers is kept local.
+Each script runs against a live server, so `benches/` must exist on the machine running them.
 
 ```sh
 cargo build --bin transcend
-python benchmarks/probe_contracts.py                     # 63 behavioural expectations
-python benchmarks/efficiency.py --corpus <rust-checkout> --run-diagnostics
-python benchmarks/schema_tax.py --compare pre-doc-trim   # schema token cost
+python benches/probe_contracts.py                     # 71 behavioural expectations
+python benches/efficiency.py --corpus <rust-checkout> --run-diagnostics
+python benches/schema_tax.py --compare pre-doc-trim   # schema token cost
 ```
 
 `probe_contracts.py` currently reports **71 of 71 honoured** — fully green, with every
-previously-reported defect closed.
+previously-reported defect closed. It accepts `--binary` so a specific build can be checked;
+both debug and release are green.
+
+Because these scripts are not in the repository, the numbers in this document and in the
+model statements cannot be regenerated from a fresh clone. They are recorded here as results,
+with the commands above so a maintainer who has the harnesses can re-derive them.
 
 Item 24 (exit-code fidelity) passes there because the probe asserts the property that actually
 holds — zero means success, and a failing command never reports 0 — rather than the exact code,

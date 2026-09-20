@@ -16,6 +16,7 @@ Owns the Transcend Cargo workspace and its four constituent crates:
 - `LEGACY/` is gitignored and reserved for untracked legacy reference materials (§14.5 containment).
 - `rust-sdk/` is gitignored and reserved for local SDK reference (official `modelcontextprotocol/rust-sdk` clone).
 - `IDEAS/` is gitignored and reserved for parked design notes and speculative work. Nothing in it is committed, so treat it as local scratch: it is not a contract, not reviewed, and may contradict the code.
+- `benches/` is gitignored and holds the local verification harnesses (contract probe, efficiency comparison, schema token measurement). Keep it local: `benchmarks/` is reserved for published model statements written in prose, and the scripts that produce their numbers do not belong in that record. The `cargo check` gate is unaffected, because the root manifest is a virtual workspace with no `[package]`, so a `benches/` directory is not treated as a target directory.
 - In-process native Rust implementations; zero external script/CLI binary runtime dependencies.
 
 ## 4. Conventional Commits Specification

@@ -7,6 +7,11 @@
 # Cloned Rust MCP SDK reference
 /rust-sdk/
 
+# Local verification harnesses (probe/efficiency/schema-token scripts).
+# `benchmarks/` is reserved for published model statements; the tooling that produces
+# their numbers stays local so the published record is prose, not scripts.
+/benches/
+
 # Cargo build artifacts
 /target/
 
