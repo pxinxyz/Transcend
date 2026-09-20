@@ -201,7 +201,6 @@ impl SymbolFinder {
 
         let query_lower = query.to_lowercase();
         let query_norm_lower = query_normalized.to_lowercase();
-        let max_candidates_limit = (limit * 10).max(200);
 
         for file_path in &files {
             let lang = match SupportedLang::from_path(file_path) {
@@ -246,6 +245,16 @@ impl SymbolFinder {
 
                 if is_exact_match || is_partial_match {
                     total_matches += 1;
+                    // Every match is collected, then ranked and truncated below. An earlier
+                    // `(limit * 10).max(200)` cap here filled in traversal order -- files are
+                    // sorted alphabetically -- so an exact match discovered after the window
+                    // was full was discarded before the exact-first sort could promote it.
+                    // `find_symbol {exact:false, limit:5}` over 250 partials plus one exact
+                    // match returned five partials and no exact hit, while total_found and
+                    // is_exact made the payload look authoritative. Memory is not a concern
+                    // here: stage 1 already parses every candidate file and counts every
+                    // match for `total_matches`, so this vector is bounded by work already
+                    // being done.
                     let sym = sym_match.symbol;
                     let kind_str = format!("{:?}", sym.kind).to_lowercase();
                     let lang_str = lang.name().to_string();
@@ -253,20 +262,18 @@ impl SymbolFinder {
                     *kind_breakdown.entry(kind_str).or_insert(0) += 1;
                     *language_breakdown.entry(lang_str.clone()).or_insert(0) += 1;
 
-                    if found_symbols.len() < max_candidates_limit {
-                        found_symbols.push(FoundSymbol {
-                            name: sym.name.clone(),
-                            qualified_name: sym_match.qualified_name.clone(),
-                            kind: sym.kind,
-                            file: display_path.clone(),
-                            language: lang_str,
-                            span: sym.span.clone(),
-                            signature: sym.signature.clone(),
-                            doc_comment: sym.doc_comment.clone(),
-                            visibility: sym.visibility.clone(),
-                            is_exact: is_exact_match,
-                        });
-                    }
+                    found_symbols.push(FoundSymbol {
+                        name: sym.name.clone(),
+                        qualified_name: sym_match.qualified_name.clone(),
+                        kind: sym.kind,
+                        file: display_path.clone(),
+                        language: lang_str,
+                        span: sym.span.clone(),
+                        signature: sym.signature.clone(),
+                        doc_comment: sym.doc_comment.clone(),
+                        visibility: sym.visibility.clone(),
+                        is_exact: is_exact_match,
+                    });
                 }
             }
         }

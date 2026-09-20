@@ -3416,6 +3416,63 @@ pub fn config() -> Config {
         assert!(case_res.total_found >= 2);
     }
 
+    /// Regression: an intermediate `(limit * 10).max(200)` candidate cap filled in traversal
+    /// order (files are sorted alphabetically) *before* the exact-first sort ran, so an exact
+    /// match discovered after the window was full was discarded. A caller asking for
+    /// `exact: false` got a page of near-misses with no sign the real definition existed
+    /// beyond `truncated: true`.
+    #[test]
+    fn test_find_symbol_exact_match_survives_candidate_saturation() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // 250 partial matches, alphabetically FIRST.
+        let mut bulk = String::new();
+        for i in 0..250 {
+            bulk.push_str(&format!("pub fn handler_alpha_{i:03}() -> u32 {{ {i} }}\n"));
+        }
+        fs::write(sandbox.dir.join("aaa_handlers.rs"), bulk).unwrap();
+
+        // The one exact match, in a file that sorts last.
+        fs::write(
+            sandbox.dir.join("zzz_exact.rs"),
+            "pub fn handler() -> u32 { 0 }\n",
+        )
+        .unwrap();
+
+        let res = engine
+            .find_symbol(&transcend_protocol::FindSymbolRequest {
+                name: "handler".to_string(),
+                path: Some(sandbox.path_str()),
+                exact: Some(false),
+                fuzzy: Some(true),
+                limit: Some(5),
+                ..Default::default()
+            })
+            .expect("find_symbol should succeed");
+
+        assert!(
+            res.total_found > 200,
+            "fixture should saturate the old candidate window, got {}",
+            res.total_found
+        );
+        assert_eq!(res.symbols.len(), 5, "limit must still be honoured");
+        assert!(
+            res.symbols
+                .iter()
+                .any(|s| s.name == "handler" && s.is_exact),
+            "the exact match must outrank partials and survive the cap; got {:?}",
+            res.symbols
+                .iter()
+                .map(|s| (s.name.clone(), s.is_exact))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            res.symbols[0].is_exact,
+            "exact matches must be ranked first"
+        );
+    }
+
     #[test]
     fn test_find_symbol_partial_and_limit_budgeting() {
         let sandbox = TestSandbox::create();
