@@ -238,6 +238,10 @@ impl OutlineScanner {
         }
 
         let mut candidate_files: Vec<PathBuf> = Vec::new();
+        // Set when the traversal stops before exhausting the tree, or found more files than
+        // `max_files` will be parsed. `apply_budget` only sees the files that were selected,
+        // so it cannot detect either case on its own.
+        let mut file_budget_hit = false;
 
         if target_path.is_file() {
             candidate_files.push(target_path.to_path_buf());
@@ -271,12 +275,15 @@ impl OutlineScanner {
                         }
                         candidate_files.push(path.to_path_buf());
                         if candidate_files.len() >= max_files * 2 {
+                            file_budget_hit = true;
                             break;
                         }
                     }
                 }
             }
         }
+
+        let candidate_count = candidate_files.len();
 
         let mut file_outlines = Vec::new();
         let mut summary = OutlineSummary::default();
@@ -338,13 +345,21 @@ impl OutlineScanner {
 
         summary.total_symbols = total_discovered_symbols;
 
+        // More candidates were collected than will be parsed, so files were dropped.
+        if candidate_count > max_files {
+            file_budget_hit = true;
+        }
+
         let (files, truncated) =
             Self::apply_budget(file_outlines, max_symbols, options.max_output_bytes);
 
         Ok(OutlineResponse {
             summary,
             files,
-            truncated,
+            // `truncated` is documented as "capped by symbol or file budget", so the
+            // file-budget signal has to be folded in here: apply_budget only inspects the
+            // selected files and returns false when their symbols happen to fit.
+            truncated: truncated || file_budget_hit,
         })
     }
 
@@ -576,6 +591,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Regression: `truncated` is documented as "capped by symbol or file budget", but the
+    /// walker collected `max_files * 2` candidates, parsed only `max_files`, and reported
+    /// `truncated: false` whenever the selected files happened to fit the symbol/byte budget.
+    /// An agent taking an architecture census would conclude the directory was smaller than
+    /// it is.
+    #[test]
+    fn file_budget_truncation_is_reported() {
+        let dir = std::env::temp_dir().join(format!(
+            "transcend_outline_files_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // More files than max_files, each with a single symbol so the symbol budget never
+        // bites -- only the file budget can be responsible for any truncation.
+        let total = 25usize;
+        for i in 0..total {
+            std::fs::write(
+                dir.join(format!("mod_{i:02}.rs")),
+                format!("pub fn function_{i}() -> u32 {{ {i} }}\n"),
+            )
+            .unwrap();
+        }
+
+        let req = OutlineRequest {
+            path: Some(dir.to_string_lossy().to_string()),
+            content: None,
+            options: Some(OutlineOptions {
+                max_files: Some(20),
+                max_symbols: Some(10_000),
+                ..Default::default()
+            }),
+        };
+
+        let res = OutlineScanner::scan(&req).expect("scan should succeed");
+        assert_eq!(res.files.len(), 20, "only max_files are parsed");
+        assert!(
+            res.truncated,
+            "5 files were dropped by the file budget, so truncated must be true"
+        );
+
+        // A directory that fits the budget must NOT be flagged.
+        let small = OutlineRequest {
+            path: Some(dir.to_string_lossy().to_string()),
+            content: None,
+            options: Some(OutlineOptions {
+                max_files: Some(100),
+                max_symbols: Some(10_000),
+                ..Default::default()
+            }),
+        };
+        let small_res = OutlineScanner::scan(&small).expect("scan should succeed");
+        assert_eq!(small_res.files.len(), total);
+        assert!(
+            !small_res.truncated,
+            "a complete census must not be flagged as truncated"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The truncation point must be walked back to a real char boundary, never beyond the
