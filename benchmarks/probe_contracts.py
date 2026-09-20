@@ -584,6 +584,29 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         raw.startswith(("[rpc-error]", "[tool-error]")),
     )
 
+    # ---- reporting paths must be relative to the search root -------------
+    # FileCluster.file is documented as "relative to search root". With a file root the root
+    # IS the file, so the only relative form is its own name; reporting the absolute path made
+    # search disagree with find and outline for the same file.
+    rel_dir = os.path.join(scratch, "relativity")
+    shutil.rmtree(rel_dir, ignore_errors=True)
+    os.makedirs(os.path.join(rel_dir, "sub"))
+    open(os.path.join(rel_dir, "root.rs"), "w").write("rel_marker\n")
+    open(os.path.join(rel_dir, "sub", "deep.rs"), "w").write("rel_marker\n")
+
+    dir_res = j(s.call("search", {"pattern": "rel_marker", "path": rel_dir}))
+    dir_files = sorted(f.get("file", "") for f in dir_res.get("files") or [])
+    file_res = j(s.call("search", {"pattern": "rel_marker",
+                                   "path": os.path.join(rel_dir, "root.rs")}))
+    file_files = [f.get("file", "") for f in file_res.get("files") or []]
+    check(
+        "search", "cluster paths are relative to the search root, file root included",
+        f"directory root -> {dir_files}; file root -> {file_files}",
+        bool(file_files)
+        and all(not os.path.isabs(p) for p in file_files)
+        and file_files == ["root.rs"],
+    )
+
     # ---- outline summary must describe the returned payload ---------------
     # It previously mixed stages: total_symbols counted parsed symbols before the budget ran
     # while total_files counted files after the file cap, so an 8-file/16-symbol directory

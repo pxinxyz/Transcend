@@ -1475,10 +1475,15 @@ mod tests {
             !cluster.file.is_empty(),
             "cluster must name the file it describes, got an empty string"
         );
+        assert_eq!(
+            cluster.file, "single_file_hits.txt",
+            "FileCluster.file is documented as relative to the search root; with a file root \
+             the only relative form is the file's own name"
+        );
         assert!(
-            cluster.file.ends_with("single_file_hits.txt"),
-            "cluster file should identify the searched file, got {:?}",
-            cluster.file
+            !std::path::Path::new(&cluster.file).is_absolute(),
+            "an absolute path is not relative to the search root, and made search disagree \
+             with find and outline for the same file"
         );
     }
 

@@ -158,11 +158,18 @@ impl SearchScanner {
                     .unwrap_or(path)
                     .to_string_lossy()
                     .replace('\\', "/");
-                // When `path` points at a single file, the search root *is* that file, so
-                // stripping the prefix yields "". Fall back to the full path so the cluster
-                // still names the file it describes.
+                // `FileCluster.file` is documented as "relative to search root". When `path`
+                // names a single file the root IS that file, so stripping the prefix yields ""
+                // and there is no relative form to report. Fall back to the file's own NAME
+                // rather than its absolute path: an absolute path is not relative to anything,
+                // and it made `search` disagree with `find` and `outline`, which both report
+                // `root.rs` for the same file under a directory root. Reporting the basename
+                // keeps the field's meaning consistent, and the name is the part a caller
+                // actually uses -- the file it asked about.
                 let relative_path = if relative_path.is_empty() {
-                    path.to_string_lossy().replace('\\', "/")
+                    path.file_name()
+                        .map(|n| n.to_string_lossy().replace('\\', "/"))
+                        .unwrap_or_else(|| path.to_string_lossy().replace('\\', "/"))
                 } else {
                     relative_path
                 };
