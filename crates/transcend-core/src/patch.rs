@@ -8,11 +8,11 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use tree_sitter::{Node, Parser};
 use transcend_protocol::{
     BatchPatchRequest, BatchPatchResponse, PatchMode, PatchRequest, PatchResponse,
     PatchSyntaxError, ReadSymbolRequest, SourceSpan,
 };
+use tree_sitter::{Node, Parser};
 
 use crate::outline::scanner::SupportedLang;
 use crate::outline::symbol_reader::SymbolReader;
@@ -43,9 +43,9 @@ impl Patcher {
     fn indent_multiline(text: &str, target_indent: &str) -> String {
         let mut lines = Vec::new();
         for line in text.split('\n') {
-            if line.trim().is_empty() {
-                lines.push(line.to_string());
-            } else if line.starts_with(target_indent) {
+            // Blank lines stay blank, and lines already carrying the target indent are
+            // left alone so a replacement authored with indentation is not doubled.
+            if line.trim().is_empty() || line.starts_with(target_indent) {
                 lines.push(line.to_string());
             } else {
                 lines.push(format!("{target_indent}{line}"));
@@ -169,7 +169,8 @@ impl Patcher {
                     ast_valid: false,
                     syntax_errors: vec![],
                     diff: None,
-                    message: "Must specify one of 'target_symbol', 'target_span', or 'target_text'".to_string(),
+                    message: "Must specify one of 'target_symbol', 'target_span', or 'target_text'"
+                        .to_string(),
                 },
                 source.to_vec(),
             ));
@@ -210,12 +211,12 @@ impl Patcher {
                     .map(|idx| idx + 1)
                     .unwrap_or(0);
                 let line_prefix = &source[prefix_line_start..start_byte];
-                if line_prefix.iter().all(|&b| b == b' ' || b == b'\t') {
-                    if let Ok(indent_str) = std::str::from_utf8(line_prefix) {
-                        if !indent_str.is_empty() && req.replacement.starts_with(indent_str) {
-                            start_byte = prefix_line_start;
-                        }
-                    }
+                if line_prefix.iter().all(|&b| b == b' ' || b == b'\t')
+                    && let Ok(indent_str) = std::str::from_utf8(line_prefix)
+                    && !indent_str.is_empty()
+                    && req.replacement.starts_with(indent_str)
+                {
+                    start_byte = prefix_line_start;
                 }
                 (start_byte, end_byte, req.replacement.clone())
             }
@@ -238,7 +239,11 @@ impl Patcher {
             PatchMode::PrependToSymbol => {
                 let sym_slice = &source[start_byte..end_byte];
                 let base_indent = Self::detect_indentation(source, start_byte);
-                let extra_indent = if base_indent.contains('\t') { "\t" } else { "    " };
+                let extra_indent = if base_indent.contains('\t') {
+                    "\t"
+                } else {
+                    "    "
+                };
                 let body_indent = format!("{base_indent}{extra_indent}");
 
                 let insert_pos = if let Some(open_idx) = sym_slice.iter().position(|&b| b == b'{') {
@@ -270,7 +275,11 @@ impl Patcher {
             PatchMode::AppendToSymbol => {
                 let sym_slice = &source[start_byte..end_byte];
                 let base_indent = Self::detect_indentation(source, start_byte);
-                let extra_indent = if base_indent.contains('\t') { "\t" } else { "    " };
+                let extra_indent = if base_indent.contains('\t') {
+                    "\t"
+                } else {
+                    "    "
+                };
                 let body_indent = format!("{base_indent}{extra_indent}");
 
                 if let Some(close_idx) = sym_slice.iter().rposition(|&b| b == b'}') {
@@ -292,16 +301,22 @@ impl Patcher {
                         }
                     }
                     let indented = Self::indent_multiline(&req.replacement, &body_indent);
-                    let text = format!("\n{}", if indented.ends_with('\n') { indented } else { format!("{indented}\n") });
+                    let text = format!(
+                        "\n{}",
+                        if indented.ends_with('\n') {
+                            indented
+                        } else {
+                            format!("{indented}\n")
+                        }
+                    );
                     (insert_pos, insert_pos, text)
                 }
             }
         };
 
         // 2. In-memory splice
-        let mut new_source = Vec::with_capacity(
-            source.len() - (splice_end - splice_start) + splice_text.len(),
-        );
+        let mut new_source =
+            Vec::with_capacity(source.len() - (splice_end - splice_start) + splice_text.len());
         new_source.extend_from_slice(&source[..splice_start]);
         new_source.extend_from_slice(splice_text.as_bytes());
         new_source.extend_from_slice(&source[splice_end..]);
@@ -322,18 +337,18 @@ impl Patcher {
         let validate_ast = req.validate_ast.unwrap_or(true);
         let lang_opt = SupportedLang::from_path(Path::new(&req.path));
 
-        if validate_ast {
-            if let Some(lang) = lang_opt {
-                let mut parser = Parser::new();
-                let ts_lang = lang.language();
-                if let Ok(()) = parser.set_language(&ts_lang) {
-                    if let Some(tree) = parser.parse(&new_source, None) {
-                        let root = tree.root_node();
-                        if root.has_error() || root.is_error() {
-                            let mut errors = Vec::new();
-                            Self::collect_syntax_errors(&root, &new_source, &mut errors, 10);
-                            if !errors.is_empty() {
-                                return Ok((
+        if validate_ast && let Some(lang) = lang_opt {
+            let mut parser = Parser::new();
+            let ts_lang = lang.language();
+            if let Ok(()) = parser.set_language(&ts_lang)
+                && let Some(tree) = parser.parse(&new_source, None)
+            {
+                let root = tree.root_node();
+                if root.has_error() || root.is_error() {
+                    let mut errors = Vec::new();
+                    Self::collect_syntax_errors(&root, &new_source, &mut errors, 10);
+                    if !errors.is_empty() {
+                        return Ok((
                                     PatchResponse {
                                         success: false,
                                         file: display_path.to_string(),
@@ -345,8 +360,6 @@ impl Patcher {
                                     },
                                     new_source,
                                 ));
-                            }
-                        }
                     }
                 }
             }
@@ -518,26 +531,33 @@ impl Patcher {
             simulated_results.push(res);
         }
 
-        let distinct_files: std::collections::HashSet<_> = req.patches.iter().map(|p| &p.path).collect();
+        let distinct_files: std::collections::HashSet<_> =
+            req.patches.iter().map(|p| &p.path).collect();
 
         // Phase 1.5: Compute Consolidated Cumulative Diff per File
         let mut consolidated_diff = String::new();
         let mut sorted_paths: Vec<_> = working_buffers.keys().cloned().collect();
         sorted_paths.sort();
         for path_buf in sorted_paths {
-            if let (Some(orig), Some(curr)) = (original_contents.get(&path_buf), working_buffers.get(&path_buf)) {
-                if orig != curr {
-                    let display_path = path_buf.to_string_lossy();
-                    if let Some(d) = Self::generate_file_diff(&display_path, orig, curr) {
-                        if !consolidated_diff.is_empty() {
-                            consolidated_diff.push('\n');
-                        }
-                        consolidated_diff.push_str(&d);
+            if let (Some(orig), Some(curr)) = (
+                original_contents.get(&path_buf),
+                working_buffers.get(&path_buf),
+            ) && orig != curr
+            {
+                let display_path = path_buf.to_string_lossy();
+                if let Some(d) = Self::generate_file_diff(&display_path, orig, curr) {
+                    if !consolidated_diff.is_empty() {
+                        consolidated_diff.push('\n');
                     }
+                    consolidated_diff.push_str(&d);
                 }
             }
         }
-        let final_diff = if consolidated_diff.is_empty() { None } else { Some(consolidated_diff) };
+        let final_diff = if consolidated_diff.is_empty() {
+            None
+        } else {
+            Some(consolidated_diff)
+        };
 
         if any_failed {
             return Ok(BatchPatchResponse {
@@ -575,7 +595,10 @@ impl Patcher {
                 .unwrap_or("batch_patch");
             let pid = std::process::id();
             let counter = ATOMIC_PATCH_COUNTER.fetch_add(1, Ordering::Relaxed);
-            let tmp_path = parent.join(format!(".{}.transcend_batch_tmp_{}_{}", file_stem, pid, counter));
+            let tmp_path = parent.join(format!(
+                ".{}.transcend_batch_tmp_{}_{}",
+                file_stem, pid, counter
+            ));
 
             let write_res = (|| -> std::io::Result<()> {
                 let mut tmp_file = fs::File::create(&tmp_path)?;
@@ -609,7 +632,9 @@ impl Patcher {
                 all_ast_valid: false,
                 syntax_errors: vec![],
                 diff: None,
-                message: format!("Batch patch failed during disk write and was rolled back: {err_msg}"),
+                message: format!(
+                    "Batch patch failed during disk write and was rolled back: {err_msg}"
+                ),
             });
         }
 
@@ -620,7 +645,10 @@ impl Patcher {
             all_ast_valid: true,
             syntax_errors: vec![],
             diff: final_diff,
-            message: format!("Successfully applied batch patch across {} files.", distinct_files.len()),
+            message: format!(
+                "Successfully applied batch patch across {} files.",
+                distinct_files.len()
+            ),
         })
     }
 
@@ -653,7 +681,8 @@ impl Patcher {
         let mut suffix_len = 0;
         while suffix_len < orig_lines.len().saturating_sub(prefix_len)
             && suffix_len < new_lines.len().saturating_sub(prefix_len)
-            && orig_lines[orig_lines.len() - 1 - suffix_len] == new_lines[new_lines.len() - 1 - suffix_len]
+            && orig_lines[orig_lines.len() - 1 - suffix_len]
+                == new_lines[new_lines.len() - 1 - suffix_len]
         {
             suffix_len += 1;
         }
@@ -689,23 +718,23 @@ impl Patcher {
         ));
 
         // Context before
-        for i in ctx_before_start..ctx_before_end {
-            diff.push_str(&format!(" {}\n", orig_lines[i]));
+        for line in &orig_lines[ctx_before_start..ctx_before_end] {
+            diff.push_str(&format!(" {}\n", line));
         }
 
         // Old lines (-)
-        for i in l_orig_start..l_orig_end {
-            diff.push_str(&format!("-{}\n", orig_lines[i]));
+        for line in &orig_lines[l_orig_start..l_orig_end] {
+            diff.push_str(&format!("-{}\n", line));
         }
 
         // New lines (+)
-        for i in l_new_start..l_new_end {
-            diff.push_str(&format!("+{}\n", new_lines[i]));
+        for line in &new_lines[l_new_start..l_new_end] {
+            diff.push_str(&format!("+{}\n", line));
         }
 
         // Context after
-        for i in ctx_after_start..ctx_after_end {
-            diff.push_str(&format!(" {}\n", orig_lines[i]));
+        for line in &orig_lines[ctx_after_start..ctx_after_end] {
+            diff.push_str(&format!(" {}\n", line));
         }
 
         Some(diff)
