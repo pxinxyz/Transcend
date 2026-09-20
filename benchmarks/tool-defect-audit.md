@@ -53,7 +53,45 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## Open defect found by the efficiency harness
+
+**`lsp_diagnostics` still reports a broken file as clean in one condition.** Found by
+`benchmarks/efficiency.py`; not yet root-caused.
+
+Reproducer: a standalone crate with two genuine compiler errors
+(`let s: String = 42;` and a call to a missing function). `cargo check` reports both.
+
+| condition | result |
+|---|---|
+| fresh MCP session, `lsp_diagnostics {path: <lib.rs>}` | `total_count: 2` — correct |
+| fresh session, immediate repeat of the same call | `total_count: 2` — correct |
+| same session after `search` / `read_symbol` / `find` / `outline` have run | **`total_count: 0`** |
+| `lsp_diagnostics {path: <directory>}` | `total_count: 0` — known limitation, see below |
+
+So the answer depends on what the session did earlier, and an agent that has already
+explored the codebase — the normal case — is told the file is clean.
+
+Two candidate causes were ruled out or partially addressed already:
+- an empty LSP cache being treated as a verdict (fixed: a cold session now defers to the
+  compiler fallback),
+- substring path matching (fixed: matching is now segment-based).
+
+The remaining trigger is plausibly a *stale or differently-keyed cache entry for an
+unrelated file* making `has_cached_diagnostics` report true, so `lsp_verdict_usable` stays
+`true` and the compiler fallback is skipped while the cache holds nothing for the file
+asked about. Confirming that needs a trace of the cache keys and `is_warmed()` at the call,
+which is the next step rather than a guess to encode as a fix.
+
+### Known limitation: directory filters with a relative cache
+rust-analyzer reports paths relative to the session root (`src/lib.rs`) while the engine
+resolves the filter absolutely (`/abs/proj/src`). A FILE filter matches, because the
+relative cache is the absolute filter's tail. A DIRECTORY filter cannot be resolved,
+because placing a relative path under an absolute directory needs the session root, which
+is not threaded into the filter. Pinned by
+`test_diagnostics_relative_cache_matches_absolute_filter_by_tail`.
+
 ## Decisions outstanding
+
 
 Two items are parked rather than fixed because they change a public contract:
 
