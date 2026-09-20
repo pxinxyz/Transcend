@@ -36,8 +36,9 @@ Two things it does that shell tooling cannot:
   `batch_patch` aborts atomically across files.
 
 For measured comparisons against `rg`, `cat` and native file tooling — including where
-Transcend is *larger* or slower — see
-**[benchmarks/deepseek-v41-flash-native-tooling-comparison.md](benchmarks/deepseek-v41-flash-native-tooling-comparison.md)**.
+Transcend is *larger* or slower — see:
+- **[benchmarks/deepseek-v41-flash-native-tooling-comparison.md](benchmarks/deepseek-v41-flash-native-tooling-comparison.md)** (DeepSeek-V41-Flash)
+- **[benchmarks/antigravity-gemini-3.8-flash-native-tooling-comparision.md](benchmarks/antigravity-gemini-3.8-flash-native-tooling-comparision.md)** (Antigravity Gemini 3.8 Flash)
 
 ## Tools
 
