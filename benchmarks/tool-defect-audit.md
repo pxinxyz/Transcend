@@ -17,38 +17,33 @@ Note on ownership: none of these are caught by the existing suite.
 | 5 | `find_symbol` can omit the exact match (cap before sort) | **fixed** (`92c6c90`) |
 | 6 | `find_symbol.case_sensitive` default | **withdrawn** — doc was wrong, see below |
 | 7 | `exec` ignored `max_output_bytes` on the kill path | **fixed** (`b867a5e`) |
-| 8 | `lsp_references.include_declaration` ignored on fallback | open |
-| 9 | `read_file.max_bytes` enforced as a char budget | open |
+| 8 | `lsp_references.include_declaration` ignored on fallback | **fixed** (`7d163c8`) |
+| 9 | `read_file.max_bytes` enforced as a char budget | **fixed** (`19323ab`) |
 | 10 | `search` on a single file reports `file:""` | **fixed** (`74a0413`) |
 | 11 | `search` reports `truncated:false` when `max_per_file` capped | **fixed** (`74a0413`) |
-| 12 | `symbol_kinds`/`exported_only` no-ops for some languages | open |
-| 13 | `ast_valid:true` when no grammar exists | open |
-| 14 | `lsp_status` silently empty for an unknown language | open |
+| 12 | `symbol_kinds`/`exported_only` no-ops for some languages | **fixed** (`2414bb6`) |
+| 13 | `ast_valid:true` when no grammar exists | **documented** (`1161274`) — behaviour change needs a contract decision |
+| 14 | `lsp_status` silently empty for an unknown language | **fixed** (`85f8aae`) |
 | 15 | Shared workspace root makes results order-dependent | open |
 | — | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
 | — | `lsp_diagnostics` fell back to `cargo check` on an empty LSP verdict | **fixed** (`8c22e92`) |
 
-9 of 16 fixed. Every fix carries a regression test that was confirmed to fail against the
-pre-fix code. Two findings were corrected during the work: item 6 was withdrawn (the code
-was right, the doc was unsatisfiable), and the `lsp_diagnostics` fallback plus the
-`total_files_patched` / dry-run miscounts were found while fixing items 3 and 1.
+13 of 16 fixed, 1 documented, 2 open. Every fix carries a regression test that was
+confirmed to fail against the pre-fix code. Two findings were corrected during the work:
+item 6 was withdrawn (the code was right, the doc was unsatisfiable), and the
+`lsp_diagnostics` fallback plus the `total_files_patched` / dry-run miscounts were found
+while fixing items 3 and 1.
 
-### Remaining, in suggested order
+### Remaining
 
-- **9** `read_file.max_bytes` is a char budget, so a multi-byte file can return up to 4x the
-  documented bytes. Note this one needs a decision on the `success` field first (see below).
-- **8** `lsp_references.include_declaration` is dropped by the heuristic fallback, so the
-  default `false` and `true` return identical sets including the definition.
-- **12** `symbol_kinds`/`exported_only` are no-ops for SQL, Markdown, Ruby and Bash. Best
-  fixed centrally in `OutlineScanner::parse_bytes` so no adapter can forget them.
-- **13** `ast_valid: true` is asserted for extensions with no grammar (`.json`, `.toml`,
-  `.txt`), where nothing was validated. Needs a contract decision: a new `ast_validated`
-  field, or reject `validate_ast` when no grammar exists.
-- **14** `lsp_status` returns an empty list for an unknown language while `lsp_install`
-  errors, so a typo is indistinguishable from "nothing installed".
+- **13** `ast_valid: true` for extensions with no grammar. The doc now states the
+  limitation and a test pins it, so this is honest. Making it *accurate* needs a decision:
+  either a new `ast_validated` field, or rejecting `validate_ast` when no grammar exists.
+  Both change a contract.
 - **15** Shared workspace root is process-global; read-only requests expose no
-  `workspace_root` to pin, so concurrent calls can resolve against different roots. Lowest
-  urgency of the set and the most invasive to change.
+  `workspace_root` to pin, so concurrent calls can resolve against different roots. The
+  audit reproduced this with a `set_workspace` racing a no-path `find_symbol`. Most
+  invasive of the set and the least likely to be hit by a single-agent session.
 
 ### Deliberately not fixed
 
