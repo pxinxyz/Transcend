@@ -89,6 +89,21 @@ impl SearchScanner {
             walk_builder.overrides(overrides);
         }
 
+        // A count budget of zero has no sensible meaning and behaves inconsistently: it was
+        // silently ignored for `max_matches` (all matches returned) while `max_files: 0` on
+        // outline produced an empty result indistinguishable from an empty directory. Reject
+        // it rather than guess which reading the caller intended.
+        if opts.max_matches == Some(0) {
+            return Err(CoreError::InvalidInput(
+                "max_matches must be at least 1; omit it to use the default of 50".to_string(),
+            ));
+        }
+        if opts.max_per_file == Some(0) {
+            return Err(CoreError::InvalidInput(
+                "max_per_file must be at least 1; omit it to default to max_matches".to_string(),
+            ));
+        }
+
         let max_matches = opts.max_matches.unwrap_or(DEFAULT_MAX_MATCHES);
         let max_per_file = opts.max_per_file.unwrap_or(max_matches);
         let max_line_length = opts.max_line_length.unwrap_or(DEFAULT_MAX_LINE_LENGTH);

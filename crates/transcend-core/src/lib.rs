@@ -1247,6 +1247,113 @@ mod tests {
         );
     }
 
+    /// Zero and inverted budgets are rejected rather than silently reinterpreted.
+    ///
+    /// All three were verified live before the fix:
+    /// - `read_file {start_line: 8, end_line: 3}` returned `start_line: 8, end_line: 8` with
+    ///   empty content for a 10-line file: the reported range claimed a line it had not
+    ///   returned, with no explanation.
+    /// - `outline {max_files: 0}` returned an empty census whose `summary.total_files` was 0
+    ///   for a directory that plainly contained a file -- indistinguishable from an empty
+    ///   directory.
+    /// - `search {max_matches: 0}` silently ignored the budget and returned every match,
+    ///   while `find_symbol {limit: 0}` returned none: the same input meant two opposite
+    ///   things in sibling tools.
+    #[test]
+    fn zero_and_inverted_budgets_are_rejected() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let file = sandbox.dir.join("ten.txt");
+        fs::write(
+            &file,
+            (1..=10).map(|i| format!("line{i}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let p = file.to_string_lossy().to_string();
+
+        let inverted = engine.read_file(&ReadFileRequest {
+            path: p.clone(),
+            start_line: Some(8),
+            end_line: Some(3),
+            ..Default::default()
+        });
+        assert!(inverted.is_err(), "an inverted range must be refused");
+        let msg = inverted.unwrap_err().to_string();
+        assert!(
+            msg.contains("end_line") && msg.contains("start_line"),
+            "got: {msg}"
+        );
+
+        // A sane range still works, so the guard is narrow.
+        assert!(
+            engine
+                .read_file(&ReadFileRequest {
+                    path: p.clone(),
+                    start_line: Some(3),
+                    end_line: Some(5),
+                    ..Default::default()
+                })
+                .is_ok()
+        );
+
+        for opts in [
+            SearchOptions {
+                max_matches: Some(0),
+                ..Default::default()
+            },
+            SearchOptions {
+                max_per_file: Some(0),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                engine
+                    .search(&SearchRequest {
+                        pattern: "line".to_string(),
+                        path: Some(sandbox.path_str()),
+                        options: Some(opts),
+                    })
+                    .is_err(),
+                "a zero search budget must be refused"
+            );
+        }
+
+        for opts in [
+            OutlineOptions {
+                max_files: Some(0),
+                ..Default::default()
+            },
+            OutlineOptions {
+                max_symbols: Some(0),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                engine
+                    .outline(&OutlineRequest {
+                        path: Some(sandbox.path_str()),
+                        content: None,
+                        options: Some(opts),
+                    })
+                    .is_err(),
+                "a zero outline budget must be refused"
+            );
+        }
+
+        assert!(
+            engine
+                .find_symbol(&transcend_protocol::FindSymbolRequest {
+                    name: "anything".to_string(),
+                    path: Some(sandbox.path_str()),
+                    limit: Some(0),
+                    ..Default::default()
+                })
+                .is_err(),
+            "a zero limit must be refused"
+        );
+    }
+
     /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]

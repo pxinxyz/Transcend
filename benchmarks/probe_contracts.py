@@ -554,6 +554,36 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         n_typo == n_ok,
     )
 
+    # ---- zero and inverted budgets must be refused, not reinterpreted ----
+    # Verified live before the fix: read_file {start_line: 8, end_line: 3} reported
+    # start_line 8 / end_line 8 with empty content for a 10-line file; outline
+    # {max_files: 0} reported summary.total_files 0 for a directory that held a file;
+    # search {max_matches: 0} returned every match while find_symbol {limit: 0} returned none.
+    num_file = os.path.join(scratch, "counted.txt")
+    open(num_file, "w").write("".join(f"line{i}\n" for i in range(1, 11)))
+
+    raw = s.call("read_file", {"path": num_file, "start_line": 8, "end_line": 3})
+    check(
+        "read_file", "an inverted line range is refused",
+        f"raw={raw[:130]!r}",
+        raw.startswith(("[rpc-error]", "[tool-error]")),
+    )
+
+    raw = s.call("search", {"pattern": "line", "path": num_file,
+                            "options": {"max_matches": 0}})
+    check(
+        "search", "max_matches=0 is refused rather than silently ignored",
+        f"raw={raw[:130]!r}",
+        raw.startswith(("[rpc-error]", "[tool-error]")),
+    )
+
+    raw = s.call("outline", {"path": scratch, "options": {"max_files": 0}})
+    check(
+        "outline", "max_files=0 is refused rather than yielding a false census",
+        f"raw={raw[:130]!r}",
+        raw.startswith(("[rpc-error]", "[tool-error]")),
+    )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))

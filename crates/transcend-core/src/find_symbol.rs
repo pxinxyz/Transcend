@@ -72,6 +72,14 @@ impl SymbolFinder {
         // protocol doc previously claimed this "Defaults to true for exact matches", which no
         // implementation could satisfy alongside smart casing; the doc was corrected instead.
         let case_sensitive = req.case_sensitive.unwrap_or(false);
+        // Zero is rejected rather than treated as "unlimited" or "none": the two readings are
+        // opposite, and a caller that passed 0 gets a plausible-looking empty result either
+        // way. See the matching guard in search.
+        if req.limit == Some(0) {
+            return Err(CoreError::InvalidInput(
+                "limit must be at least 1; omit it to use the default of 20".to_string(),
+            ));
+        }
         let limit = req.limit.unwrap_or(20);
 
         // Normalize query for qualified lookups

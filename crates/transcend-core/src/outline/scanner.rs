@@ -175,6 +175,22 @@ fn floor_char_boundary(s: &str, index: usize) -> usize {
 impl OutlineScanner {
     pub fn scan(req: &OutlineRequest) -> CoreResult<OutlineResponse> {
         let options = req.options.clone().unwrap_or_default();
+
+        // A zero budget returned an empty census that looked like a complete one: with
+        // `max_files: 0` the summary reported `total_files: 0` for a directory that plainly
+        // contained files, and the response was indistinguishable from an empty directory.
+        // Reject it instead of guessing between "none" and "unlimited".
+        if options.max_files == Some(0) {
+            return Err(CoreError::InvalidInput(
+                "max_files must be at least 1; omit it to use the default of 20".to_string(),
+            ));
+        }
+        if options.max_symbols == Some(0) {
+            return Err(CoreError::InvalidInput(
+                "max_symbols must be at least 1; omit it to use the default of 500".to_string(),
+            ));
+        }
+
         let max_symbols = options.max_symbols.unwrap_or(500);
         let max_files = options.max_files.unwrap_or(20);
 

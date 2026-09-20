@@ -197,6 +197,19 @@ impl FileOps {
         let mut line_buf = Vec::new();
         let start_line = req.start_line.unwrap_or(1).max(1);
         let end_line_req = req.end_line;
+
+        // An inverted range produced a self-contradictory response: `start_line: 8,
+        // end_line: 8` with empty content for a 10-line file, and no explanation. The
+        // reported range claimed to cover a line it had not returned, which is worse than an
+        // empty result because a caller trusting the range would read the wrong lines.
+        if let Some(end) = end_line_req
+            && end < start_line
+        {
+            return Err(CoreError::InvalidInput(format!(
+                "end_line ({end}) is before start_line ({start_line}); the range is empty. \
+                 Swap the bounds or omit end_line to read to the end of the file."
+            )));
+        }
         let max_bytes = req.max_bytes.unwrap_or(DEFAULT_MAX_READ_BYTES);
         let line_numbers = req.line_numbers.unwrap_or(false);
 
