@@ -653,6 +653,70 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
             summ.get("total_files") == shown_f and summ.get("total_symbols") == shown_s,
         )
 
+    # ---- coordinate conventions must agree across tools ------------------
+    # Cross-tool convention checking is what found the file-root path defect in three tools at
+    # once. Off-by-one conventions are the other high-risk shared surface: if search says line 5
+    # and outline says line 6 for the same declaration, every chained edit lands on the wrong line.
+    coords = os.path.join(scratch, "coords.rs")
+    if os.path.exists(coords):
+        os.remove(coords)
+    with open(coords, "w") as fh:
+        fh.write(
+            "// line 1\n// line 2\n\nimpl Thing {\n"
+            "    pub fn target_fn() -> u32 { 1 }\n}\n\n"
+            "fn caller() -> u32 { Thing::target_fn() }\n"
+        )
+    # target_fn is declared on line 5 at column 5 (1-based, 4-space indent).
+
+    sr = j(s.call("search", {"pattern": "target_fn", "path": coords}))
+    search_lines = sorted(
+        m.get("line_number")
+        for f in sr.get("files") or []
+        for m in f.get("matches") or []
+    )
+    check(
+        "search", "line_number is 1-based and matches the real line",
+        f"lines={search_lines} (declaration is line 5)",
+        search_lines[:1] == [5],
+    )
+
+    orr = j(s.call("outline", {"path": coords}))
+    spans = []
+
+    def collect(syms):
+        for sym in syms:
+            spans.append((sym.get("name"), sym.get("span") or {}))
+            collect(sym.get("children") or [])
+
+    for f in orr.get("files") or []:
+        collect(f.get("symbols") or [])
+    target = next((sp for name, sp in spans if name == "target_fn"), {})
+    check(
+        "outline", "span agrees with search for the same declaration",
+        f"outline span=({target.get('start_line')},{target.get('start_col')}) vs search line 5",
+        target.get("start_line") == 5 and target.get("start_col") == 5,
+    )
+
+    fr2 = j(s.call("find_symbol", {"name": "target_fn", "path": scratch, "exact": True,
+                                   "case_sensitive": True}))
+    fsym = next((x for x in fr2.get("symbols") or [] if x.get("name") == "target_fn"), {})
+    fspan = fsym.get("span") or {}
+    check(
+        "find_symbol", "span agrees with search and outline",
+        f"find_symbol span=({fspan.get('start_line')},{fspan.get('start_col')})",
+        fspan.get("start_line") == 5 and fspan.get("start_col") == 5,
+    )
+
+    if target:
+        pr = j(s.call("patch", {"path": coords, "target_span": target,
+                                "replacement": "pub fn target_fn() -> u32 { 99 }",
+                                "dry_run": True}))
+        check(
+            "patch", "accepts the span that outline reported",
+            f"success={pr.get('success')} ast_valid={pr.get('ast_valid')}",
+            pr.get("success") is True,
+        )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))
