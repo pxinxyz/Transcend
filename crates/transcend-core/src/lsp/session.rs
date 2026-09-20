@@ -3,16 +3,16 @@
 //! Manages an asynchronous child process session communicating over stdio
 //! using standard LSP JSON-RPC 2.0 framing and document synchronization.
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
-use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, mpsc, oneshot};
 use transcend_protocol::{
     DiagnosticSeverity, LspDiagnosticItem, LspDiagnosticsResponse, LspReferenceLocation,
     LspTargetLocation, SourceSpan,
@@ -20,23 +20,61 @@ use transcend_protocol::{
 
 use super::distiller::LspDistiller;
 use super::protocol::{
-    format_lsp_message, make_notification, make_request, path_to_uri, uri_to_path, LspMessageReader,
+    LspMessageReader, format_lsp_message, make_notification, make_request, path_to_uri, uri_to_path,
 };
 use super::registry::LspServerProfile;
+
+/// Outstanding JSON-RPC requests awaiting a response, keyed by request id.
+type PendingRequests = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
+
+/// Diagnostics published by the server, keyed by document URI.
+type DiagnosticsCache = Arc<RwLock<HashMap<String, Vec<LspDiagnosticItem>>>>;
 
 /// A live language server child process session.
 pub struct LspSession {
     workspace_root: PathBuf,
     language_id: String,
     outgoing_tx: mpsc::UnboundedSender<Vec<u8>>,
-    pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>,
-    diagnostics_cache: Arc<RwLock<HashMap<String, Vec<LspDiagnosticItem>>>>,
+    pending_requests: PendingRequests,
+    diagnostics_cache: DiagnosticsCache,
     open_documents: Arc<Mutex<HashMap<String, (std::time::SystemTime, i32)>>>,
     req_counter: AtomicU64,
     _child: Arc<Mutex<Child>>,
+    /// Monotonic timestamp of the last request served by this session, used by the
+    /// pool to reclaim idle language servers.
+    last_used_millis: AtomicU64,
+}
+
+/// Milliseconds since an arbitrary process-local epoch.
+fn now_millis() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(std::time::Instant::now);
+    start.elapsed().as_millis() as u64
 }
 
 impl LspSession {
+    /// Record that this session was just used.
+    pub fn touch(&self) {
+        self.last_used_millis.store(now_millis(), Ordering::Relaxed);
+    }
+
+    /// Instant of the last recorded use, for idle-reclaim decisions.
+    pub fn last_used(&self) -> std::time::Instant {
+        let millis = self.last_used_millis.load(Ordering::Relaxed);
+        std::time::Instant::now()
+            .checked_sub(Duration::from_millis(millis))
+            .unwrap_or_else(std::time::Instant::now)
+    }
+
+    /// Ask the language server to exit, then drop the child.
+    ///
+    /// Sends the LSP `exit` notification so the server can flush its index; the
+    /// underlying child is also `kill_on_drop`, so a server that ignores `exit` is
+    /// still reaped when this session's last handle drops.
+    pub async fn shutdown(&self) {
+        let _ = self.send_notification("exit", serde_json::json!({}));
+    }
+
     /// Spawn a new language server session and perform the initial LSP handshake.
     pub async fn spawn(
         binary_path: &str,
@@ -51,16 +89,21 @@ impl LspSession {
             .stderr(Stdio::null())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!("Failed to spawn language server '{binary_path}': {e}")
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn language server '{binary_path}': {e}"))?;
 
-        let mut stdin = child.stdin.take().ok_or("Failed to open child process stdin")?;
-        let mut stdout = child.stdout.take().ok_or("Failed to open child process stdout")?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or("Failed to open child process stdin")?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or("Failed to open child process stdout")?;
 
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let pending_requests: PendingRequests = Arc::new(Mutex::new(HashMap::new()));
         let diagnostics_cache = Arc::new(RwLock::new(HashMap::new()));
         let open_documents = Arc::new(Mutex::new(HashMap::new()));
 
@@ -101,57 +144,96 @@ impl LspSession {
                                 }
                             }
                             // 2. Check if textDocument/publishDiagnostics notification
-                            else if msg.get("method").and_then(|m| m.as_str()) == Some("textDocument/publishDiagnostics") {
-                                if let Some(params) = msg.get("params") {
-                                    if let Some(uri_str) = params.get("uri").and_then(|u| u.as_str()) {
-                                        let file_path = uri_to_path(uri_str);
-                                        let rel_path = file_path
-                                            .strip_prefix(&root_clone)
-                                            .unwrap_or(&file_path)
-                                            .to_string_lossy()
-                                            .replace('\\', "/");
+                            else if msg.get("method").and_then(|m| m.as_str())
+                                == Some("textDocument/publishDiagnostics")
+                                && let Some(params) = msg.get("params")
+                                && let Some(uri_str) = params.get("uri").and_then(|u| u.as_str())
+                            {
+                                let file_path = uri_to_path(uri_str);
+                                let rel_path = file_path
+                                    .strip_prefix(&root_clone)
+                                    .unwrap_or(&file_path)
+                                    .to_string_lossy()
+                                    .replace('\\', "/");
 
-                                        let mut items = Vec::new();
-                                        if let Some(diags) = params.get("diagnostics").and_then(|d| d.as_array()) {
-                                            for d in diags {
-                                                let message = d.get("message").and_then(|m| m.as_str()).unwrap_or("").to_string();
-                                                let code = d.get("code").map(|c| c.to_string().trim_matches('"').to_string());
-                                                let source = d.get("source").and_then(|s| s.as_str()).map(|s| s.to_string());
-                                                let severity = match d.get("severity").and_then(|s| s.as_u64()).unwrap_or(1) {
-                                                    1 => DiagnosticSeverity::Error,
-                                                    2 => DiagnosticSeverity::Warning,
-                                                    3 => DiagnosticSeverity::Information,
-                                                    _ => DiagnosticSeverity::Hint,
-                                                };
+                                let mut items = Vec::new();
+                                if let Some(diags) =
+                                    params.get("diagnostics").and_then(|d| d.as_array())
+                                {
+                                    for d in diags {
+                                        let message = d
+                                            .get("message")
+                                            .and_then(|m| m.as_str())
+                                            .unwrap_or("")
+                                            .to_string();
+                                        let code = d
+                                            .get("code")
+                                            .map(|c| c.to_string().trim_matches('"').to_string());
+                                        let source = d
+                                            .get("source")
+                                            .and_then(|s| s.as_str())
+                                            .map(|s| s.to_string());
+                                        let severity = match d
+                                            .get("severity")
+                                            .and_then(|s| s.as_u64())
+                                            .unwrap_or(1)
+                                        {
+                                            1 => DiagnosticSeverity::Error,
+                                            2 => DiagnosticSeverity::Warning,
+                                            3 => DiagnosticSeverity::Information,
+                                            _ => DiagnosticSeverity::Hint,
+                                        };
 
-                                                let range = d.get("range");
-                                                let start_line = range.and_then(|r| r.get("start")).and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as usize + 1;
-                                                let start_col = range.and_then(|r| r.get("start")).and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as usize + 1;
-                                                let end_line = range.and_then(|r| r.get("end")).and_then(|e| e.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as usize + 1;
-                                                let end_col = range.and_then(|r| r.get("end")).and_then(|e| e.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as usize + 1;
+                                        let range = d.get("range");
+                                        let start_line = range
+                                            .and_then(|r| r.get("start"))
+                                            .and_then(|s| s.get("line"))
+                                            .and_then(|l| l.as_u64())
+                                            .unwrap_or(0)
+                                            as usize
+                                            + 1;
+                                        let start_col = range
+                                            .and_then(|r| r.get("start"))
+                                            .and_then(|s| s.get("character"))
+                                            .and_then(|c| c.as_u64())
+                                            .unwrap_or(0)
+                                            as usize
+                                            + 1;
+                                        let end_line = range
+                                            .and_then(|r| r.get("end"))
+                                            .and_then(|e| e.get("line"))
+                                            .and_then(|l| l.as_u64())
+                                            .unwrap_or(0)
+                                            as usize
+                                            + 1;
+                                        let end_col = range
+                                            .and_then(|r| r.get("end"))
+                                            .and_then(|e| e.get("character"))
+                                            .and_then(|c| c.as_u64())
+                                            .unwrap_or(0)
+                                            as usize
+                                            + 1;
 
-                                                items.push(LspDiagnosticItem {
-                                                    file: rel_path.clone(),
-                                                    severity,
-                                                    span: SourceSpan {
-                                                        start_line,
-                                                        start_col,
-                                                        end_line,
-                                                        end_col,
-                                                        start_byte: 0,
-                                                        end_byte: 0,
-                                                    },
-                                                    message,
-                                                    code,
-                                                    source,
-                                                });
-                                            }
-                                        }
-
-                                        let mut cache = diags_clone.write().await;
-                                        cache.insert(rel_path, items);
+                                        items.push(LspDiagnosticItem {
+                                            file: rel_path.clone(),
+                                            severity,
+                                            span: SourceSpan {
+                                                start_line,
+                                                start_col,
+                                                end_line,
+                                                end_col,
+                                                start_byte: 0,
+                                                end_byte: 0,
+                                            },
+                                            message,
+                                            code,
+                                            source,
+                                        });
                                     }
                                 }
+
+                                let mut cache = diags_clone.write().await;
+                                cache.insert(rel_path, items);
                             }
                         }
                     }
@@ -169,6 +251,7 @@ impl LspSession {
             open_documents,
             req_counter: AtomicU64::new(1),
             _child: Arc::new(Mutex::new(child)),
+            last_used_millis: AtomicU64::new(now_millis()),
         });
 
         // Perform LSP handshake
@@ -193,14 +276,21 @@ impl LspSession {
             }
         });
 
-        let _ = self.send_request("initialize", init_params, Duration::from_secs(10)).await?;
+        let _ = self
+            .send_request("initialize", init_params, Duration::from_secs(10))
+            .await?;
         self.send_notification("initialized", serde_json::json!({}))?;
 
         Ok(())
     }
 
     /// Send a request and await its response.
-    pub async fn send_request(&self, method: &str, params: Value, timeout_dur: Duration) -> Result<Value, String> {
+    pub async fn send_request(
+        &self,
+        method: &str,
+        params: Value,
+        timeout_dur: Duration,
+    ) -> Result<Value, String> {
         let id = self.req_counter.fetch_add(1, Ordering::SeqCst);
         let (rx_tx, rx) = oneshot::channel();
 
@@ -212,7 +302,9 @@ impl LspSession {
         let req = make_request(id, method, params);
         let framed = format_lsp_message(&req).map_err(|e| e.to_string())?;
 
-        self.outgoing_tx.send(framed).map_err(|e| format!("Failed to send to LSP stdin: {e}"))?;
+        self.outgoing_tx
+            .send(framed)
+            .map_err(|e| format!("Failed to send to LSP stdin: {e}"))?;
 
         match tokio::time::timeout(timeout_dur, rx).await {
             Ok(Ok(res)) => res,
@@ -220,7 +312,9 @@ impl LspSession {
             Err(_) => {
                 let mut pending = self.pending_requests.lock().await;
                 pending.remove(&id);
-                Err(format!("LSP request {id} ({method}) timed out after {timeout_dur:?}"))
+                Err(format!(
+                    "LSP request {id} ({method}) timed out after {timeout_dur:?}"
+                ))
             }
         }
     }
@@ -229,7 +323,9 @@ impl LspSession {
     pub fn send_notification(&self, method: &str, params: Value) -> Result<(), String> {
         let notif = make_notification(method, params);
         let framed = format_lsp_message(&notif).map_err(|e| e.to_string())?;
-        self.outgoing_tx.send(framed).map_err(|e| format!("Failed to send notification: {e}"))?;
+        self.outgoing_tx
+            .send(framed)
+            .map_err(|e| format!("Failed to send notification: {e}"))?;
         Ok(())
     }
 
@@ -247,9 +343,8 @@ impl LspSession {
             }
 
             // Document on disk has changed: read updated text and notify LSP via didChange
-            let text = std::fs::read_to_string(file_path).map_err(|e| {
-                format!("Failed to read file {}: {e}", file_path.display())
-            })?;
+            let text = std::fs::read_to_string(file_path)
+                .map_err(|e| format!("Failed to read file {}: {e}", file_path.display()))?;
 
             *version += 1;
             let next_version = *version;
@@ -275,9 +370,8 @@ impl LspSession {
             return Ok(());
         }
 
-        let text = std::fs::read_to_string(file_path).map_err(|e| {
-            format!("Failed to read file {}: {e}", file_path.display())
-        })?;
+        let text = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read file {}: {e}", file_path.display()))?;
 
         let params = serde_json::json!({
             "textDocument": {
@@ -295,7 +389,12 @@ impl LspSession {
     }
 
     /// Query definition of symbol or position.
-    pub async fn goto_definition(&self, file_path: &Path, line_0: u32, col_0: u32) -> Result<Vec<LspTargetLocation>, String> {
+    pub async fn goto_definition(
+        &self,
+        file_path: &Path,
+        line_0: u32,
+        col_0: u32,
+    ) -> Result<Vec<LspTargetLocation>, String> {
         self.ensure_document_open(file_path).await?;
         let uri = path_to_uri(file_path);
 
@@ -304,13 +403,22 @@ impl LspSession {
             "position": { "line": line_0, "character": col_0 }
         });
 
-        let raw = self.send_request("textDocument/definition", params, Duration::from_secs(5)).await?;
+        let raw = self
+            .send_request("textDocument/definition", params, Duration::from_secs(5))
+            .await?;
         let targets = LspDistiller::distill_definition(&raw, &self.workspace_root);
         Ok(targets)
     }
 
     /// Query references for symbol or position.
-    pub async fn find_references(&self, file_path: &Path, line_0: u32, col_0: u32, include_declaration: bool, limit: usize) -> Result<(Vec<LspReferenceLocation>, usize, bool), String> {
+    pub async fn find_references(
+        &self,
+        file_path: &Path,
+        line_0: u32,
+        col_0: u32,
+        include_declaration: bool,
+        limit: usize,
+    ) -> Result<(Vec<LspReferenceLocation>, usize, bool), String> {
         self.ensure_document_open(file_path).await?;
         let uri = path_to_uri(file_path);
 
@@ -320,13 +428,20 @@ impl LspSession {
             "context": { "includeDeclaration": include_declaration }
         });
 
-        let raw = self.send_request("textDocument/references", params, Duration::from_secs(10)).await?;
+        let raw = self
+            .send_request("textDocument/references", params, Duration::from_secs(10))
+            .await?;
         let result = LspDistiller::distill_references(&raw, &self.workspace_root, limit);
         Ok(result)
     }
 
     /// Query hover for symbol or position.
-    pub async fn hover(&self, file_path: &Path, line_0: u32, col_0: u32) -> Result<(Option<String>, Option<String>, Option<SourceSpan>), String> {
+    pub async fn hover(
+        &self,
+        file_path: &Path,
+        line_0: u32,
+        col_0: u32,
+    ) -> Result<(Option<String>, Option<String>, Option<SourceSpan>), String> {
         self.ensure_document_open(file_path).await?;
         let uri = path_to_uri(file_path);
 
@@ -335,13 +450,19 @@ impl LspSession {
             "position": { "line": line_0, "character": col_0 }
         });
 
-        let raw = self.send_request("textDocument/hover", params, Duration::from_secs(5)).await?;
+        let raw = self
+            .send_request("textDocument/hover", params, Duration::from_secs(5))
+            .await?;
         let hover_data = LspDistiller::distill_hover(&raw);
         Ok(hover_data)
     }
 
     /// Retrieve active compiler diagnostics from the cache.
-    pub async fn get_diagnostics(&self, path_filter: Option<&str>, severity_filter: Option<DiagnosticSeverity>) -> LspDiagnosticsResponse {
+    pub async fn get_diagnostics(
+        &self,
+        path_filter: Option<&str>,
+        severity_filter: Option<DiagnosticSeverity>,
+    ) -> LspDiagnosticsResponse {
         let cache = self.diagnostics_cache.read().await;
         let mut all_diags = Vec::new();
         for items in cache.values() {
@@ -350,4 +471,3 @@ impl LspSession {
         LspDistiller::distill_diagnostics(&all_diags, path_filter, severity_filter)
     }
 }
-

@@ -23,9 +23,7 @@ pub struct LspMessageReader {
 
 impl LspMessageReader {
     pub fn new() -> Self {
-        Self {
-            buffer: Vec::new(),
-        }
+        Self { buffer: Vec::new() }
     }
 
     /// Feed chunk of raw bytes into the reader buffer.
@@ -37,7 +35,8 @@ impl LspMessageReader {
     /// Returns `Some(Value)` if a complete message is available, or `None` if more data is needed.
     pub fn next_message(&mut self) -> Result<Option<Value>, String> {
         let header_end_delim = b"\r\n\r\n";
-        let Some(header_end_idx) = self.buffer.windows(4).position(|w| w == header_end_delim) else {
+        let Some(header_end_idx) = self.buffer.windows(4).position(|w| w == header_end_delim)
+        else {
             return Ok(None);
         };
 
@@ -121,12 +120,14 @@ fn urlencoding_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex_byte) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
-                out.push(hex_byte as char);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(hex_byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+        {
+            out.push(hex_byte as char);
+            i += 3;
+            continue;
         }
         out.push(bytes[i] as char);
         i += 1;
@@ -159,7 +160,10 @@ mod tests {
         assert_eq!(reader.next_message().unwrap(), None);
 
         reader.feed(&formatted[split_idx..]);
-        let parsed = reader.next_message().unwrap().expect("should parse message");
+        let parsed = reader
+            .next_message()
+            .unwrap()
+            .expect("should parse message");
         assert_eq!(parsed["id"], 1);
         assert_eq!(parsed["method"], "initialize");
         assert_eq!(parsed["params"]["processId"], 1234);

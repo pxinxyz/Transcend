@@ -45,10 +45,21 @@ pub static KNOWN_SERVERS: &[LspServerProfile] = &[
     },
     LspServerProfile {
         language_id: "python",
-        binary_candidates: &["pyright-langserver", "pyright", "basedpyright-langserver", "ruff"],
+        binary_candidates: &[
+            "pyright-langserver",
+            "pyright",
+            "basedpyright-langserver",
+            "ruff",
+        ],
         args: &["--stdio"],
         extensions: &["py", "pyi"],
-        root_markers: &["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
+        root_markers: &[
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "Pipfile",
+        ],
     },
     LspServerProfile {
         language_id: "c",
@@ -157,7 +168,9 @@ impl LspRegistry {
     /// Find server profile matching a file's extension.
     pub fn profile_for_path(path: &Path) -> Option<&'static LspServerProfile> {
         let ext = path.extension()?.to_str()?.to_lowercase();
-        KNOWN_SERVERS.iter().find(|p| p.extensions.contains(&ext.as_str()))
+        KNOWN_SERVERS
+            .iter()
+            .find(|p| p.extensions.contains(&ext.as_str()))
     }
 
     /// Find server profile by canonical language ID.
@@ -185,6 +198,10 @@ impl LspRegistry {
 
     /// Discover workspace root directory for a target file.
     /// Climbs parent directories searching for language root markers or `.git`.
+    ///
+    /// Markers may be literal filenames (`Cargo.toml`) or simple globs
+    /// (`*.sln`, `*.csproj`). Globs are matched against the directory entries, so a
+    /// C# project rooted at a `.sln` is detected instead of falling back to `.git`.
     pub fn find_workspace_root(file_path: &Path, profile: Option<&LspServerProfile>) -> PathBuf {
         let start_dir = if file_path.is_file() {
             file_path.parent().unwrap_or(file_path)
@@ -199,7 +216,7 @@ impl LspRegistry {
             // Check specific language root markers
             if let Some(prof) = profile {
                 for marker in prof.root_markers {
-                    if curr.join(marker).exists() {
+                    if Self::marker_present(&curr, marker) {
                         return curr;
                     }
                 }
@@ -220,6 +237,38 @@ impl LspRegistry {
 
         // Fallback to git root if found, otherwise start directory
         git_root.unwrap_or_else(|| start_dir.to_path_buf())
+    }
+
+    /// Whether `marker` exists inside `dir`.
+    ///
+    /// A marker containing glob metacharacters (`*`, `?`, `[`) is matched against the
+    /// directory's entry names; otherwise it is a plain `join(...).exists()` probe,
+    /// which is the common and cheapest case.
+    fn marker_present(dir: &Path, marker: &str) -> bool {
+        if !marker.contains(['*', '?', '[']) {
+            return dir.join(marker).exists();
+        }
+
+        let mut builder = globset::GlobBuilder::new(marker);
+        builder.literal_separator(false);
+        // Case-insensitive matching keeps `*.SLN` working on case-insensitive
+        // filesystems (Windows, default macOS) without special-casing per-OS.
+        builder.case_insensitive(true);
+        let Ok(glob) = builder.build() else {
+            // A malformed marker must not abort root discovery.
+            return dir.join(marker).exists();
+        };
+        let matcher = glob.compile_matcher();
+
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return false;
+        };
+        entries.flatten().any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| matcher.is_match(name))
+        })
     }
 }
 

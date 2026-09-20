@@ -57,17 +57,15 @@ impl LspEngine {
         );
 
         // 2. Check if a language server session can be obtained
-        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await {
-            if let Ok((line_0, col_0)) = pos {
-                if let Ok(targets) = session.goto_definition(file_path, line_0, col_0).await {
-                    if !targets.is_empty() {
-                        return Ok(LspDefinitionResponse {
-                            targets,
-                            engine: format!("lsp:{}", profile.binary_candidates[0]),
-                        });
-                    }
-                }
-            }
+        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await
+            && let Ok((line_0, col_0)) = pos
+            && let Ok(targets) = session.goto_definition(file_path, line_0, col_0).await
+            && !targets.is_empty()
+        {
+            return Ok(LspDefinitionResponse {
+                targets,
+                engine: format!("lsp:{}", profile.binary_candidates[0]),
+            });
         }
 
         // 3. Fallback to Tree-sitter heuristic
@@ -95,19 +93,19 @@ impl LspEngine {
             req.character,
         );
 
-        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await {
-            if let Ok((line_0, col_0)) = pos {
-                if let Ok((references, total_found, truncated)) = session.find_references(file_path, line_0, col_0, include_decl, limit).await {
-                    if !references.is_empty() {
-                        return Ok(LspReferencesResponse {
-                            total_found,
-                            references,
-                            truncated,
-                            engine: format!("lsp:{}", profile.binary_candidates[0]),
-                        });
-                    }
-                }
-            }
+        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await
+            && let Ok((line_0, col_0)) = pos
+            && let Ok((references, total_found, truncated)) = session
+                .find_references(file_path, line_0, col_0, include_decl, limit)
+                .await
+            && !references.is_empty()
+        {
+            return Ok(LspReferencesResponse {
+                total_found,
+                references,
+                truncated,
+                engine: format!("lsp:{}", profile.binary_candidates[0]),
+            });
         }
 
         let sym_name = req.symbol.as_deref().unwrap_or("");
@@ -132,19 +130,18 @@ impl LspEngine {
             req.character,
         );
 
-        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await {
-            if let Ok((line_0, col_0)) = pos {
-                if let Ok((signature, documentation, span)) = session.hover(file_path, line_0, col_0).await {
-                    if signature.is_some() || documentation.is_some() {
-                        return Ok(LspHoverResponse {
-                            signature,
-                            documentation,
-                            span,
-                            engine: format!("lsp:{}", profile.binary_candidates[0]),
-                        });
-                    }
-                }
-            }
+        if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await
+            && let Ok((line_0, col_0)) = pos
+            && let Ok((signature, documentation, span)) =
+                session.hover(file_path, line_0, col_0).await
+            && (signature.is_some() || documentation.is_some())
+        {
+            return Ok(LspHoverResponse {
+                signature,
+                documentation,
+                span,
+                engine: format!("lsp:{}", profile.binary_candidates[0]),
+            });
         }
 
         let sym_name = req.symbol.as_deref().unwrap_or("");
@@ -163,12 +160,12 @@ impl LspEngine {
         // 1. If path is provided, attempt to auto-warm / spawn the language server for that file
         if let Some(ref path_str) = req.path {
             let file_path = Path::new(path_str);
-            if file_path.exists() {
-                if let Ok(Some((session, _profile))) = self.pool.get_or_spawn(file_path).await {
-                    let _ = session.ensure_document_open(file_path).await;
-                    // Bounded debounce to allow server to publish diagnostics
-                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                }
+            if file_path.exists()
+                && let Ok(Some((session, _profile))) = self.pool.get_or_spawn(file_path).await
+            {
+                let _ = session.ensure_document_open(file_path).await;
+                // Bounded debounce to allow server to publish diagnostics
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             }
         }
 
@@ -176,7 +173,9 @@ impl LspEngine {
         let mut all_diags = Vec::new();
 
         for session in active_sessions {
-            let res = session.get_diagnostics(req.path.as_deref(), req.severity).await;
+            let res = session
+                .get_diagnostics(req.path.as_deref(), req.severity)
+                .await;
             all_diags.extend(res.diagnostics);
         }
 

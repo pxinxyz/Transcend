@@ -13,7 +13,7 @@ use transcend_protocol::{
     LspStatusResponse,
 };
 
-use super::registry::{is_on_path, LspRegistry, KNOWN_SERVERS};
+use super::registry::{KNOWN_SERVERS, LspRegistry, is_on_path};
 use crate::CoreError;
 
 /// Raw recipe definition for a language server.
@@ -275,20 +275,19 @@ async fn probe_version(exec_path: &Path) -> Option<String> {
         Command::new(exec_path).arg("--version").output(),
     )
     .await
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = if !output.stdout.is_empty() {
-                String::from_utf8_lossy(&output.stdout).to_string()
-            } else {
-                String::from_utf8_lossy(&output.stderr).to_string()
-            };
-            let first_line = text.lines().next().unwrap_or("").trim().to_string();
-            if !first_line.is_empty()
-                && !first_line.to_lowercase().contains("error")
-                && !first_line.to_lowercase().contains("exception")
-            {
-                return Some(first_line);
-            }
+        let text = if !output.stdout.is_empty() {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        } else {
+            String::from_utf8_lossy(&output.stderr).to_string()
+        };
+        let first_line = text.lines().next().unwrap_or("").trim().to_string();
+        if !first_line.is_empty()
+            && !first_line.to_lowercase().contains("error")
+            && !first_line.to_lowercase().contains("exception")
+        {
+            return Some(first_line);
         }
     }
 
@@ -298,13 +297,12 @@ async fn probe_version(exec_path: &Path) -> Option<String> {
         Command::new(exec_path).arg("version").output(),
     )
     .await
+        && output.status.success()
     {
-        if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).to_string();
-            let first_line = text.lines().next().unwrap_or("").trim().to_string();
-            if !first_line.is_empty() && !first_line.to_lowercase().contains("error") {
-                return Some(first_line);
-            }
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        let first_line = text.lines().next().unwrap_or("").trim().to_string();
+        if !first_line.is_empty() && !first_line.to_lowercase().contains("error") {
+            return Some(first_line);
         }
     }
 
@@ -323,10 +321,10 @@ impl LspInstaller {
         let mut total_installed = 0;
 
         for profile in KNOWN_SERVERS {
-            if let Some(ref filter) = lang_filter {
-                if profile.language_id != filter.as_str() {
-                    continue;
-                }
+            if let Some(ref filter) = lang_filter
+                && profile.language_id != filter.as_str()
+            {
+                continue;
             }
 
             let primary_binary = profile.binary_candidates[0].to_string();
@@ -393,7 +391,8 @@ impl LspInstaller {
                 binary: Some(bin_name),
                 path: Some(abs_path.to_string_lossy().to_string()),
                 version: ver,
-                output: "Language server is already installed and discoverable on PATH.".to_string(),
+                output: "Language server is already installed and discoverable on PATH."
+                    .to_string(),
                 message: format!("'{}' is already installed.", profile.binary_candidates[0]),
             });
         }
@@ -525,7 +524,10 @@ impl LspInstaller {
                     path: Some(abs_path.to_string_lossy().to_string()),
                     version: ver,
                     output: combined_log,
-                    message: format!("Successfully installed '{bin_name}' via {}.", recipe.manager),
+                    message: format!(
+                        "Successfully installed '{bin_name}' via {}.",
+                        recipe.manager
+                    ),
                 })
             }
             None => Ok(LspInstallResponse {

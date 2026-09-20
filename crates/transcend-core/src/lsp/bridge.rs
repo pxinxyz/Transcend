@@ -41,17 +41,26 @@ impl SymbolCoordinateBridge {
             return Ok(pos);
         }
 
-        Err(format!("Symbol '{sym_name}' not found in {}", file_path.display()))
+        Err(format!(
+            "Symbol '{sym_name}' not found in {}",
+            file_path.display()
+        ))
     }
 
     /// Use Tree-sitter AST to find the definition or reference node for the symbol.
-    fn find_symbol_position(file_path: &Path, content: &str, symbol_name: &str) -> Option<(u32, u32)> {
+    fn find_symbol_position(
+        file_path: &Path,
+        content: &str,
+        symbol_name: &str,
+    ) -> Option<(u32, u32)> {
         let ext = file_path.extension()?.to_str()?.to_lowercase();
         let mut parser = Parser::new();
 
         let lang = match ext.as_str() {
             "rs" => tree_sitter_rust::LANGUAGE.into(),
-            "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" => {
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+            }
             "py" | "pyi" => tree_sitter_python::LANGUAGE.into(),
             "go" => tree_sitter_go::LANGUAGE.into(),
             "c" | "h" => tree_sitter_c::LANGUAGE.into(),
@@ -88,13 +97,11 @@ impl SymbolCoordinateBridge {
         if (kind == "identifier" || kind == "type_identifier" || kind == "field_identifier")
             && node.start_byte() < node.end_byte()
             && node.end_byte() <= source.len()
+            && let Ok(text) = std::str::from_utf8(&source[node.start_byte()..node.end_byte()])
+            && text == target
         {
-            if let Ok(text) = std::str::from_utf8(&source[node.start_byte()..node.end_byte()]) {
-                if text == target {
-                    let point = node.start_position();
-                    return Some((point.row as u32, point.column as u32));
-                }
-            }
+            let point = node.start_position();
+            return Some((point.row as u32, point.column as u32));
         }
 
         // Recurse through children
@@ -113,9 +120,19 @@ impl SymbolCoordinateBridge {
         for (line_idx, line) in content.lines().enumerate() {
             if let Some(col_idx) = line.find(symbol_name) {
                 // Ensure word boundary before and after
-                let before_ok = col_idx == 0 || !line[..col_idx].chars().last().unwrap_or(' ').is_alphanumeric();
+                let before_ok = col_idx == 0
+                    || !line[..col_idx]
+                        .chars()
+                        .last()
+                        .unwrap_or(' ')
+                        .is_alphanumeric();
                 let after_idx = col_idx + symbol_name.len();
-                let after_ok = after_idx >= line.len() || !line[after_idx..].chars().next().unwrap_or(' ').is_alphanumeric();
+                let after_ok = after_idx >= line.len()
+                    || !line[after_idx..]
+                        .chars()
+                        .next()
+                        .unwrap_or(' ')
+                        .is_alphanumeric();
 
                 if before_ok && after_ok {
                     return Some((line_idx as u32, col_idx as u32));
@@ -144,8 +161,9 @@ impl DataStore {
 }
 "#;
         let path = Path::new("src/store.rs");
-        let pos = SymbolCoordinateBridge::resolve_position(path, code, Some("save_item"), None, None)
-            .expect("should find save_item coordinate");
+        let pos =
+            SymbolCoordinateBridge::resolve_position(path, code, Some("save_item"), None, None)
+                .expect("should find save_item coordinate");
 
         // Line 6 in 0-based is row 6
         assert_eq!(pos.0, 6);
@@ -164,14 +182,26 @@ impl DataStore {
     fn test_bridge_multilingual_coordinate() {
         let py_code = "def compute_sum(a, b):\n    return a + b\n";
         let py_path = Path::new("main.py");
-        let pos = SymbolCoordinateBridge::resolve_position(py_path, py_code, Some("compute_sum"), None, None)
-            .expect("should find compute_sum");
+        let pos = SymbolCoordinateBridge::resolve_position(
+            py_path,
+            py_code,
+            Some("compute_sum"),
+            None,
+            None,
+        )
+        .expect("should find compute_sum");
         assert_eq!(pos.0, 0);
 
         let java_code = "class Greeter {\n    public void sayHello() {\n    }\n}\n";
         let java_path = Path::new("Greeter.java");
-        let pos = SymbolCoordinateBridge::resolve_position(java_path, java_code, Some("sayHello"), None, None)
-            .expect("should find sayHello");
+        let pos = SymbolCoordinateBridge::resolve_position(
+            java_path,
+            java_code,
+            Some("sayHello"),
+            None,
+            None,
+        )
+        .expect("should find sayHello");
         assert_eq!(pos.0, 1);
     }
 }

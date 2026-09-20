@@ -3,10 +3,10 @@
 //! Transforms verbose, unformatted LSP JSON responses into token-compact,
 //! structured data models tailored for LLM agents.
 
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
-use serde_json::Value;
 use transcend_protocol::{
     DiagnosticSeverity, LspDiagnosticItem, LspDiagnosticsResponse, LspReferenceLocation,
     LspTargetLocation, SourceSpan,
@@ -40,8 +40,14 @@ impl LspDistiller {
 
     fn parse_single_location(item: &Value, workspace_root: &Path) -> Option<LspTargetLocation> {
         // Can be Location { uri, range } or LocationLink { targetUri, targetRange, targetSelectionRange }
-        let uri_str = item.get("targetUri").or_else(|| item.get("uri"))?.as_str()?;
-        let range = item.get("targetSelectionRange").or_else(|| item.get("targetRange")).or_else(|| item.get("range"))?;
+        let uri_str = item
+            .get("targetUri")
+            .or_else(|| item.get("uri"))?
+            .as_str()?;
+        let range = item
+            .get("targetSelectionRange")
+            .or_else(|| item.get("targetRange"))
+            .or_else(|| item.get("range"))?;
 
         let file_path = uri_to_path(uri_str);
         let rel_path = file_path
@@ -61,7 +67,10 @@ impl LspDistiller {
         // Try reading preview snippet from disk if file exists
         let preview = if file_path.exists() {
             fs::read_to_string(&file_path).ok().and_then(|content| {
-                content.lines().nth(start_line.saturating_sub(1)).map(|l| l.trim().to_string())
+                content
+                    .lines()
+                    .nth(start_line.saturating_sub(1))
+                    .map(|l| l.trim().to_string())
             })
         } else {
             None
@@ -82,7 +91,11 @@ impl LspDistiller {
     }
 
     /// Distill an LSP `textDocument/references` result into compact reference locations.
-    pub fn distill_references(raw: &Value, workspace_root: &Path, limit: usize) -> (Vec<LspReferenceLocation>, usize, bool) {
+    pub fn distill_references(
+        raw: &Value,
+        workspace_root: &Path,
+        limit: usize,
+    ) -> (Vec<LspReferenceLocation>, usize, bool) {
         let mut references = Vec::new();
         let Some(arr) = raw.as_array() else {
             return (references, 0, false);
@@ -91,8 +104,12 @@ impl LspDistiller {
         let total_found = arr.len();
 
         for item in arr.iter().take(limit) {
-            let Some(uri_str) = item.get("uri").and_then(|u| u.as_str()) else { continue };
-            let Some(range) = item.get("range") else { continue };
+            let Some(uri_str) = item.get("uri").and_then(|u| u.as_str()) else {
+                continue;
+            };
+            let Some(range) = item.get("range") else {
+                continue;
+            };
 
             let file_path = uri_to_path(uri_str);
             let rel_path = file_path
@@ -101,15 +118,41 @@ impl LspDistiller {
                 .to_string_lossy()
                 .replace('\\', "/");
 
-            let start_line = range.get("start").and_then(|s| s.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as usize + 1;
-            let start_col = range.get("start").and_then(|s| s.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as usize + 1;
-            let end_line = range.get("end").and_then(|e| e.get("line")).and_then(|l| l.as_u64()).unwrap_or(0) as usize + 1;
-            let end_col = range.get("end").and_then(|e| e.get("character")).and_then(|c| c.as_u64()).unwrap_or(0) as usize + 1;
+            let start_line = range
+                .get("start")
+                .and_then(|s| s.get("line"))
+                .and_then(|l| l.as_u64())
+                .unwrap_or(0) as usize
+                + 1;
+            let start_col = range
+                .get("start")
+                .and_then(|s| s.get("character"))
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0) as usize
+                + 1;
+            let end_line = range
+                .get("end")
+                .and_then(|e| e.get("line"))
+                .and_then(|l| l.as_u64())
+                .unwrap_or(0) as usize
+                + 1;
+            let end_col = range
+                .get("end")
+                .and_then(|e| e.get("character"))
+                .and_then(|c| c.as_u64())
+                .unwrap_or(0) as usize
+                + 1;
 
             let line_text = if file_path.exists() {
-                fs::read_to_string(&file_path).ok().and_then(|content| {
-                    content.lines().nth(start_line.saturating_sub(1)).map(|l| l.trim().to_string())
-                }).unwrap_or_default()
+                fs::read_to_string(&file_path)
+                    .ok()
+                    .and_then(|content| {
+                        content
+                            .lines()
+                            .nth(start_line.saturating_sub(1))
+                            .map(|l| l.trim().to_string())
+                    })
+                    .unwrap_or_default()
             } else {
                 String::new()
             };
@@ -152,14 +195,26 @@ impl LspDistiller {
                     if let Some(s) = item.as_str() {
                         docs.push(s.to_string());
                     } else if let Some(v) = item.get("value").and_then(|v| v.as_str()) {
-                        if combined_sig.is_none() && (v.contains("fn ") || v.contains("struct ") || v.contains("class ") || v.contains("type ")) {
+                        if combined_sig.is_none()
+                            && (v.contains("fn ")
+                                || v.contains("struct ")
+                                || v.contains("class ")
+                                || v.contains("type "))
+                        {
                             combined_sig = Some(v.trim().to_string());
                         } else {
                             docs.push(v.to_string());
                         }
                     }
                 }
-                (combined_sig, if docs.is_empty() { None } else { Some(docs.join("\n\n")) })
+                (
+                    combined_sig,
+                    if docs.is_empty() {
+                        None
+                    } else {
+                        Some(docs.join("\n\n"))
+                    },
+                )
             }
             _ => (None, None),
         };
@@ -204,7 +259,10 @@ impl LspDistiller {
             }
         }
 
-        (Some(trimmed.lines().next().unwrap_or("").to_string()), Some(trimmed.to_string()))
+        (
+            Some(trimmed.lines().next().unwrap_or("").to_string()),
+            Some(trimmed.to_string()),
+        )
     }
 
     /// Format and filter compiler diagnostics from active cache.
@@ -225,10 +283,10 @@ impl LspDistiller {
                 }
             }
 
-            if let Some(sf) = severity_filter {
-                if diag.severity != sf {
-                    continue;
-                }
+            if let Some(sf) = severity_filter
+                && diag.severity != sf
+            {
+                continue;
             }
 
             let sev_str = match diag.severity {
@@ -258,7 +316,13 @@ mod tests {
     fn test_extract_signature_and_doc() {
         let hover_text = "```rust\npub fn dispatch(&self, task: Task) -> Result<()>\n```\nDispatches an asynchronous task to workers.";
         let (sig, doc) = LspDistiller::extract_signature_and_doc(hover_text);
-        assert_eq!(sig.as_deref(), Some("pub fn dispatch(&self, task: Task) -> Result<()>"));
-        assert_eq!(doc.as_deref(), Some("Dispatches an asynchronous task to workers."));
+        assert_eq!(
+            sig.as_deref(),
+            Some("pub fn dispatch(&self, task: Task) -> Result<()>")
+        );
+        assert_eq!(
+            doc.as_deref(),
+            Some("Dispatches an asynchronous task to workers.")
+        );
     }
 }
