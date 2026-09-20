@@ -52,6 +52,13 @@ fn resolve_boundary_root(explicit: Option<&str>) -> std::path::PathBuf {
 /// Reject any target that resolves outside `boundary` when a boundary is known.
 ///
 /// Shared by all mutating operations so the guard cannot be forgotten by one of them.
+///
+/// A `None` boundary means "no boundary was supplied" and allows the operation. That is
+/// safe only because `NativeEngine` wraps every mutating dispatch and fills
+/// `workspace_root` with its resolved boundary before calling into this module (see
+/// `NativeEngine::write_file` / `delete_path` / `patch`). Calling these functions directly
+/// with `workspace_root: None` performs NO boundary check, so they are not safe to use as a
+/// public entry point on their own.
 pub fn ensure_within(boundary: Option<&str>, target: &Path) -> CoreResult<()> {
     let Some(boundary) = boundary.filter(|b| !b.trim().is_empty()) else {
         return Ok(());

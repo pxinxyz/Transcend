@@ -1061,6 +1061,58 @@ mod tests {
         );
     }
 
+    /// The boundary sent to `FileOps` comes from `ensure_within_workspace` against the
+    /// ENGINE's root, not from `FileOps`' own environment/cwd walk. Pinning this makes the
+    /// layering explicit: if the engine stops filling `workspace_root`, `FileOps::ensure_within`
+    /// silently allows the write instead of failing closed.
+    #[test]
+    fn mutating_ops_bound_writes_to_the_engine_root_not_the_process_cwd() {
+        let outer = TestSandbox::create();
+        let inner = outer.dir.join("inner_workspace");
+        fs::create_dir_all(&inner).unwrap();
+
+        let engine = NativeEngine::new();
+        engine
+            .set_workspace(&SetWorkspaceRequest {
+                path: inner.to_string_lossy().to_string(),
+            })
+            .expect("set_workspace should succeed");
+
+        // A relative write resolves and is bounded against the engine root.
+        let ok = engine
+            .write_file(&WriteFileRequest {
+                path: "inside.txt".to_string(),
+                content: "ok".to_string(),
+                ..Default::default()
+            })
+            .expect("write inside the engine root must be allowed");
+        assert!(ok.success, "{}", ok.message);
+        assert!(
+            inner.join("inside.txt").exists(),
+            "the file belongs under the engine root"
+        );
+
+        // An absolute path outside the engine root must be refused even though it sits
+        // inside a directory the process could reach.
+        let outside = outer.dir.join("escape.txt");
+        let err = engine
+            .write_file(&WriteFileRequest {
+                path: outside.to_string_lossy().to_string(),
+                content: "nope".to_string(),
+                ..Default::default()
+            })
+            .expect_err("writing outside the engine root must be refused");
+        assert!(
+            err.to_string().to_lowercase().contains("access denied")
+                || err.to_string().to_lowercase().contains("boundary"),
+            "expected a boundary refusal, got: {err}"
+        );
+        assert!(
+            !outside.exists(),
+            "the refused write must not have created anything"
+        );
+    }
+
     /// Regression: when `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
