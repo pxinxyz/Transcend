@@ -63,6 +63,35 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## Non-zero exit codes are not always exact (documented, low severity)
+
+Found by probing `exec`'s option matrix. Measured against direct execution:
+
+| command | transcend | direct |
+|---|---|---|
+| `cmd /c exit 1` | 1 | 1 ✓ |
+| `cmd /c exit 3` | **1** | 3 |
+| `cmd /c exit 42` | **1** | 42 |
+| `cmd /c exit 42`, `shell: "cmd"` | 42 | 42 ✓ |
+| `exit 5`, `shell: "powershell"` | 5 | 5 ✓ |
+| `rg <bad path>` (documented code 2) | **1** | 2 |
+
+**Cause:** the default shell is PowerShell, and it collapses some specific non-zero codes from
+nested executables to 1. The transport is correct — it stores `status.code()` verbatim — and
+naming the shell preserves the exact value.
+
+**Scope, which is what matters:** success versus failure survives in every case observed. Zero
+stays zero and non-zero stays non-zero. A caller asking *"did this work?"* is never misled;
+only a caller branching on a *specific* non-zero code is, and the workaround is to name the
+shell. Pinned by `test_exit_code_fidelity_across_shells`, which asserts the property rather
+than the exact codes so it keeps passing if this is ever fixed.
+
+**Two versions of that test were wrong before it was right**, both by guessing the expected
+value: the first asserted exact codes that do not hold, the second searched for a marker string
+that matched the test file itself, making its result depend on the working directory. A test
+whose expected value is a guess misleads twice — when it fails, and when it is "fixed" to match
+the guess.
+
 ## The file-root path defect existed in three tools, not one (fixed)
 
 Comparing how every tool reports a path for the same root found the same defect three times:
