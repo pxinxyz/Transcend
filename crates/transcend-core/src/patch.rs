@@ -1037,6 +1037,37 @@ mod tests {
         );
     }
 
+    /// Pins the documented limitation of `ast_valid`: validation only runs for extensions
+    /// with a registered grammar, so a syntax-breaking edit to a file with no grammar is
+    /// reported as valid. This is deliberate and now documented; the test exists so that
+    /// changing the behaviour is a conscious decision rather than a silent drift.
+    #[test]
+    fn ast_valid_is_vacuously_true_for_extensions_without_a_grammar() {
+        let dir = scratch_dir("no-grammar");
+        let path = dir.join("data.json");
+        std::fs::write(&path, "{\"a\":1}").expect("seed fixture");
+
+        let req = PatchRequest {
+            path: path.to_string_lossy().to_string(),
+            target_text: Some("1".to_string()),
+            replacement: "(((((".to_string(),
+            validate_ast: Some(true),
+            dry_run: Some(true),
+            ..Default::default()
+        };
+
+        let res = Patcher::patch(&req).expect("patch should succeed");
+        assert!(res.success, "{}", res.message);
+        assert!(
+            res.ast_valid,
+            "no grammar exists for .json, so nothing was parsed and no error is reported"
+        );
+        assert!(
+            res.syntax_errors.is_empty(),
+            "nothing was parsed, so no syntax errors can have been found"
+        );
+    }
+
     /// A dry run writes nothing, so it must not claim files were patched.
     #[test]
     fn batch_patch_dry_run_reports_zero_files_patched() {

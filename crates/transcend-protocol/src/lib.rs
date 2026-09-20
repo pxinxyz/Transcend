@@ -505,7 +505,12 @@ pub struct PatchResponse {
     /// Exact coordinates replaced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_span: Option<SourceSpan>,
-    /// Whether the syntax tree is valid after splicing.
+    /// Whether the spliced source parsed without syntax errors.
+    ///
+    /// True also when no check was possible: `validate_ast` only runs for a file whose
+    /// extension has a registered grammar, so for `.json`, `.toml`, `.txt` and similar this
+    /// reports true without anything having been parsed. Treat it as "no errors were found",
+    /// not as "the syntax was verified"; `syntax_errors` is empty in both cases.
     pub ast_valid: bool,
     /// Syntax errors detected during AST preflight.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -543,7 +548,9 @@ pub struct BatchPatchResponse {
     pub results: Vec<PatchResponse>,
     /// Number of distinct files patched.
     pub total_files_patched: usize,
-    /// Whether all resulting files have valid ASTs.
+    /// Whether every patched file parsed without syntax errors. See `PatchResponse.ast_valid`
+    /// for the caveat: files with no registered grammar are reported valid without having
+    /// been parsed.
     pub all_ast_valid: bool,
     /// Accumulated syntax errors across any files that failed AST preflight.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
