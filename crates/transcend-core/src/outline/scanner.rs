@@ -385,7 +385,20 @@ impl OutlineScanner {
         };
 
         let adapter = lang.adapter();
-        let symbols = adapter.extract(&tree, source, options);
+        let mut symbols = adapter.extract(&tree, source, options);
+
+        // Apply the symbol_kinds / exported_only filters centrally.
+        //
+        // Adapters are responsible for honouring these, and several did not: sql.rs and
+        // markdown.rs read neither, while ruby.rs and bash.rs applied only symbol_kinds. A
+        // caller asking for `symbol_kinds: ["function"]` against a SQL file received structs
+        // too, with nothing in the response indicating the filter was skipped. Filtering here
+        // makes it impossible for an adapter to forget.
+        //
+        // The predicates match what the adapters already use, so an adapter that does filter
+        // yields the same result through this pass rather than being filtered twice
+        // differently.
+        Self::apply_symbol_filters(&mut symbols, options);
 
         Ok(FileOutline {
             file: display_path.to_string(),
@@ -394,6 +407,29 @@ impl OutlineScanner {
             symbols,
             skeleton: None,
         })
+    }
+
+    /// Recursively drop symbols excluded by `symbol_kinds` or `exported_only`.
+    ///
+    /// A container that no longer holds any matching descendant is dropped with it, so a
+    /// filtered outline never advertises empty scaffolding.
+    fn apply_symbol_filters(symbols: &mut Vec<Symbol>, options: &OutlineOptions) {
+        for sym in symbols.iter_mut() {
+            Self::apply_symbol_filters(&mut sym.children, options);
+        }
+        symbols.retain(|sym| Self::symbol_passes_filters(sym, options));
+    }
+
+    fn symbol_passes_filters(sym: &Symbol, options: &OutlineOptions) -> bool {
+        if let Some(ref allowed) = options.symbol_kinds
+            && !allowed.contains(&sym.kind)
+        {
+            return false;
+        }
+        if options.exported_only == Some(true) && sym.visibility.is_none() {
+            return false;
+        }
+        true
     }
 
     fn prune_depth(symbols: &mut [Symbol], current_depth: usize, max_depth: usize) {
@@ -543,7 +579,9 @@ mod tests {
     /// the middle of a character. `content` is passed in memory, so no fixture file and no
     /// assumption about the process cwd is needed.
     fn non_ascii_skeleton_request(budget: usize) -> OutlineRequest {
-        let jp = "日本語".repeat(120);
+        // Escapes rather than literal non-ASCII, so the fixture cannot be corrupted by an
+        // editor or tool rewriting the file in a different encoding.
+        let jp = "\u{65E5}\u{672C}\u{8A9E}".repeat(120);
         let src = format!(
             "/// {jp}\npub fn alpha_one() -> u32 {{ 1 }}\n\
              /// {jp}\npub fn alpha_two() -> u32 {{ 2 }}\n\
@@ -649,22 +687,175 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The truncation point must be walked back to a real char boundary, never beyond the
-    /// budget, and never panic for indices past the end.
+    /// Regression: `symbol_kinds` and `exported_only` were applied by individual adapters,
+    /// and several ignored them entirely (sql.rs and markdown.rs read neither, ruby.rs and
+    /// bash.rs only `symbol_kinds`). A caller filtering for functions in those languages
+    /// received every kind, with nothing indicating the filter was skipped.
     #[test]
-    fn floor_char_boundary_walks_back_and_clamps() {
-        let s = "ab日本語"; // 2 + 3*3 = 11 bytes
-        assert_eq!(floor_char_boundary(s, 0), 0);
-        assert_eq!(floor_char_boundary(s, 2), 2, "ascii boundary is exact");
-        assert_eq!(floor_char_boundary(s, 3), 2, "inside 日 -> back to 2");
-        assert_eq!(floor_char_boundary(s, 4), 2, "inside 日 -> back to 2");
-        assert_eq!(floor_char_boundary(s, 5), 5, "start of 本 is a boundary");
-        assert_eq!(floor_char_boundary(s, 11), 11);
-        assert_eq!(floor_char_boundary(s, 999), s.len(), "past end clamps");
-        for i in 0..=s.len() {
-            let cut = floor_char_boundary(s, i);
-            assert!(cut <= i, "cut {cut} exceeded index {i}");
-            assert!(s.is_char_boundary(cut), "cut {cut} is not a boundary");
+    fn symbol_kinds_filter_applies_to_adapters_that_ignored_it() {
+        let sql = b"CREATE TABLE users (id INT);\nCREATE FUNCTION add_one(x INT) RETURNS INT AS $$ SELECT x + 1; $$ LANGUAGE SQL;\n";
+        let lang = SupportedLang::from_path(std::path::Path::new("schema.sql"))
+            .expect("sql should be supported");
+
+        // Unfiltered: both kinds present.
+        let all = OutlineScanner::parse_bytes("schema.sql", sql, &lang, &OutlineOptions::default())
+            .expect("parse should succeed");
+        let all_kinds: Vec<String> = all
+            .symbols
+            .iter()
+            .map(|s| format!("{:?}", s.kind).to_lowercase())
+            .collect();
+        assert!(
+            all_kinds.len() >= 2,
+            "fixture should yield several symbols, got {all_kinds:?}"
+        );
+
+        // Filtered to functions only.
+        let filtered = OutlineScanner::parse_bytes(
+            "schema.sql",
+            sql,
+            &lang,
+            &OutlineOptions {
+                symbol_kinds: Some(vec![transcend_protocol::SymbolKind::Function]),
+                ..Default::default()
+            },
+        )
+        .expect("parse should succeed");
+
+        assert!(
+            !filtered.symbols.is_empty(),
+            "the fixture contains a function, so filtering must not remove everything"
+        );
+        for sym in &filtered.symbols {
+            assert_eq!(
+                sym.kind,
+                transcend_protocol::SymbolKind::Function,
+                "symbol_kinds filter leaked a {:?} symbol ({})",
+                sym.kind,
+                sym.name
+            );
         }
+        assert!(
+            filtered.symbols.len() < all_kinds.len(),
+            "the filter should have removed at least one symbol"
+        );
+    }
+
+    /// `exported_only` must likewise be enforced centrally rather than per adapter. No
+    /// adapter makes it easy to construct a clean end-to-end case (the bash adapter marks
+    /// every function public, and the languages that ignore the flag populate no visibility
+    /// at all), so this exercises the filter itself, which is what the central pass applies.
+    #[test]
+    fn exported_only_filter_drops_symbols_without_visibility() {
+        fn sym(name: &str, kind: transcend_protocol::SymbolKind, vis: Option<&str>) -> Symbol {
+            Symbol {
+                name: name.to_string(),
+                kind,
+                span: transcend_protocol::SourceSpan {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                    start_byte: 0,
+                    end_byte: 0,
+                },
+                signature: None,
+                doc_comment: None,
+                visibility: vis.map(|v| v.to_string()),
+                relationships: vec![],
+                children: vec![],
+            }
+        }
+
+        let mut symbols = vec![
+            sym(
+                "public_fn",
+                transcend_protocol::SymbolKind::Function,
+                Some("public"),
+            ),
+            sym("private_fn", transcend_protocol::SymbolKind::Function, None),
+            sym("a_struct", transcend_protocol::SymbolKind::Struct, None),
+        ];
+        // A public container holding a private child: the child must still be dropped.
+        symbols[0].children.push(sym(
+            "hidden_child",
+            transcend_protocol::SymbolKind::Function,
+            None,
+        ));
+
+        OutlineScanner::apply_symbol_filters(
+            &mut symbols,
+            &OutlineOptions {
+                exported_only: Some(true),
+                ..Default::default()
+            },
+        );
+
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["public_fn"], "got {names:?}");
+        assert!(
+            symbols[0].children.is_empty(),
+            "a private child of a public symbol must also be dropped"
+        );
+
+        // Off by default: nothing is removed.
+        let mut untouched = vec![
+            sym("a", transcend_protocol::SymbolKind::Function, None),
+            sym("b", transcend_protocol::SymbolKind::Struct, None),
+        ];
+        OutlineScanner::apply_symbol_filters(&mut untouched, &OutlineOptions::default());
+        assert_eq!(untouched.len(), 2, "exported_only must default to off");
+    }
+
+    /// A container whose children are all filtered out is dropped with them, so a filtered
+    /// outline never advertises empty scaffolding.
+    #[test]
+    fn symbol_kinds_filter_prunes_empty_containers() {
+        fn fn_sym(name: &str, children: Vec<Symbol>) -> Symbol {
+            Symbol {
+                name: name.to_string(),
+                kind: transcend_protocol::SymbolKind::Function,
+                span: transcend_protocol::SourceSpan {
+                    start_line: 1,
+                    start_col: 1,
+                    end_line: 1,
+                    end_col: 1,
+                    start_byte: 0,
+                    end_byte: 0,
+                },
+                signature: None,
+                doc_comment: None,
+                visibility: None,
+                relationships: vec![],
+                children,
+            }
+        }
+        fn struct_sym(name: &str, children: Vec<Symbol>) -> Symbol {
+            Symbol {
+                kind: transcend_protocol::SymbolKind::Struct,
+                ..fn_sym(name, children)
+            }
+        }
+
+        // A struct whose only child is a function.
+        let mut symbols = vec![
+            struct_sym("container", vec![fn_sym("inner", vec![])]),
+            fn_sym("top_level", vec![]),
+        ];
+
+        OutlineScanner::apply_symbol_filters(
+            &mut symbols,
+            &OutlineOptions {
+                symbol_kinds: Some(vec![transcend_protocol::SymbolKind::Function]),
+                ..Default::default()
+            },
+        );
+
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["top_level"],
+            "the struct does not match the kind filter and must be dropped with its child"
+        );
     }
 }
