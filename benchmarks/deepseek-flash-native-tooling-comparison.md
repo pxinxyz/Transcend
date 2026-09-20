@@ -1,5 +1,13 @@
 # Transcend vs. Native Harness Tooling
 
+> **Author:** DeepSeek — model `deepseek-flash` (reasoning effort `max`), provider
+> `deepseek-official` — running inside the **DeepSeek Harness** (`@deepseek-ai/dsh`
+> 0.1.5-rc.2) as the agent under test.
+>
+> Everything below was produced by that agent: it drove Transcend's MCP tools through the
+> harness, ran the native side, and did the measuring, the analysis, and the error
+> recorded in §4.1. Nothing here is a vendor-supplied figure.
+
 An empirical comparison of Transcend's 23 MCP primitives against the native tools
 available in this harness (ripgrep/`pwsh`/`read`/`write`/`edit`/`glob`/`grep`), run
 against real third-party codebases.
@@ -49,14 +57,16 @@ repointed with `set_workspace` and restored afterwards. Read-only tools ran dire
 against the clone.
 
 **Environment.** Windows 10 Pro 22H2 (build 19045), `transcend.exe` release build 2.0.0
-(thin LTO), driven through the DeepSeek Harness MCP bridge
-([`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness), part of
-`@deepseek-ai/dsh` 0.1.5-rc.2) over stdio, alongside `pwsh` 7 and `rg` for the native
-side.
+(thin LTO). The agent under test was **DeepSeek `deepseek-flash`** (provider
+`deepseek-official`, reasoning effort `max`) running inside the **DeepSeek Harness**
+(`@deepseek-ai/dsh` 0.1.5-rc.2), which reaches Transcend through
+[`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness) over
+stdio. The native side used `pwsh` 7 and `rg`.
 
 The harness is the *client* here, not part of the measurement: it forwards each
 `tools/call` to Transcend over stdio. Any MCP client would produce the same Transcend
-side; the native side is plain shell.
+side; the native side is plain shell. Model choice therefore affects how the tools were
+*driven and interpreted*, not the byte counts.
 
 **Reproducing a row.** Start the Transcend MCP server against a clone
 (`transcend export-schemas --out ./schemas` confirms all 23 tools are live), then run the

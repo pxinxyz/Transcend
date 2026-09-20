@@ -37,7 +37,7 @@ Two things it does that shell tooling cannot:
 
 For measured comparisons against `rg`, `cat` and native file tooling — including where
 Transcend is *larger* or slower — see
-**[benchmarks/transcend-vs-native-tooling.md](benchmarks/transcend-vs-native-tooling.md)**.
+**[benchmarks/deepseek-flash-native-tooling-comparison.md](benchmarks/deepseek-flash-native-tooling-comparison.md)**.
 
 ## Tools
 
