@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 /// Request parameters for code searching.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchRequest {
     /// Regular expression or text pattern to search for.
     #[serde(alias = "query", alias = "regex")]
@@ -28,6 +29,7 @@ pub struct SearchRequest {
 
 /// Optional configuration options for code search.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchOptions {
     /// Glob or file extension filter (e.g. "*.rs").
     pub file_pattern: Option<String>,
@@ -126,6 +128,7 @@ pub struct SearchResponse {
 
 /// Request parameters for file discovery.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FindRequest {
     /// Filename pattern, glob, or substring (e.g. "*.rs", "Cargo.*"). Omitting lists all files.
     #[serde(alias = "query", alias = "name", alias = "glob")]
@@ -139,6 +142,7 @@ pub struct FindRequest {
 
 /// Optional configuration options for file discovery.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FindOptions {
     /// Maximum directory traversal depth (1 = root items only).
     pub max_depth: Option<usize>,
@@ -319,6 +323,7 @@ pub struct OutlineSummary {
 
 /// Request parameters for code outlining.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OutlineRequest {
     /// File path or directory to outline. If a directory, traverses respecting ignore rules.
     #[serde(
@@ -336,6 +341,7 @@ pub struct OutlineRequest {
 
 /// Configuration and budget options for outlining.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OutlineOptions {
     /// Output representation format: "json" (default) or "skeleton".
     pub format: Option<OutlineFormat>,
@@ -380,6 +386,7 @@ pub struct OutlineResponse {
 
 /// Request parameters for reading a specific symbol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ReadSymbolRequest {
     /// File path on disk.
     #[serde(alias = "file", alias = "file_path")]
@@ -460,6 +467,7 @@ pub enum PatchMode {
 
 /// Request parameters for AST-guarded surgical patching.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PatchRequest {
     /// File path to patch.
     #[serde(alias = "file_path", alias = "file", alias = "target_file")]
@@ -537,6 +545,7 @@ pub struct PatchResponse {
 
 /// Request parameters for multi-file atomic batch patching.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BatchPatchRequest {
     /// Ordered list of patch requests across files.
     pub patches: Vec<PatchRequest>,
@@ -581,6 +590,7 @@ pub struct BatchPatchResponse {
 
 /// Request parameters for finding code symbol definitions across the workspace.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FindSymbolRequest {
     /// Symbol name or identifier pattern (e.g. "SetupVmcsForProcessor", "VmmContext", "poll").
     #[serde(alias = "symbol", alias = "query", alias = "pattern")]
@@ -661,6 +671,7 @@ pub struct FindSymbolResponse {
 
 /// Request to locate the compiler-resolved definition of a symbol or position.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspDefinitionRequest {
     /// File path where the symbol or position is referenced.
     #[serde(alias = "file", alias = "file_path")]
@@ -708,6 +719,7 @@ pub struct LspDefinitionResponse {
 
 /// Request to find all compiler-resolved references and call sites across the workspace.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspReferencesRequest {
     /// File path where the symbol or position is referenced.
     #[serde(alias = "file", alias = "file_path")]
@@ -763,6 +775,7 @@ pub struct LspReferencesResponse {
 
 /// Request to inspect inferred type signature and documentation for a symbol or position.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspHoverRequest {
     /// File path to inspect.
     #[serde(alias = "file", alias = "file_path")]
@@ -833,6 +846,7 @@ pub struct LspDiagnosticItem {
 
 /// Request to retrieve compiler diagnostics.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspDiagnosticsRequest {
     /// File or directory path to retrieve diagnostics for. If omitted, returns all workspace diagnostics.
     #[serde(
@@ -860,6 +874,7 @@ pub struct LspDiagnosticsResponse {
 
 /// Request to audit status and installation recipes of official language servers.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspStatusRequest {
     /// Language filter (e.g. "rust", "typescript", "python", "go").
     /// If omitted, returns status for all 18 supported languages.
@@ -917,6 +932,7 @@ pub struct LspStatusResponse {
 
 /// Request to install a language server.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct LspInstallRequest {
     /// Canonical language ID to install (e.g. "rust", "typescript", "python", "go").
     #[serde(alias = "lang")]
@@ -994,6 +1010,7 @@ pub enum ExecStatus {
 
 /// Request to execute a command via the hybrid terminal engine.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ExecRequest {
     /// Shell command string to execute.
     #[serde(alias = "cmd")]
@@ -1063,6 +1080,7 @@ pub enum TerminalSessionStatus {
 
 /// Request to read incremental output from an active background session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalReadRequest {
     /// Identifier of the session to read from.
     #[serde(alias = "id")]
@@ -1101,6 +1119,7 @@ pub struct TerminalReadResponse {
 
 /// Request to send interactive input to a running terminal session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalWriteRequest {
     /// Identifier of the active session.
     #[serde(alias = "id")]
@@ -1120,6 +1139,7 @@ pub struct TerminalWriteResponse {
 
 /// Request to resize terminal dimensions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalResizeRequest {
     /// Identifier of the active session.
     #[serde(alias = "id")]
@@ -1141,6 +1161,7 @@ pub struct TerminalResizeResponse {
 
 /// Request to terminate a background terminal session.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalKillRequest {
     /// Identifier of the session to terminate.
     #[serde(alias = "id")]
@@ -1168,6 +1189,7 @@ pub struct TerminalKillResponse {
 
 /// Request parameters for structured, token-bounded file reading.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ReadFileRequest {
     /// Path to file on disk.
     #[serde(alias = "file", alias = "file_path")]
@@ -1223,6 +1245,7 @@ pub struct ReadFileResponse {
 
 /// Request parameters for atomic file writing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct WriteFileRequest {
     /// Destination file path.
     #[serde(alias = "file", alias = "file_path", alias = "target_file")]
@@ -1258,6 +1281,7 @@ pub struct WriteFileResponse {
 
 /// Request parameters for safe workspace path deletion.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct DeletePathRequest {
     /// File or directory path to delete.
     #[serde(alias = "file", alias = "file_path", alias = "target_path")]
@@ -1287,6 +1311,7 @@ pub struct DeletePathResponse {
 
 /// Request parameters to configure the active project workspace root directory.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct SetWorkspaceRequest {
     /// Workspace root directory path.
     #[serde(alias = "workspace_root", alias = "dir", alias = "directory")]
@@ -1335,6 +1360,7 @@ pub struct GitFileEntry {
 
 /// Request parameters to inspect git status.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct GitStatusRequest {
     /// Directory path within the git repository. Defaults to active workspace root.
     #[serde(

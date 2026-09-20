@@ -541,25 +541,38 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         )
         s.call("terminal_kill", {"session_id": sid})
 
-    # ---- misspelled options must not silently change the result ----------
-    # A typo'd cap falls back to the default, so the caller gets more (or fewer) results than
-    # asked for with no signal. Reported rather than fixed: rejecting unknown fields is a
-    # breaking change for hosts that send extra metadata.
+    # ---- misspelled options must be rejected, not silently defaulted -----
+    # A typo'd cap used to fall back to the default, so asking for 5 results returned 100 with
+    # no signal. `deny_unknown_fields` makes it loud. The documented aliases must still resolve,
+    # since forgiving about NAMING was deliberate -- only forgiving about typos was wrong.
     typo_dir = os.path.join(scratch, "typo")
     shutil.rmtree(typo_dir, ignore_errors=True)
     os.makedirs(typo_dir)
     for i in range(150):
         open(os.path.join(typo_dir, f"f{i:03}.rs"), "w").write("pub fn t() {}\n")
-    r_ok = j(s.call("find", {"pattern": "*.rs", "path": typo_dir,
-                             "options": {"max_results": 5}}))
-    r_typo = j(s.call("find", {"pattern": "*.rs", "path": typo_dir,
-                               "options": {"max_result": 5}}))
-    n_ok = len(r_ok.get("entries") or [])
-    n_typo = len(r_typo.get("entries") or [])
+
+    ok_raw = s.call("find", {"pattern": "*.rs", "path": typo_dir,
+                             "options": {"max_results": 5}})
+    typo_raw = s.call("find", {"pattern": "*.rs", "path": typo_dir,
+                               "options": {"max_result": 5}})
+    alias_raw = s.call("find", {"query": "*.rs", "dir": typo_dir,
+                                "options": {"max_results": 3}})
     check(
         "find", "a misspelled option is rejected rather than silently defaulted",
-        f"max_results=5 -> {n_ok} entries; max_result=5 (typo) -> {n_typo} entries",
-        n_typo == n_ok,
+        f"max_results=5 -> {len(j(ok_raw).get('entries') or [])} entries; "
+        f"max_result=5 (typo) -> {typo_raw[:70]!r}",
+        typo_raw.startswith(("[rpc-error]", "[tool-error]")),
+    )
+    check(
+        "find", "the documented aliases still resolve under strict fields",
+        f"query/dir -> {len(j(alias_raw).get('entries') or [])} entries (expected 3)",
+        len(j(alias_raw).get("entries") or []) == 3,
+    )
+    unknown_top = s.call("find", {"pattern": "*.rs", "path": typo_dir, "bogus": 1})
+    check(
+        "find", "an unknown top-level field is rejected too",
+        f"{unknown_top[:70]!r}",
+        unknown_top.startswith(("[rpc-error]", "[tool-error]")),
     )
 
     # ---- zero and inverted budgets must be refused, not reinterpreted ----

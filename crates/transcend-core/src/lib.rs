@@ -1203,29 +1203,27 @@ mod tests {
         );
     }
 
-    /// Pins how a misspelled option is handled, so the behaviour is a known choice rather
-    /// than a surprise.
+    /// A misspelled option is rejected rather than silently defaulted.
     ///
-    /// Requests deserialize with unknown fields ignored, so a typo'd option name is silently
-    /// dropped and the DEFAULT applies. Verified live on a directory of 150 files:
+    /// Requests used to deserialize with unknown fields ignored, so a typo'd option name was
+    /// dropped and the DEFAULT applied. Verified live on a directory of 150 files:
     ///
     ///   find   max_results: 5   -> 5 entries
     ///   find   max_result: 5    -> 100 entries   (typo: default cap applied)
     ///   search max_matches: 3   -> 3 matches
     ///   search max_match: 3     -> 50 matches    (typo: default cap applied)
     ///
-    /// The direction matters. A caller asking for a SMALLER budget than the default silently
-    /// receives up to 20x more output than intended -- a token and context problem. It is
-    /// worse in the other direction: a caller asking for more results than the default
-    /// receives fewer, so relevant results are missing with no signal at all.
+    /// The direction mattered. Asking for a SMALLER budget than the default silently returned
+    /// up to 20x more output than intended. Worse in the other direction: asking for more
+    /// results than the default returned fewer, so relevant results went missing with no
+    /// signal at all.
     ///
     /// The protocol carries 56 `alias` attributes precisely because option names are easy to
-    /// get wrong, so being forgiving about naming is deliberate. Forgiving silently is not the
-    /// same as forgiving usefully, though: making it loud needs `deny_unknown_fields` on the
-    /// option structs, which rejects any unexpected key and is therefore a breaking change for
-    /// hosts that send extra metadata.
+    /// get wrong, so being forgiving about naming is deliberate -- but forgiving silently is
+    /// not forgiving usefully. `deny_unknown_fields` now rejects the typo, which is a breaking
+    /// change for a host that sends keys this contract does not define.
     #[test]
-    fn misspelled_option_names_are_silently_ignored() {
+    fn misspelled_option_names_are_rejected() {
         let sandbox = TestSandbox::create();
         let engine = NativeEngine::new();
 
@@ -1236,21 +1234,28 @@ mod tests {
         }
         let path = many.to_string_lossy().to_string();
 
-        // The typo is not a field, so it never reaches the engine; the default applies.
-        let typo: FindRequest = serde_json::from_value(serde_json::json!({
+        // The typo is now loud. This is the behaviour change: previously it was accepted and
+        // the default cap silently applied, so a caller asking for 5 got 100.
+        let typo = serde_json::from_value::<FindRequest>(serde_json::json!({
             "pattern": "*.rs", "path": path, "options": { "max_result": 5 }
-        }))
-        .expect("an unknown option is accepted, not rejected");
-        let res = engine.find(&typo).expect("find should succeed");
-        assert_eq!(res.total_count, 150);
+        }));
+        let err = typo.expect_err("a misspelled option must be rejected");
+        let msg = err.to_string();
         assert!(
-            res.entries.len() > 5,
-            "the typo fell back to the default cap and returned {} entries",
-            res.entries.len()
+            msg.contains("max_result"),
+            "the error should name the offending key so the typo is obvious, got: {msg}"
         );
 
-        // The correctly-spelled option does bound the result, so the contrast is the typo
-        // alone rather than a broken cap.
+        // Unknown keys at the top level are rejected too, not only inside `options`.
+        assert!(
+            serde_json::from_value::<FindRequest>(serde_json::json!({
+                "pattern": "*.rs", "path": path, "bogus": 1
+            }))
+            .is_err(),
+            "an unknown top-level field must be rejected"
+        );
+
+        // The correctly-spelled option still works, so the strictness did not break the field.
         let good: FindRequest = serde_json::from_value(serde_json::json!({
             "pattern": "*.rs", "path": path, "options": { "max_results": 5 }
         }))
@@ -1262,6 +1267,21 @@ mod tests {
                 .entries
                 .len(),
             5
+        );
+
+        // And the documented aliases still resolve, since 56 of them exist for exactly this
+        // reason -- strictness must not have cost the forgiveness that was intentional.
+        let aliased: FindRequest = serde_json::from_value(serde_json::json!({
+            "query": "*.rs", "dir": path, "options": { "max_results": 3 }
+        }))
+        .expect("documented aliases must still work");
+        assert_eq!(
+            engine
+                .find(&aliased)
+                .expect("find should succeed")
+                .entries
+                .len(),
+            3
         );
     }
 
