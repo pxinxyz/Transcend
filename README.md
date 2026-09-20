@@ -36,7 +36,8 @@ Two things it does that shell tooling cannot:
   `batch_patch` aborts atomically across files.
 
 For measured comparisons against `rg`, `cat` and native file tooling — including where
-Transcend is *larger* or slower — see **[BENCHMARK.md](BENCHMARK.md)**.
+Transcend is *larger* or slower — see
+**[benchmarks/transcend-vs-native-tooling.md](benchmarks/transcend-vs-native-tooling.md)**.
 
 ## Tools
 
@@ -167,7 +168,7 @@ Transcend/
 │   ├── transcend-core/       # Engines: search, traversal, outline, patch, lsp, terminal
 │   ├── transcend-server/     # MCP tool router (rmcp) and stdio serving
 │   └── transcend-cli/        # Binary entry point and CLI subcommands
-├── BENCHMARK.md              # Measured comparison against native tooling
+├── benchmarks/               # Measured comparisons against native tooling
 ├── .gitattributes            # LF line-ending policy
 └── Cargo.toml                # Workspace definition
 ```
