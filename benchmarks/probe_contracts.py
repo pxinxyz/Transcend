@@ -533,6 +533,27 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         )
         s.call("terminal_kill", {"session_id": sid})
 
+    # ---- misspelled options must not silently change the result ----------
+    # A typo'd cap falls back to the default, so the caller gets more (or fewer) results than
+    # asked for with no signal. Reported rather than fixed: rejecting unknown fields is a
+    # breaking change for hosts that send extra metadata.
+    typo_dir = os.path.join(scratch, "typo")
+    shutil.rmtree(typo_dir, ignore_errors=True)
+    os.makedirs(typo_dir)
+    for i in range(150):
+        open(os.path.join(typo_dir, f"f{i:03}.rs"), "w").write("pub fn t() {}\n")
+    r_ok = j(s.call("find", {"pattern": "*.rs", "path": typo_dir,
+                             "options": {"max_results": 5}}))
+    r_typo = j(s.call("find", {"pattern": "*.rs", "path": typo_dir,
+                               "options": {"max_result": 5}}))
+    n_ok = len(r_ok.get("entries") or [])
+    n_typo = len(r_typo.get("entries") or [])
+    check(
+        "find", "a misspelled option is rejected rather than silently defaulted",
+        f"max_results=5 -> {n_ok} entries; max_result=5 (typo) -> {n_typo} entries",
+        n_typo == n_ok,
+    )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))

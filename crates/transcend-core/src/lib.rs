@@ -1185,6 +1185,68 @@ mod tests {
         );
     }
 
+    /// Pins how a misspelled option is handled, so the behaviour is a known choice rather
+    /// than a surprise.
+    ///
+    /// Requests deserialize with unknown fields ignored, so a typo'd option name is silently
+    /// dropped and the DEFAULT applies. Verified live on a directory of 150 files:
+    ///
+    ///   find   max_results: 5   -> 5 entries
+    ///   find   max_result: 5    -> 100 entries   (typo: default cap applied)
+    ///   search max_matches: 3   -> 3 matches
+    ///   search max_match: 3     -> 50 matches    (typo: default cap applied)
+    ///
+    /// The direction matters. A caller asking for a SMALLER budget than the default silently
+    /// receives up to 20x more output than intended -- a token and context problem. It is
+    /// worse in the other direction: a caller asking for more results than the default
+    /// receives fewer, so relevant results are missing with no signal at all.
+    ///
+    /// The protocol carries 56 `alias` attributes precisely because option names are easy to
+    /// get wrong, so being forgiving about naming is deliberate. Forgiving silently is not the
+    /// same as forgiving usefully, though: making it loud needs `deny_unknown_fields` on the
+    /// option structs, which rejects any unexpected key and is therefore a breaking change for
+    /// hosts that send extra metadata.
+    #[test]
+    fn misspelled_option_names_are_silently_ignored() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let many = sandbox.dir.join("many");
+        fs::create_dir_all(&many).unwrap();
+        for i in 0..150 {
+            fs::write(many.join(format!("f{i:03}.rs")), "pub fn t() {}\n").unwrap();
+        }
+        let path = many.to_string_lossy().to_string();
+
+        // The typo is not a field, so it never reaches the engine; the default applies.
+        let typo: FindRequest = serde_json::from_value(serde_json::json!({
+            "pattern": "*.rs", "path": path, "options": { "max_result": 5 }
+        }))
+        .expect("an unknown option is accepted, not rejected");
+        let res = engine.find(&typo).expect("find should succeed");
+        assert_eq!(res.total_count, 150);
+        assert!(
+            res.entries.len() > 5,
+            "the typo fell back to the default cap and returned {} entries",
+            res.entries.len()
+        );
+
+        // The correctly-spelled option does bound the result, so the contrast is the typo
+        // alone rather than a broken cap.
+        let good: FindRequest = serde_json::from_value(serde_json::json!({
+            "pattern": "*.rs", "path": path, "options": { "max_results": 5 }
+        }))
+        .expect("valid request");
+        assert_eq!(
+            engine
+                .find(&good)
+                .expect("find should succeed")
+                .entries
+                .len(),
+            5
+        );
+    }
+
     /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
