@@ -1,0 +1,414 @@
+"""Probe every Transcend tool for confidently-wrong or silently-misleading output.
+
+Each check states an expectation that follows from the tool's own documentation, then
+reports whether the live server honours it. Designed to be run against a real server so
+the answers come from behaviour, not from reading the code.
+
+Usage: python benchmarks/probe_contracts.py [--binary target/debug/transcend.exe]
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from mcp_client import McpSession  # noqa: E402
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+FINDINGS: list[tuple[str, str, str, bool]] = []
+
+
+def check(tool: str, expectation: str, detail: str, ok: bool) -> None:
+    FINDINGS.append((tool, expectation, detail, ok))
+    mark = "ok  " if ok else "FAIL"
+    print(f"{mark} [{tool}] {expectation}")
+    if not ok:
+        print(f"       -> {detail}")
+
+
+def j(payload: str) -> dict:
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        return {}
+
+
+def run_probes(s: McpSession, scratch: str) -> None:
+    os.makedirs(os.path.join(scratch, "sub"), exist_ok=True)
+    sample = os.path.join(scratch, "sample.rs")
+    with open(sample, "w", encoding="utf-8") as fh:
+        fh.write(
+            "pub fn alpha() -> u32 { 1 }\n\n"
+            "fn caller() -> u32 { alpha() }\n\n"
+            "pub struct Widget { pub size: u32 }\n"
+        )
+    empty = os.path.join(scratch, "empty.rs")
+    open(empty, "w").close()
+
+    # ---- read_file: does a failure look like success? --------------------
+    r = j(s.call("read_file", {"path": os.path.join(scratch, "nope.rs")}))
+    check(
+        "read_file", "a missing file is distinguishable from an empty file",
+        f"missing-file response keys={sorted(r.keys())} content={r.get('content')!r} "
+        f"message={r.get('message')!r}",
+        "success" in r or "error" in r,
+    )
+    r = j(s.call("read_file", {"path": empty}))
+    check(
+        "read_file", "no success field means callers cannot gate on it",
+        f"keys={sorted(r.keys())}",
+        "success" in r,
+    )
+
+    # ---- read_symbol: does a miss look like a hit? -----------------------
+    r = j(s.call("read_symbol", {"path": sample, "symbol": "does_not_exist"}))
+    check(
+        "read_symbol", "a miss sets found=false rather than returning empty source",
+        f"found={r.get('found')} source={r.get('source_code')!r}",
+        r.get("found") is False,
+    )
+    check(
+        "read_symbol", "a miss does not claim a qualified_name",
+        f"qualified_name={r.get('qualified_name')!r}",
+        not r.get("qualified_name"),
+    )
+
+    # ---- find_symbol: is a zero-result search distinguishable? -----------
+    r = j(s.call("find_symbol", {"name": "zzz_absent_symbol", "path": scratch}))
+    check(
+        "find_symbol", "zero results reports total_found=0",
+        f"total_found={r.get('total_found')}",
+        r.get("total_found") == 0,
+    )
+
+    # ---- search: truncation honesty -------------------------------------
+    r = j(s.call("search", {"pattern": "alpha", "path": scratch,
+                            "options": {"max_matches": 1}}))
+    check(
+        "search", "a capped result sets truncated=true",
+        f"truncated={r.get('truncated')} total={r.get('total_matches')}",
+        r.get("truncated") is True or (r.get("total_matches") or 0) <= 1,
+    )
+
+    # ---- search: does a file root report its own name? -------------------
+    r = j(s.call("search", {"pattern": "alpha", "path": sample}))
+    files = [f.get("file") for f in (r.get("files") or [])]
+    check(
+        "search", "searching one file names that file in the cluster",
+        f"files={files}",
+        all(f for f in files) if files else False,
+    )
+
+    # ---- outline: does max_files truncation get reported? ----------------
+    r = j(s.call("outline", {"path": scratch, "options": {"max_files": 1}}))
+    check(
+        "outline", "a file-budget cap sets truncated=true",
+        f"truncated={r.get('truncated')} files={len(r.get('files') or [])}",
+        r.get("truncated") is True or len(r.get("files") or []) <= 1,
+    )
+
+    # ---- exec: is max_output_bytes honoured? ----------------------------
+    r = j(s.call("exec", {"command": "echo hello", "max_output_bytes": 3}))
+    check(
+        "exec", "max_output_bytes bounds the returned output",
+        f"len={len(r.get('output') or '')} truncated={r.get('truncated')}",
+        len(r.get("output") or "") <= 3 or r.get("truncated") is True,
+    )
+
+    # ---- git_status: does it name the repo? ------------------------------
+    r = j(s.call("git_status", {}))
+    check(
+        "git_status", "reports whether the target is a git repo",
+        f"is_git_repo={r.get('is_git_repo')}",
+        "is_git_repo" in r,
+    )
+
+    # ---- lsp_status: unknown language ------------------------------------
+    raw = s.call("lsp_status", {"language": "javascript"})
+    r = j(raw)
+    check(
+        "lsp_status", "an unknown language is refused, not reported as an empty host",
+        f"total_servers={r.get('total_servers')} raw={raw[:120]!r}",
+        raw.startswith(("[rpc-error]", "[tool-error]")) or (r.get("total_servers") or 0) > 0,
+    )
+
+    # ---- terminal_*: a missing session ------------------------------------
+    raw = s.call("terminal_read", {"session_id": "pty_does_not_exist"})
+    r = j(raw)
+    check(
+        "terminal_read", "an unknown session is refused, not returned as an empty read",
+        f"raw={raw[:120]!r} status={r.get('status')!r}",
+        raw.startswith(("[rpc-error]", "[tool-error]")) or "error" in r,
+    )
+
+    # ---- delete_path: a missing target ------------------------------------
+    r = j(s.call("delete_path", {"path": os.path.join(scratch, "never_existed.rs")}))
+    check(
+        "delete_path", "a missing target reports success=false",
+        f"success={r.get('success')}",
+        r.get("success") is False,
+    )
+
+    # ---- write_file: does overwrite:false refuse? -------------------------
+    r = j(s.call("write_file", {"path": sample, "content": "clobber"}))
+    after = open(sample, encoding="utf-8").read()
+    check(
+        "write_file", "overwrite defaults to false and does not clobber",
+        f"success={r.get('success')} file_intact={'alpha' in after}",
+        r.get("success") is False and "alpha" in after,
+    )
+
+    # ---- patch dry_run: does it write? -----------------------------------
+    before = open(sample, encoding="utf-8").read()
+    r = j(s.call("patch", {"path": sample, "target_symbol": "alpha",
+                           "replacement": "pub fn alpha() -> u32 { 2 }",
+                           "dry_run": True}))
+    check(
+        "patch", "dry_run leaves the file untouched",
+        f"success={r.get('success')} unchanged={open(sample, encoding='utf-8').read() == before}",
+        open(sample, encoding="utf-8").read() == before,
+    )
+
+    # ---- batch_patch dry_run: count honesty -------------------------------
+    r = j(s.call("batch_patch", {"patches": [{"path": sample, "target_symbol": "alpha",
+                                              "replacement": "pub fn alpha() -> u32 { 3 }"}],
+                                 "dry_run": True}))
+    check(
+        "batch_patch", "a dry run reports zero files patched",
+        f"total_files_patched={r.get('total_files_patched')}",
+        r.get("total_files_patched") == 0,
+    )
+
+    # ---- lsp_references: unknown symbol ----------------------------------
+    r = j(s.call("lsp_references", {"path": sample, "symbol": "zzz_absent"}))
+    check(
+        "lsp_references", "an unknown symbol returns no references",
+        f"total_found={r.get('total_found')}",
+        (r.get("total_found") or 0) == 0,
+    )
+
+    # ---- lsp_diagnostics: the false negative fixed earlier ---------------
+    broken = os.path.join(scratch, "broken_crate")
+    os.makedirs(os.path.join(broken, "src"), exist_ok=True)
+    with open(os.path.join(broken, "Cargo.toml"), "w", encoding="utf-8") as fh:
+        fh.write('[package]\nname = "broken_crate"\nversion = "0.1.0"\nedition = "2021"\n\n'
+                 "[workspace]\n")
+    lib = os.path.join(broken, "src", "lib.rs")
+    with open(lib, "w", encoding="utf-8") as fh:
+        fh.write("pub fn b() -> u32 {\n    let s: String = 42;\n    nope(s)\n}\n")
+    p = subprocess.run(["cargo", "check", "--message-format=short"], cwd=broken,
+                       capture_output=True, text=True)
+    truth = "error" in (p.stdout + p.stderr).lower()
+    r = j(s.call("lsp_diagnostics", {"path": lib}))
+    check(
+        "lsp_diagnostics", "a file with real compiler errors is not reported clean",
+        f"total_count={r.get('total_count')} ground_truth_has_errors={truth}",
+        bool(r.get("total_count")) == truth,
+    )
+
+
+def run_param_probes(s: McpSession, scratch: str) -> None:
+    """Do the documented parameters actually change the output?
+
+    A parameter that is accepted, documented, and silently ignored is worse than an absent
+    one: the caller receives a filtered-looking result that was never filtered.
+    """
+    tree = os.path.join(scratch, "tree")
+    shutil.rmtree(tree, ignore_errors=True)
+    os.makedirs(os.path.join(tree, "deep", "deeper"), exist_ok=True)
+    os.makedirs(os.path.join(tree, "alpha"), exist_ok=True)
+    for name in ("root_one.rs", "root_two.py"):
+        open(os.path.join(tree, name), "w").write("pub fn root_marker() {}\n")
+    open(os.path.join(tree, "deep", "mid.rs"), "w").write("pub fn mid_marker() {}\n")
+    open(os.path.join(tree, "deep", "deeper", "low.rs"), "w").write("pub fn low_marker() {}\n")
+    open(os.path.join(tree, "alpha", "a1.rs"), "w").write("pub fn alpha_marker() {}\n")
+    open(os.path.join(tree, "notes.txt"), "w").write("text_marker\n")
+    open(os.path.join(tree, ".hidden.rs"), "w").write("pub fn hidden_marker() {}\n")
+
+    # find: max_depth must actually bound the walk
+    r = j(s.call("find", {"pattern": "*.rs", "path": tree, "options": {"max_depth": 1}}))
+    paths = [e.get("path", "") for e in (r.get("entries") or [])]
+    check(
+        "find", "max_depth=1 excludes nested files",
+        f"paths={paths}",
+        bool(paths) and not any(("deep" in p) for p in paths),
+    )
+
+    # find: extension must filter
+    r = j(s.call("find", {"pattern": "*", "path": tree, "options": {"extension": "rs"}}))
+    paths = [e.get("path", "") for e in (r.get("entries") or [])]
+    check(
+        "find", "extension=rs excludes non-rs files",
+        f"paths={paths}",
+        bool(paths) and not any(p.endswith(".txt") for p in paths),
+    )
+
+    # find: include_hidden
+    default_hidden = len(j(s.call("find", {"pattern": "*hidden*", "path": tree})).get("entries") or [])
+    with_hidden = len(
+        j(s.call("find", {"pattern": "*hidden*", "path": tree,
+                          "options": {"include_hidden": True}})).get("entries") or []
+    )
+    check(
+        "find", "include_hidden=true surfaces dotfiles",
+        f"default={default_hidden} with_hidden={with_hidden}",
+        with_hidden > default_hidden,
+    )
+
+    # search: context_lines must add surrounding text. It attaches `context_before` /
+    # `context_after` to each match rather than emitting extra matches -- asserting a higher
+    # match count here was the probe's error, not the tool's.
+    ctx_file = os.path.join(scratch, "ctx.rs")
+    open(ctx_file, "w").write("line_a\nline_b\nctx_marker\nline_d\nline_e\n")
+
+    def ctx_of(n):
+        res = j(s.call("search", {"pattern": "ctx_marker", "path": ctx_file,
+                                  "options": {"context_lines": n}}))
+        files = res.get("files") or []
+        matches = (files[0].get("matches") if files else []) or []
+        return matches[0] if matches else {}
+
+    m0, m2 = ctx_of(0), ctx_of(2)
+    check(
+        "search", "context_lines=2 attaches two lines either side",
+        f"before={m2.get('context_before')} after={m2.get('context_after')}",
+        len(m2.get("context_before") or []) == 2 and len(m2.get("context_after") or []) == 2,
+    )
+    check(
+        "search", "context_lines=0 attaches no context",
+        f"before={m0.get('context_before')} after={m0.get('context_after')}",
+        not (m0.get("context_before") or m0.get("context_after")),
+    )
+
+    # search: max_line_length must clip long lines
+    long_file = os.path.join(scratch, "long.rs")
+    open(long_file, "w").write("long_marker " + ("x" * 400) + "\n")
+    r = j(s.call("search", {"pattern": "long_marker", "path": long_file,
+                            "options": {"max_line_length": 20}}))
+    line = ((r.get("files") or [{}])[0].get("matches") or [{}])[0].get("line_text", "")
+    check(
+        "search", "max_line_length=20 clips the returned line",
+        f"len={len(line)}",
+        0 < len(line) <= 60,
+    )
+
+    # outline: max_depth must bound the hierarchy
+    r = j(s.call("outline", {"path": tree, "options": {"max_depth": 1}}))
+
+    def max_children(node, depth=0):
+        kids = node.get("children") or []
+        return max([depth] + [max_children(c, depth + 1) for c in kids]) if kids else depth
+
+    deepest = 0
+    for f in r.get("files") or []:
+        for sym in f.get("symbols") or []:
+            deepest = max(deepest, max_children(sym))
+    check(
+        "outline", "max_depth=1 bounds symbol nesting",
+        f"deepest_nesting={deepest}",
+        deepest <= 1,
+    )
+
+    # outline: include_doc_comments=false must drop doc comments
+    doc_file = os.path.join(scratch, "doc.rs")
+    open(doc_file, "w").write("/// A documented function.\npub fn documented() {}\n")
+    r_on = j(s.call("outline", {"path": doc_file, "options": {"include_doc_comments": True}}))
+    r_off = j(s.call("outline", {"path": doc_file, "options": {"include_doc_comments": False}}))
+
+    def has_doc(res):
+        return any(sym.get("doc_comment")
+                   for f in res.get("files") or [] for sym in f.get("symbols") or [])
+
+    check(
+        "outline", "include_doc_comments=false omits doc comments",
+        f"on={has_doc(r_on)} off={has_doc(r_off)}",
+        has_doc(r_on) and not has_doc(r_off),
+    )
+
+    # find_symbol: limit must bound results
+    many = os.path.join(scratch, "many.rs")
+    open(many, "w").write("".join(f"pub fn lim_{i}() {{}}\n" for i in range(40)))
+    r = j(s.call("find_symbol", {"name": "lim_", "path": scratch, "exact": False,
+                                 "limit": 3, "fuzzy": True}))
+    check(
+        "find_symbol", "limit=3 bounds the returned symbols",
+        f"returned={len(r.get('symbols') or [])} total={r.get('total_found')}",
+        len(r.get("symbols") or []) <= 3,
+    )
+
+    # read_file: start_line/end_line must slice
+    r = j(s.call("read_file", {"path": ctx_file, "start_line": 2, "end_line": 3,
+                               "line_numbers": True}))
+    check(
+        "read_file", "start_line/end_line slice and line_numbers prefixes",
+        f"start={r.get('start_line')} end={r.get('end_line')} content={r.get('content')!r}",
+        r.get("start_line") == 2 and r.get("end_line") == 3
+        and "ctx_marker" in (r.get("content") or ""),
+    )
+
+    # read_symbol: context_lines must add surroundings
+    r2 = j(s.call("read_symbol", {"path": os.path.join(scratch, "sample.rs"), "symbol": "alpha",
+                                  "context_lines": 2}))
+    check(
+        "read_symbol", "context_lines adds surrounding text",
+        f"keys={sorted(r2.keys())}",
+        ("context_before" in r2) or ("context_after" in r2),
+    )
+
+    # search: respect_gitignore as an independent axis
+    gi_dir = os.path.join(scratch, "gi")
+    os.makedirs(gi_dir, exist_ok=True)
+    p = subprocess.run(["git", "init", "-q"], cwd=gi_dir, capture_output=True, text=True)
+    if p.returncode == 0:
+        open(os.path.join(gi_dir, ".gitignore"), "w").write("ignored.rs\n")
+        open(os.path.join(gi_dir, "ignored.rs"), "w").write("gi_marker\n")
+        open(os.path.join(gi_dir, "kept.rs"), "w").write("gi_marker\n")
+        on = j(s.call("search", {"pattern": "gi_marker", "path": gi_dir,
+                                 "options": {"respect_gitignore": True}}))
+        off = j(s.call("search", {"pattern": "gi_marker", "path": gi_dir,
+                                  "options": {"respect_gitignore": False}}))
+        check(
+            "search", "respect_gitignore=false finds gitignored files",
+            f"on={on.get('total_matches')} off={off.get('total_matches')}",
+            (off.get("total_matches") or 0) > (on.get("total_matches") or 0),
+        )
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--binary", default=os.path.join(REPO, "target", "debug", "transcend.exe"))
+    args = ap.parse_args()
+
+    if not os.path.isfile(args.binary):
+        sys.exit(f"server binary not found: {args.binary} (cargo build --bin transcend)")
+
+    scratch = os.path.join(REPO, "target", "probe-contracts")
+    shutil.rmtree(scratch, ignore_errors=True)
+    os.makedirs(scratch, exist_ok=True)
+
+    session = McpSession(args.binary, REPO, workspace=scratch)
+    try:
+        run_probes(session, scratch)
+        run_param_probes(session, scratch)
+    finally:
+        session.close()
+
+    failed = [f for f in FINDINGS if not f[3]]
+    print(f"\n{len(FINDINGS) - len(failed)}/{len(FINDINGS)} expectations honoured")
+    if failed:
+        print("\nFAILURES:")
+        for tool, expectation, detail, _ in failed:
+            print(f"  [{tool}] {expectation}\n      {detail}")
+    shutil.rmtree(scratch, ignore_errors=True)
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()
+

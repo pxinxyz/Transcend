@@ -1113,7 +1113,79 @@ mod tests {
         );
     }
 
-    /// Regression: when `path` names a single file, the search root *is* that file, so
+    /// Pins the current `read_file` failure contract so its weakness is visible in the code
+    /// rather than only in a review.
+    ///
+    /// `ReadFileResponse` has no success discriminator: a missing file, a directory, and a
+    /// genuinely empty file all return `content: ""`, `truncated: false`, `total_lines: 0`.
+    /// The only failure signal is the free-text `message`, and the only way to test it is to
+    /// parse prose. Every sibling mutating tool returns `success`; `read_file` is the outlier.
+    ///
+    /// Verified live: an agent gating on `content`/`truncated` cannot tell these apart.
+    /// Fixing it means adding a field to a public response contract, so this test records the
+    /// behaviour and will need updating when that decision is taken.
+    #[test]
+    fn read_file_failures_are_indistinguishable_without_parsing_the_message() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let empty = sandbox.dir.join("empty_probe.txt");
+        fs::write(&empty, "").unwrap();
+
+        let missing = engine
+            .read_file(&ReadFileRequest {
+                path: sandbox
+                    .dir
+                    .join("absent_probe.txt")
+                    .to_string_lossy()
+                    .to_string(),
+                ..Default::default()
+            })
+            .expect("missing file returns Ok, not Err");
+        let blank = engine
+            .read_file(&ReadFileRequest {
+                path: empty.to_string_lossy().to_string(),
+                ..Default::default()
+            })
+            .expect("empty file reads fine");
+        let directory = engine
+            .read_file(&ReadFileRequest {
+                path: sandbox.dir.to_string_lossy().to_string(),
+                ..Default::default()
+            })
+            .expect("directory returns Ok, not Err");
+
+        // The fields a caller would naturally gate on are identical across all three.
+        for (label, res) in [
+            ("missing", &missing),
+            ("empty", &blank),
+            ("directory", &directory),
+        ] {
+            assert_eq!(res.content, "", "{label}: content");
+            assert!(!res.truncated, "{label}: truncated");
+            assert_eq!(res.total_lines, 0, "{label}: total_lines");
+        }
+
+        // Only prose separates them, which is the whole problem.
+        assert!(
+            missing.message.is_some(),
+            "missing file must explain itself"
+        );
+        assert!(directory.message.is_some(), "directory must explain itself");
+        assert!(
+            blank.message.is_none(),
+            "a successful read of an empty file carries no message"
+        );
+
+        // And the missing-file message says so, in prose rather than a machine-readable field.
+        let msg = missing.message.unwrap_or_default();
+        assert!(
+            msg.contains("does not exist"),
+            "expected a prose failure reason, got {msg:?}"
+        );
+    }
+
+    /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
     fn test_search_single_file_reports_its_path() {

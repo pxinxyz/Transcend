@@ -89,18 +89,26 @@ class McpSession:
             self.call("set_workspace", {"path": workspace})
 
     def call(self, tool: str, arguments: dict[str, Any]) -> str:
-        """Invoke a tool and return its text payload exactly as a host would see it."""
+        """Invoke a tool and return its text payload exactly as a host would see it.
+
+        A JSON-RPC error is returned as `[rpc-error] ...` rather than an empty string, so a
+        caller (and a probe) can tell "the tool refused this request" apart from "the tool
+        returned nothing". Collapsing both to empty is exactly the ambiguity the tools
+        themselves are being audited for.
+        """
         res = self._call(
             "tools/call", {"name": tool, "arguments": arguments}
         )
         if "error" in res:
-            return json.dumps(res["error"])
+            err = res["error"]
+            msg = err.get("message", "") if isinstance(err, dict) else str(err)
+            return f"[rpc-error] {msg}"
         result = res.get("result", {})
         content = result.get("content") or []
         parts = [c.get("text", "") for c in content if c.get("type") == "text"]
         payload = "\n".join(parts)
         if result.get("isError"):
-            payload = f"[isError] {payload}"
+            payload = f"[tool-error] {payload}"
         return payload
 
     def close(self) -> None:
