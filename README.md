@@ -94,6 +94,7 @@ Replaces raw `grep` / `ripgrep` shell invocations.
 - **Hierarchical Clustering**: Groups matches by directory cluster and file, exposing density heatmaps where patterns concentrate.
 - **Line Length Compaction**: Automatically truncates minified lines or SVG paths to prevent context window explosion.
 - **Multi-Threaded Traversal**: In-process parallel scanning using `ignore` and `grep-regex` matching kernels.
+- **Ignore Control**: `respect_gitignore` (default `true`) is independent of `include_hidden`, so vendored or generated paths listed in `.gitignore` can be searched without also pulling in dotfiles and `.git/`.
 
 ### 3. `find_symbol` — Global Definition Finder
 Bridges the gap between content search and surgical inspection.
@@ -358,13 +359,28 @@ transcend lsp install typescript
 
 # Install using a specific package manager
 transcend lsp install python --method pip
+
+# Export every registered tool schema (name, description, JSON Schema) as <tool>.json
+transcend export-schemas --out ./schemas
 ```
+
+`export-schemas` reads the **live tool router**, so the exported schemas cannot drift
+from what the server actually serves. It replaces an earlier in-test schema dump that
+wrote into a hardcoded per-machine agent config directory.
 
 ---
 
 ## Model Context Protocol (MCP) Configuration
 
 Transcend communicates over standard `stdio` JSON-RPC 2.0. Add it to your agent or editor configuration:
+
+> **Schema portability.** Transcend rewrites every advertised tool schema into a
+> portable JSON Schema subset (`$ref` inlined, no `$defs`/`$schema`, no `type`
+> arrays or `anyOf`, no `format`/`minimum`). Hosts that enforce a restricted subset
+> — DeepSeek Harness validates only
+> `type`/`oneOf`/`properties`/`required`/`additionalProperties`/`items`/`enum`/`const`
+> — reject the entire tool otherwise, so the raw `schemars` output would register
+> zero tools. No configuration is needed; this is handled by the server.
 
 ### Claude Desktop
 Add to `claude_desktop_config.json`:
@@ -429,8 +445,66 @@ Transcend/
 │   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
 │   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (23 tools)
 │   └── transcend-cli/        # Binary entry point and CLI runner
+├── .github/workflows/ci.yml  # Linux + macOS + Windows test matrix
 ├── banner.png                # Transcend visual identity
 └── Cargo.toml                # Workspace definition
+```
+
+---
+
+## Platform Support
+
+Transcend is developed and tested on Linux, macOS, and Windows. CI runs the full test
+suite on all three, because the execution subsystem is genuinely OS-specific:
+
+| Concern | Windows | Linux / macOS |
+|:---|:---|:---|
+| Interactive terminals | ConPTY via `portable-pty` | `openpty` via `portable-pty` (`setsid` session leader) |
+| Process-tree ownership | Job Object with `KILL_ON_JOB_CLOSE`, `taskkill /T /F` fallback | Own process group (`setpgid`) signalled, then a descendant sweep (`/proc/<pid>/task/*/children` on Linux, `pgrep -P` elsewhere) |
+| Default shell | PowerShell (`pwsh` if present, else `powershell.exe`), `cmd /C` when `&&`/`\|\|` chaining is detected | `$SHELL`, falling back to `/bin/bash`, invoked with `-c` |
+| Line endings | `* text=auto eol=lf` in `.gitattributes` (see below) | LF |
+
+`.gitattributes` pins LF repository-wide. Without it a Windows checkout stores CRLF in
+the working tree while the index holds LF, so `cargo fmt --check` passes locally and
+fails on Linux CI (or the reverse) and every diff is noisy.
+
+---
+
+## Development
+
+```bash
+cargo check --workspace --all-targets     # type-check
+cargo test --workspace                    # unit + integration tests
+cargo test --workspace --release          # also exercises thin-LTO release codegen
+cargo clippy --workspace --all-targets    # must be warning-free
+cargo fmt --all --check                   # formatting gate
+```
+
+The release profile enables `lto = "thin"` and `codegen-units = 1`, since search and
+traversal throughput is the point of the project.
+
+### Verifying MCP integration
+
+`cargo test` covers the protocol over an in-memory duplex transport. To check a real
+harness end to end, point its MCP client at the release binary and confirm the tools
+appear with a normalized schema:
+
+```bash
+cargo build --release -p transcend-cli
+# then register it, e.g. for DeepSeek Harness (~/.dsh/profiles/<profile>/cordis.patch.yml):
+#
+#   - insert:
+#       - id: mcp-transcend
+#         name: '@deepseek-ai/dsh-mcp-client'
+#         config:
+#           serverName: transcend
+#           transport: stdio
+#           command: '/abs/path/to/target/release/transcend'
+#           cwd: '/abs/path/to/repo'
+#           failOnStartupError: true
+#
+# A bare top-level entry is an id-targeted *override*, not an insertion: it must be
+# nested under `insert:` or the loader warns `entry not found` and silently skips it.
 ```
 
 ---

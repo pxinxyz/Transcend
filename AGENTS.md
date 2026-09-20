@@ -49,14 +49,24 @@ All commits in this repository must strictly adhere to the [Conventional Commits
 ## 5. Work Guidance
 - Use `cargo test --workspace` and `cargo check --workspace` before every commit.
 - Use release mode (`cargo test --release`) when verifying search and traversal throughput.
+- Clippy and rustfmt are gates, not suggestions: CI runs `cargo clippy --workspace --all-targets` with `RUSTFLAGS=-Dwarnings` and `cargo fmt --all --check`.
 
 ## 6. Verification
 ```sh
-cargo check --workspace
+cargo check --workspace --all-targets
 cargo test --workspace
+cargo test --workspace --release
+cargo clippy --workspace --all-targets
+cargo fmt --all --check
 ```
 
-## 7. Child DOX Index
+## 7. Cross-Platform Contract
+- CI (`.github/workflows/ci.yml`) runs the full suite on **Linux, macOS, and Windows**. A change that only compiles or passes on one OS is not complete.
+- Platform-specific code belongs behind `#[cfg(...)]` in as few modules as possible: `transcend-core/src/terminal/platform.rs` (shell resolution, process-tree ownership) and `transcend-core/src/lsp/installer.rs` (package-manager recipes).
+- `.gitattributes` pins `eol=lf` repository-wide. Do not commit CRLF; it makes `cargo fmt --check` pass locally and fail in CI.
+- No test may depend on the process working directory, write outside the build directory, or hardcode a machine-specific absolute path.
+
+## 8. Child DOX Index
 - `crates/transcend-protocol/AGENTS.md` — scope: strongly-typed request/response data contracts and JSON schemas
 - `crates/transcend-core/AGENTS.md` — scope: in-process search, traversal, and AST computation engines
 - `crates/transcend-server/AGENTS.md` — scope: Model Context Protocol (rmcp) tool router and server implementation
