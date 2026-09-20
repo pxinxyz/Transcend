@@ -102,25 +102,11 @@ impl TerminalProjection {
     }
 
     fn floor_char_boundary(s: &str, index: usize) -> usize {
-        if index >= s.len() {
-            return s.len();
-        }
-        let mut i = index;
-        while !s.is_char_boundary(i) {
-            i -= 1;
-        }
-        i
+        crate::floor_char_boundary(s, index)
     }
 
     fn ceil_char_boundary(s: &str, index: usize) -> usize {
-        if index >= s.len() {
-            return s.len();
-        }
-        let mut i = index;
-        while !s.is_char_boundary(i) {
-            i += 1;
-        }
-        i
+        crate::ceil_char_boundary(s, index)
     }
 }
 

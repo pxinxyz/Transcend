@@ -217,9 +217,12 @@ impl FileOps {
                 if content.len() + formatted_line.len() > max_bytes {
                     let remaining_budget = max_bytes.saturating_sub(content.len());
                     if remaining_budget > 0 {
-                        let clipped: String =
-                            formatted_line.chars().take(remaining_budget).collect();
-                        content.push_str(&clipped);
+                        // `max_bytes` is a BYTE budget. Taking `remaining_budget` characters
+                        // instead let a multi-byte file return up to 4x the documented limit,
+                        // which defeats the point of a token-bounded read. Cut on a real char
+                        // boundary so the slice cannot panic.
+                        let cut = crate::floor_char_boundary(&formatted_line, remaining_budget);
+                        content.push_str(&formatted_line[..cut]);
                     }
                     truncated = true;
                 } else {

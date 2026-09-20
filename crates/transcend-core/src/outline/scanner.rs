@@ -169,14 +169,7 @@ impl SupportedLang {
 /// `String::truncate` panics when its index is not a char boundary, so any byte budget used
 /// as a truncation point must be walked back first.
 fn floor_char_boundary(s: &str, index: usize) -> usize {
-    if index >= s.len() {
-        return s.len();
-    }
-    let mut i = index;
-    while i > 0 && !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
+    crate::floor_char_boundary(s, index)
 }
 
 impl OutlineScanner {

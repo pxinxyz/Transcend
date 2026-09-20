@@ -186,6 +186,34 @@ impl Default for NativeEngine {
     }
 }
 
+/// Largest char boundary in `s` that is `<= index` (clamped to `s.len()`).
+///
+/// Byte budgets are not valid `String` indices: slicing or truncating at a non-boundary
+/// panics. Every place a caller-supplied byte budget is applied to text must walk the cut
+/// back to a real boundary first.
+pub fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Smallest char boundary in `s` that is `>= index` (clamped to `s.len()`).
+pub fn ceil_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
 /// Normalize a path by stripping Windows verbatim device prefixes (`\\?\` or `//?/`).
 pub fn clean_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
@@ -3671,6 +3699,85 @@ pub fn compute_checksum(val: u32) -> u32 {
             .expect("lsp_diagnostics should succeed");
 
         assert_eq!(res.total_count, res.diagnostics.len());
+    }
+
+    /// Regression: `max_bytes` is documented as a byte budget, but the clip took
+    /// `remaining_budget` *characters*, so a multi-byte file could return up to 4x the
+    /// documented limit -- defeating the purpose of a token-bounded read.
+    #[test]
+    fn test_read_file_max_bytes_is_a_byte_budget() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        // Two-byte characters throughout, so chars and bytes diverge by 2x.
+        let path = sandbox.dir.join("multibyte.txt");
+        fs::write(&path, "é".repeat(80)).unwrap();
+
+        for budget in [10usize, 11, 12, 13, 40, 41, 100] {
+            let res = engine
+                .read_file(&ReadFileRequest {
+                    path: path.to_string_lossy().to_string(),
+                    max_bytes: Some(budget),
+                    ..Default::default()
+                })
+                .expect("read should succeed");
+
+            assert!(
+                res.content.len() <= budget,
+                "budget {budget} returned {} bytes ({} chars)",
+                res.content.len(),
+                res.content.chars().count()
+            );
+            // The content must remain valid UTF-8 on a char boundary.
+            assert!(
+                res.content.is_char_boundary(res.content.len()),
+                "budget {budget} cut mid-character"
+            );
+        }
+    }
+
+    /// ASCII content must still fill the budget exactly.
+    #[test]
+    fn test_read_file_max_bytes_fills_ascii_budget() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let path = sandbox.dir.join("ascii.txt");
+        fs::write(&path, "a".repeat(200)).unwrap();
+
+        let res = engine
+            .read_file(&ReadFileRequest {
+                path: path.to_string_lossy().to_string(),
+                max_bytes: Some(50),
+                ..Default::default()
+            })
+            .expect("read should succeed");
+
+        assert_eq!(res.content.len(), 50);
+        assert!(res.truncated);
+    }
+
+    #[test]
+    fn test_char_boundary_helpers_are_safe_and_clamped() {
+        let s = "ab日本語"; // 2 + 3*3 = 11 bytes
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 2), 2);
+        assert_eq!(floor_char_boundary(s, 3), 2, "inside 日 -> back to 2");
+        assert_eq!(floor_char_boundary(s, 5), 5);
+        assert_eq!(floor_char_boundary(s, 999), s.len(), "past end clamps");
+
+        assert_eq!(ceil_char_boundary(s, 0), 0);
+        assert_eq!(ceil_char_boundary(s, 3), 5, "inside 日 -> forward to 5");
+        assert_eq!(ceil_char_boundary(s, 999), s.len());
+
+        // Both must always land on a real boundary within range.
+        for i in 0..=s.len() + 3 {
+            let f = floor_char_boundary(s, i);
+            let c = ceil_char_boundary(s, i);
+            assert!(f <= s.len() && s.is_char_boundary(f), "floor({i}) = {f}");
+            assert!(c <= s.len() && s.is_char_boundary(c), "ceil({i}) = {c}");
+            assert!(f <= c, "floor({i}) > ceil({i})");
+        }
     }
 
     #[test]
