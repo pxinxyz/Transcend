@@ -1,0 +1,35 @@
+# Normalize line endings for cross-platform development.
+#
+# Without this, a Windows checkout (core.autocrlf=true) stores CRLF in the working
+# tree while the index holds LF. `cargo fmt --check` then passes locally and fails
+# in Linux CI (or vice versa), and every diff is noisy. Forcing LF in the repository
+# and in the working tree makes formatting, diffs, and CI identical on every OS.
+* text=auto eol=lf
+
+# Windows-only scripts must keep CRLF to stay runnable by cmd.exe.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+
+# Binary assets: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.pdb binary
+
+# Cargo lockfiles are text and should stay LF for reproducible diffs.
+Cargo.lock text eol=lf

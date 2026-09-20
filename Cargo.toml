@@ -7,6 +7,20 @@ members = [
 ]
 resolver = "2"
 
+# Transcend's value proposition is search/traversal throughput, so the release
+# profile is tuned for it rather than left at Cargo's defaults (no LTO, 16 CGUs).
+# `thin` LTO captures most of the cross-crate inlining win without the full-LTO
+# link-time cost; a single codegen unit maximizes optimization scope.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Benchmark and test runs that care about throughput want the same optimization
+# scope without paying the full LTO link on every invocation.
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
 [workspace.package]
 version = "2.0.0"
 edition = "2024"
