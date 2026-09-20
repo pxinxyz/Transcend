@@ -1117,6 +1117,7 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
+ "libc",
  "portable-pty",
  "regex",
  "serde",

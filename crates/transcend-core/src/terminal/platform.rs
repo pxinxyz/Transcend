@@ -3,7 +3,7 @@
 //! Enforces bulletproof process cleanup (via Windows Job Objects and Unix Process Groups)
 //! so that child/grandchild processes (node, vite, cargo, rustc) are never orphaned.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Resolved shell invocation details.
 #[derive(Debug, Clone)]
@@ -119,7 +119,7 @@ fn find_git_bash() -> Option<PathBuf> {
         r"C:\msys64\usr\bin\bash.exe",
     ];
     for cand in candidates {
-        let p = Path::new(cand);
+        let p = PathBuf::from(cand);
         if p.is_file() {
             return Some(p.to_path_buf());
         }
