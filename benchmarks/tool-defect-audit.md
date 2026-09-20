@@ -12,20 +12,26 @@ Note on ownership: none of these are caught by the existing suite.
 |---|---|---|
 | 1 | `batch_patch` persisted in-memory buffers | **fixed** (`c414c8d`) |
 | 2 | `outline` panicked truncating a multibyte skeleton | **fixed** (`520f9d4`) |
-| 3 | `lsp_diagnostics` with `path` always returns zero | open |
-| 4 | `outline` drops files past `max_files`, reports `truncated:false` | open |
+| 3 | `lsp_diagnostics` with `path` always returns zero | **fixed** (`8c22e92`) |
+| 4 | `outline` drops files past `max_files`, reports `truncated:false` | **fixed** (`2d85618`) |
 | 5 | `find_symbol` can omit the exact match (cap before sort) | open |
 | 6 | `find_symbol.case_sensitive` default | **withdrawn** — doc was wrong, see below |
 | 7 | `exec` ignored `max_output_bytes` on the kill path | **fixed** (`b867a5e`) |
 | 8 | `lsp_references.include_declaration` ignored on fallback | open |
 | 9 | `read_file.max_bytes` enforced as a char budget | open |
-| 10 | `search` on a single file reports `file:""` | open |
-| 11 | `search` reports `truncated:false` when `max_per_file` capped | open |
+| 10 | `search` on a single file reports `file:""` | **fixed** (`74a0413`) |
+| 11 | `search` reports `truncated:false` when `max_per_file` capped | **fixed** (`74a0413`) |
 | 12 | `symbol_kinds`/`exported_only` no-ops for some languages | open |
 | 13 | `ast_valid:true` when no grammar exists | open |
 | 14 | `lsp_status` silently empty for an unknown language | open |
 | 15 | Shared workspace root makes results order-dependent | open |
 | — | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
+| — | `lsp_diagnostics` fell back to `cargo check` on an empty LSP verdict | **fixed** (`8c22e92`) |
+
+8 of 16 fixed. Every fix carries a regression test that was confirmed to fail against the
+pre-fix code. Two findings were corrected during the work: item 6 was withdrawn (the code
+was right, the doc was unsatisfiable), and the `lsp_diagnostics` fallback plus the
+`total_files_patched` / dry-run miscounts were found while fixing items 3 and 1.
 
 ---
 
