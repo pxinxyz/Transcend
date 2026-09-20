@@ -309,7 +309,9 @@ pub struct FileOutline {
 /// High-level architectural census across all outlined files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct OutlineSummary {
+    /// Files present in the response, after any budget was applied.
     pub total_files: usize,
+    /// Symbols present in the response, after any budget was applied.
     pub total_symbols: usize,
     pub kind_breakdown: BTreeMap<String, usize>,
     pub language_breakdown: BTreeMap<String, usize>,
@@ -370,6 +372,9 @@ pub struct OutlineResponse {
     /// Outlines per file.
     pub files: Vec<FileOutline>,
     /// Whether results were capped by symbol or file budget.
+    ///
+    /// The summary counters describe what came back, not the size of the tree; this flag is
+    /// how a caller knows the result is partial. Set when either budget dropped anything.
     pub truncated: bool,
 }
 

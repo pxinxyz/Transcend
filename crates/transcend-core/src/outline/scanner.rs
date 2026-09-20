@@ -16,6 +16,7 @@ use tree_sitter::{Language, Parser};
 
 use super::LanguageOutline;
 use super::bash::BashOutline;
+
 use super::c_cpp::{COutline, CppOutline};
 use super::csharp::CSharpOutline;
 use super::dart::DartOutline;
@@ -247,9 +248,9 @@ impl OutlineScanner {
         }
 
         let mut candidate_files: Vec<PathBuf> = Vec::new();
-        // Set when the traversal stops before exhausting the tree, or found more files than
-        // `max_files` will be parsed. `apply_budget` only sees the files that were selected,
-        // so it cannot detect either case on its own.
+        // Set when the traversal found more eligible files than `max_files` will parse.
+        // `apply_budget` only sees the files that were selected, so it cannot detect this on
+        // its own.
         let mut file_budget_hit = false;
 
         if target_path.is_file() {
@@ -282,8 +283,12 @@ impl OutlineScanner {
                         {
                             continue;
                         }
-                        candidate_files.push(path.to_path_buf());
-                        if candidate_files.len() >= max_files * 2 {
+                        // Only the first `max_files * 2` become candidates; more than that means
+                        // the file budget is binding and the response must say so. The walk stops
+                        // here rather than traversing a whole tree for files it will not read.
+                        if candidate_files.len() < max_files * 2 {
+                            candidate_files.push(path.to_path_buf());
+                        } else {
                             file_budget_hit = true;
                             break;
                         }
@@ -296,7 +301,6 @@ impl OutlineScanner {
 
         let mut file_outlines = Vec::new();
         let mut summary = OutlineSummary::default();
-        let mut total_discovered_symbols = 0;
 
         for file_path in candidate_files.into_iter().take(max_files) {
             let lang = match SupportedLang::from_path(&file_path) {
@@ -335,7 +339,6 @@ impl OutlineScanner {
                 Self::prune_depth(&mut outline.symbols, 1, max_d);
             }
 
-            total_discovered_symbols += Self::count_symbols(&outline.symbols);
             Self::accumulate_summary(&outline, &mut summary);
             summary.total_files += 1;
 
@@ -352,8 +355,14 @@ impl OutlineScanner {
             file_outlines.push(outline);
         }
 
-        summary.total_symbols = total_discovered_symbols;
-
+        // Both counters describe what was ANALYSED, which is the question this summary exists
+        // to answer, and they are consistent with each other. An attempt to widen
+        // `total_files` to every discovered file while `total_symbols` still counted only the
+        // parsed ones produced an impossible census -- eight files containing two symbols.
+        //
+        // A caller wanting the size of the tree has `truncated`: when the file budget dropped
+        // files, that flag is set, which is the honest signal. `summary.total_files` already
+        // accumulated inside the loop above.
         // More candidates were collected than will be parsed, so files were dropped.
         if candidate_count > max_files {
             file_budget_hit = true;
@@ -361,6 +370,19 @@ impl OutlineScanner {
 
         let (files, truncated) =
             Self::apply_budget(file_outlines, max_symbols, options.max_output_bytes);
+
+        // Count what the response actually carries, so the summary describes the result rather
+        // than a stage along the way.
+        //
+        // Both counters previously reported different stages depending on which cap bit:
+        // `total_symbols` counted every symbol parsed before `apply_budget` ran, while
+        // `total_files` counted files after the `take(max_files)` but before the same budget.
+        // The same field therefore meant "everything analysed" or "everything returned"
+        // depending on the caller's caps, and a census taken from it could not be trusted.
+        // `truncated` is the flag that says whether the result is partial; the counters now
+        // consistently describe what came back.
+        summary.total_files = files.len();
+        summary.total_symbols = files.iter().map(|f| Self::count_symbols(&f.symbols)).sum();
 
         Ok(OutlineResponse {
             summary,

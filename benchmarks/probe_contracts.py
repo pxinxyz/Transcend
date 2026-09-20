@@ -584,6 +584,31 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         raw.startswith(("[rpc-error]", "[tool-error]")),
     )
 
+    # ---- outline summary must describe the returned payload ---------------
+    # It previously mixed stages: total_symbols counted parsed symbols before the budget ran
+    # while total_files counted files after the file cap, so an 8-file/16-symbol directory
+    # reported total_files: 1 with total_symbols: 16 under max_files: 1.
+    census = os.path.join(scratch, "census")
+    shutil.rmtree(census, ignore_errors=True)
+    os.makedirs(census)
+    for i in range(8):
+        open(os.path.join(census, f"m{i}.rs"), "w").write(
+            f"pub fn alpha_{i}() {{}}\npub fn beta_{i}() {{}}\n")
+
+    for label, opts in [("uncapped", {}), ("max_files=1", {"max_files": 1}),
+                        ("max_symbols=1", {"max_symbols": 1})]:
+        r = j(s.call("outline", {"path": census, "options": opts}))
+        files = r.get("files") or []
+        shown_f, shown_s = len(files), sum(len(f.get("symbols") or []) for f in files)
+        summ = r.get("summary", {})
+        check(
+            "outline", f"summary matches the payload ({label})",
+            f"returned files={shown_f} syms={shown_s}; "
+            f"summary files={summ.get('total_files')} syms={summ.get('total_symbols')}; "
+            f"truncated={r.get('truncated')}",
+            summ.get("total_files") == shown_f and summ.get("total_symbols") == shown_s,
+        )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))

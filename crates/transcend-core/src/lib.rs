@@ -1354,6 +1354,102 @@ mod tests {
         );
     }
 
+    /// The outline summary counters must describe what the response carries, and mean the same
+    /// thing whichever budget was binding.
+    ///
+    /// They previously reported different stages: `total_symbols` counted every symbol parsed
+    /// before the budget ran, while `total_files` counted files after the file cap but before
+    /// the same budget. An 8-file, 16-symbol directory therefore reported `total_files: 1` with
+    /// `total_symbols: 16` under `max_files: 1` -- an impossible census, and one that shifted
+    /// meaning depending on which cap bit. A reader doing an architecture survey takes these
+    /// as the size of the codebase.
+    #[test]
+    fn outline_summary_reports_what_was_returned() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let dir = sandbox.dir.join("census");
+        fs::create_dir_all(&dir).unwrap();
+        for i in 0..8 {
+            fs::write(
+                dir.join(format!("m{i}.rs")),
+                format!("pub fn alpha_{i}() {{}}\npub fn beta_{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let path = dir.to_string_lossy().to_string();
+
+        let count = |res: &transcend_protocol::OutlineResponse| {
+            let shown_symbols: usize = res.files.iter().map(|f| f.symbols.len()).sum();
+            (
+                res.files.len(),
+                shown_symbols,
+                res.summary.total_files,
+                res.summary.total_symbols,
+                res.truncated,
+            )
+        };
+
+        // Nothing capped: the census is the truth, 8 files and 16 symbols.
+        let full = engine
+            .outline(&OutlineRequest {
+                path: Some(path.clone()),
+                content: None,
+                options: None,
+            })
+            .expect("outline should succeed");
+        assert_eq!(count(&full), (8, 16, 8, 16, false), "uncapped census");
+
+        // Capped by files, by symbols, and by both: in every case the summary must match the
+        // returned payload, and the result must be flagged as partial.
+        for (label, opts) in [
+            (
+                "max_files",
+                OutlineOptions {
+                    max_files: Some(1),
+                    ..Default::default()
+                },
+            ),
+            (
+                "max_symbols",
+                OutlineOptions {
+                    max_symbols: Some(1),
+                    ..Default::default()
+                },
+            ),
+            (
+                "both",
+                OutlineOptions {
+                    max_files: Some(1),
+                    max_symbols: Some(1),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let res = engine
+                .outline(&OutlineRequest {
+                    path: Some(path.clone()),
+                    content: None,
+                    options: Some(opts),
+                })
+                .expect("outline should succeed");
+            let (files, symbols, sum_files, sum_symbols, truncated) = count(&res);
+            assert_eq!(
+                (sum_files, sum_symbols),
+                (files, symbols),
+                "{label}: summary must describe the returned payload"
+            );
+            assert!(
+                sum_symbols <= sum_files * 2,
+                "{label}: {sum_symbols} symbols across {sum_files} files is impossible"
+            );
+            assert!(
+                truncated,
+                "{label}: a capped result must be flagged truncated"
+            );
+        }
+    }
+
     /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
