@@ -1518,6 +1518,110 @@ mod tests {
         );
     }
 
+    /// The engine's workspace root is process-global shared state, and `set_workspace` is a
+    /// tool any caller can invoke. A single operation reads it more than once: the target path
+    /// is resolved with one read and the boundary is enforced with another. If those two reads
+    /// straddle a `set_workspace`, one operation can mix two roots.
+    ///
+    /// This drives that with real threads on a cloned engine (which shares the root by `Arc`)
+    /// rather than through a client, because a client serialises requests over one session and
+    /// would only exercise ordering. The assertions are the properties that must hold under any
+    /// interleaving:
+    ///
+    /// 1. a write never lands outside BOTH roots -- otherwise the boundary is defeatable by
+    ///    racing it, which is a security property, not a cosmetic one;
+    /// 2. a successful write reports the path it actually wrote, so the response cannot name a
+    ///    root the bytes did not go to.
+    #[test]
+    fn set_workspace_racing_a_write_never_escapes_both_roots() {
+        let sandbox = TestSandbox::create();
+        let root_a = sandbox.dir.join("root_a");
+        let root_b = sandbox.dir.join("root_b");
+        fs::create_dir_all(&root_a).unwrap();
+        fs::create_dir_all(&root_b).unwrap();
+
+        let engine = NativeEngine::new();
+        engine
+            .set_workspace(&SetWorkspaceRequest {
+                path: root_a.to_string_lossy().to_string(),
+            })
+            .expect("set_workspace");
+
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flip = std::sync::Arc::clone(&stop);
+        let flipper = {
+            let engine = engine.clone();
+            let a = root_a.to_string_lossy().to_string();
+            let b = root_b.to_string_lossy().to_string();
+            std::thread::spawn(move || {
+                while !stop_flip.load(std::sync::atomic::Ordering::Relaxed) {
+                    let _ = engine.set_workspace(&SetWorkspaceRequest { path: a.clone() });
+                    let _ = engine.set_workspace(&SetWorkspaceRequest { path: b.clone() });
+                }
+            })
+        };
+
+        let mut escapes = Vec::new();
+        let mut mismatches = Vec::new();
+        let mut writes = 0usize;
+        let mut in_a_count = 0usize;
+        let mut in_b_count = 0usize;
+        for i in 0..300 {
+            let name = format!("race_{i}.txt");
+            if let Ok(res) = engine.write_file(&WriteFileRequest {
+                path: name.clone(),
+                content: "x".to_string(),
+                ..Default::default()
+            }) && res.success
+            {
+                writes += 1;
+                let in_a = root_a.join(&name).exists();
+                let in_b = root_b.join(&name).exists();
+                if in_a {
+                    in_a_count += 1;
+                }
+                if in_b {
+                    in_b_count += 1;
+                }
+                if !in_a && !in_b {
+                    escapes.push(format!("{name}: wrote outside both roots"));
+                }
+                let reported = res.file.replace('\\', "/");
+                if in_a && !reported.contains("/root_a/") {
+                    mismatches.push(format!("{name}: landed in root_a, reported {reported}"));
+                }
+                if in_b && !reported.contains("/root_b/") {
+                    mismatches.push(format!("{name}: landed in root_b, reported {reported}"));
+                }
+            }
+        }
+
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        flipper.join().expect("flipper thread");
+
+        // Guard the test itself: if the flipper had not interleaved, every write would land in
+        // one root and the escape assertion would be vacuous. Both roots must have received
+        // writes for this to have exercised the race at all.
+        assert!(writes > 0, "no write succeeded, so nothing was tested");
+        assert!(
+            in_a_count > 0 && in_b_count > 0,
+            "writes reached only one root ({in_a_count} in root_a, {in_b_count} in root_b), so \
+             the flipper never interleaved and the escape check proved nothing"
+        );
+        assert!(
+            escapes.is_empty(),
+            "writes escaped both roots {} time(s): {:?}",
+            escapes.len(),
+            &escapes[..escapes.len().min(5)]
+        );
+        assert!(
+            mismatches.is_empty(),
+            "the response named a root the bytes did not reach {} time(s): {:?}",
+            mismatches.len(),
+            &mismatches[..mismatches.len().min(5)]
+        );
+    }
+
     /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
