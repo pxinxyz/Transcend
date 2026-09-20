@@ -717,6 +717,71 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
             pr.get("success") is True,
         )
 
+    # ---- encodings, BOMs and line endings --------------------------------
+    # UTF-16 is legitimately binary (NUL bytes), so the interesting cases are the ones that
+    # must NOT be treated as binary, and the line-counting conventions.
+    enc = os.path.join(scratch, "encodings")
+    shutil.rmtree(enc, ignore_errors=True)
+    os.makedirs(enc)
+
+    def blob(name, data):
+        p = os.path.join(enc, name)
+        with open(p, "wb") as fh:
+            fh.write(data)
+        return p
+
+    bom_txt = blob("bom.txt", b"\xef\xbb\xbfalpha\nbravo\n")
+    crlf = blob("crlf.txt", b"alpha\r\nbravo\r\ncharlie\r\n")
+    mixed = blob("mixed.txt", b"alpha\r\nbravo\ncharlie\r\n")
+    utf16 = blob("utf16.txt", "alpha\nbravo\n".encode("utf-16"))
+    bom_rs = blob("bom.rs", b"\xef\xbb\xbfpub fn alpha_one() -> u32 { 1 }\n\n"
+                             b"pub fn beta_two() -> u32 { 2 }\n")
+
+    r = j(s.call("read_file", {"path": crlf, "line_numbers": True}))
+    check(
+        "read_file", "CRLF file reports 3 lines, not 6 or 1",
+        f"total_lines={r.get('total_lines')}",
+        r.get("total_lines") == 3,
+    )
+    r = j(s.call("read_file", {"path": mixed, "line_numbers": True}))
+    check(
+        "read_file", "mixed line endings still count 3 lines",
+        f"total_lines={r.get('total_lines')}",
+        r.get("total_lines") == 3,
+    )
+    r = j(s.call("read_file", {"path": utf16}))
+    check(
+        "read_file", "UTF-16 is reported as binary rather than as text",
+        f"is_binary={r.get('is_binary')}",
+        r.get("is_binary") is True,
+    )
+
+    # A BOM must not attach itself to a symbol name, a signature, or a search match, or every
+    # caller comparing those strings sees a zero-width character it never wrote.
+    r = j(s.call("outline", {"path": bom_rs}))
+    names = [x.get("name", "") for f in r.get("files") or [] for x in f.get("symbols") or []]
+    sigs = [x.get("signature", "") for f in r.get("files") or [] for x in f.get("symbols") or []]
+    check(
+        "outline", "a UTF-8 BOM does not attach to symbol names or signatures",
+        f"names={names} sigs={sigs}",
+        names == ["alpha_one", "beta_two"]
+        and all(not t.startswith("\ufeff") for t in names + sigs),
+    )
+    r = j(s.call("search", {"pattern": "alpha_one", "path": bom_rs}))
+    line = ((r.get("files") or [{}])[0].get("matches") or [{}])[0].get("line_text", "")
+    check(
+        "search", "a BOM does not leak into the first matched line",
+        f"line={line!r}",
+        line.lstrip("\ufeff").startswith("pub fn alpha_one"),
+    )
+    r = j(s.call("read_symbol", {"path": bom_rs, "symbol": "beta_two"}))
+    src = r.get("source_code") or ""
+    check(
+        "read_symbol", "returned source is free of a leading BOM",
+        f"source={src[:40]!r}",
+        not src.startswith("\ufeff"),
+    )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))
