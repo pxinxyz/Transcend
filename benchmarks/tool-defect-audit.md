@@ -2,9 +2,29 @@
 
 Systematic review: every request field in `crates/transcend-protocol/src/lib.rs` was traced
 into `transcend-core`, then verified empirically against the live server and fixtures.
-Findings marked **CONFIRMED** were independently reproduced by me (not just reported).
+Findings marked **CONFIRMED** were independently reproduced rather than only reported.
 
-Note on ownership: none of these are caught by the existing suite.
+Note on ownership: none of these were caught by the existing suite when they were found.
+
+## How to re-check any of this
+
+Two harnesses live alongside this document and both run against a live server:
+
+```sh
+cargo build --bin transcend
+python benchmarks/probe_contracts.py                     # 63 behavioural expectations
+python benchmarks/efficiency.py --corpus <rust-checkout> --run-diagnostics
+python benchmarks/schema_tax.py --compare pre-doc-trim   # schema token cost
+```
+
+`probe_contracts.py` currently reports **62 of 65 honoured**. The three failures are all the
+two items deliberately left for a decision — `read_file`'s missing failure discriminator (2
+checks) and misspelled options being silently defaulted (1). A green run would mean both
+decisions had been taken.
+
+Item 24 (exit-code fidelity) **passes** there, because the probe asserts the property that
+actually holds — zero means success, and a failing command never reports 0 — rather than the
+exact code, which is the part that is degraded.
 
 ## Status
 
@@ -24,26 +44,49 @@ Note on ownership: none of these are caught by the existing suite.
 | 12 | `symbol_kinds`/`exported_only` no-ops for some languages | **fixed** (`2414bb6`) |
 | 13 | `ast_valid:true` when no grammar exists | **documented** (`1161274`) — behaviour change needs a contract decision |
 | 14 | `lsp_status` silently empty for an unknown language | **fixed** (`85f8aae`) |
-| 15 | Shared workspace root makes results order-dependent | open |
-| — | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
-| — | `lsp_diagnostics` fell back to `cargo check` on an empty LSP verdict | **fixed** (`8c22e92`) |
+| 15 | Shared workspace root makes results order-dependent | **narrowed** (`aaf28af`) — ordering, not safety |
+| 16 | `batch_patch` counted requested rather than written files | **fixed** (`c414c8d`) |
+| 17 | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
+| 18 | `lsp_diagnostics` fell back to `cargo check` on an empty LSP verdict | **fixed** (`8c22e92`) |
+| 19 | Outline summary counters described different pipeline stages | **fixed** (`e4ab981`) |
+| 20 | Zero and inverted count budgets reinterpreted rather than refused | **fixed** (`e02d48e`) |
+| 21 | File-root paths wrong in `search`, `find_symbol` **and** `outline` | **fixed** (`5d8aaef`, `824bfa7`) |
+| 22 | `terminal_read.wait_for_pattern` gave up silently | **fixed** (`aaec581`) |
+| 23 | Misspelled option names silently defaulted | **reported**, not fixed |
+| 24 | Non-zero exit codes not always exact through the default shell | **documented** (`abbcdb8`) |
 
-13 of 16 fixed, 1 documented, 2 open. Every fix carries a regression test that was
-confirmed to fail against the pre-fix code. Two findings were corrected during the work:
-item 6 was withdrawn (the code was right, the doc was unsatisfiable), and the
-`lsp_diagnostics` fallback plus the `total_files_patched` / dry-run miscounts were found
-while fixing items 3 and 1.
+**21 of 24 fixed, 2 documented as needing a contract decision, 1 reported.** Every fix carries a
+regression test that was confirmed to fail against the pre-fix code.
+
+Three findings were corrected during the work, which is worth keeping visible:
+
+- item 6 was **withdrawn** — the code was right and the doc comment was unsatisfiable;
+- the `lsp_diagnostics` fallback and the `total_files_patched` / dry-run miscounts were found
+  *while* fixing other items, not by looking for them;
+- item 15 was **narrowed** by test from a suspected boundary failure to an ordering one.
+
+Two of these were my own regressions, introduced earlier in the same session and caught by the
+harnesses rather than by review: the `lsp_diagnostics` "clean" verdict (item 18) and the
+absolute single-file path (part of item 21).
 
 ### Remaining
 
 - **13** `ast_valid: true` for extensions with no grammar. The doc now states the
   limitation and a test pins it, so this is honest. Making it *accurate* needs a decision:
   either a new `ast_validated` field, or rejecting `validate_ast` when no grammar exists.
-  Both change a contract.
+  Both change a contract. Options written up in `IDEAS/ast-valid-contract.md`.
+- **23** Misspelled option names are silently defaulted: `max_result: 5` is accepted and the
+  default cap applies, so a caller asking for 5 results receives 100. Fixing it needs
+  `deny_unknown_fields`, which rejects any unexpected key and so breaks clients that send
+  extra metadata. Pinned by test and by the contract probe.
+- **24** Non-zero exit codes are not always exact through the default shell. Success versus
+  failure survives in every case observed, so this is low severity; naming the shell fixes it.
+  Changing the default shell routing is a behavioural change, so it is left as a decision.
+  The probe's two exit-code checks therefore assert the property (zero means success, a
+  failing command never reports 0) and pass.
 - **15** Shared workspace root is process-global; read-only requests expose no
-  `workspace_root` to pin, so concurrent calls can resolve against different roots. The
-  audit reproduced this with `set_workspace` racing a no-path `find_symbol`. Most invasive
-  of the set and the least likely to be hit by a single-agent session.
+  `workspace_root` to pin, so concurrent calls can resolve against different roots. See the
+  narrowing note below.
 
   **Narrowed by test (`aaf28af`).** A client-level probe was inconclusive because an MCP
   client serialises requests over one session, so it exercised ordering rather than

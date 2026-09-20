@@ -782,6 +782,24 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         not src.startswith("\ufeff"),
     )
 
+    # ---- exit codes: success vs failure must be distinguishable ----
+    # Exact codes are degraded through the default shell (PowerShell collapses some nested
+    # non-zero codes to 1), but the property a caller actually branches on is whether zero
+    # means success, so that is what is asserted. See the audit's item 24.
+    ok = j(s.call("exec", {"command": "rg --version"}))
+    bad = j(s.call("exec", {"command": "cmd /c exit 42"}))
+    check(
+        "exec", "a failing command is not reported with exit code 0",
+        f"rg --version -> {ok.get('exit_code')}; cmd /c exit 42 -> {bad.get('exit_code')}",
+        ok.get("exit_code") == 0 and bad.get("exit_code") not in (0, None),
+    )
+    exact = j(s.call("exec", {"command": "cmd /c exit 42", "shell": "cmd"}))
+    check(
+        "exec", "naming the shell preserves the exact exit code",
+        f"shell=cmd -> {exact.get('exit_code')} (expected 42)",
+        exact.get("exit_code") == 42,
+    )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))
