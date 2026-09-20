@@ -7,9 +7,11 @@
 # Cloned Rust MCP SDK reference
 /rust-sdk/
 
-# Local verification harnesses (probe/efficiency/schema-token scripts).
-# `benchmarks/` is reserved for published model statements; the tooling that produces
-# their numbers stays local so the published record is prose, not scripts.
+# Local verification work: the audit/findings documents and the harnesses that produced
+# them (contract probe, efficiency comparison, schema token measurement).
+#
+# `benchmarks/` is reserved for PUBLISHED model statements only. Audit records are working
+# notes about this repository's own state, so they stay local alongside the tooling.
 /benches/
 
 # Cargo build artifacts
