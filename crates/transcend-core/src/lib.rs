@@ -1450,6 +1450,74 @@ mod tests {
         }
     }
 
+    /// The same empty-relative-path defect existed in three tools, found by comparing how each
+    /// reports a file path for the same root. With a FILE as the root:
+    ///
+    ///   search      -> ""                              (fixed)
+    ///   find_symbol -> ""                              (fixed here)
+    ///   outline     -> "C:/.../root.rs", an absolute path   (fixed here)
+    ///
+    /// while with a directory root all three agree on a relative path. Since the "relative to
+    /// search root" forms are documented, and three tools disagreeing about the same file would
+    /// force callers to special-case each, all three now report the file's own name -- the only
+    /// relative form when the root is the file.
+    #[test]
+    fn file_root_paths_are_relative_across_tools() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let dir = sandbox.dir.join("proj");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("root.rs");
+        fs::write(&file, "pub fn root_fn() -> u32 { 1 }\npath_marker\n").unwrap();
+        let file_str = file.to_string_lossy().to_string();
+
+        // search
+        let sr = engine
+            .search(&SearchRequest {
+                pattern: "path_marker".to_string(),
+                path: Some(file_str.clone()),
+                options: None,
+            })
+            .expect("search should succeed");
+        assert_eq!(sr.files[0].file, "root.rs", "search");
+
+        // find_symbol
+        let fr = engine
+            .find_symbol(&transcend_protocol::FindSymbolRequest {
+                name: "root_fn".to_string(),
+                path: Some(file_str.clone()),
+                exact: Some(true),
+                ..Default::default()
+            })
+            .expect("find_symbol should succeed");
+        assert!(!fr.symbols.is_empty(), "symbol should be found");
+        assert_eq!(fr.symbols[0].file, "root.rs", "find_symbol");
+
+        // outline
+        let or = engine
+            .outline(&OutlineRequest {
+                path: Some(file_str.clone()),
+                content: None,
+                options: None,
+            })
+            .expect("outline should succeed");
+        assert_eq!(or.files[0].file, "root.rs", "outline");
+
+        // A directory root keeps the relative-with-subdirectory form for all three.
+        let dr = engine
+            .outline(&OutlineRequest {
+                path: Some(dir.to_string_lossy().to_string()),
+                content: None,
+                options: None,
+            })
+            .expect("outline should succeed");
+        assert_eq!(
+            dr.files[0].file, "root.rs",
+            "outline under a directory root"
+        );
+    }
+
     /// When `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]

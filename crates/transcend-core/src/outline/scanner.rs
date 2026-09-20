@@ -326,8 +326,16 @@ impl OutlineScanner {
                 .unwrap_or(&file_path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            // FileOutline.file is reported relative to the outline root, so that a directory
+            // root yields `sub/deep.rs` rather than an absolute path. When the root IS the
+            // file there is no relative form except the file's own name; falling back to the
+            // absolute path (as this did) made `outline` the only tool reporting an absolute
+            // path for a file root, while `search` and `find_symbol` reported `root.rs`.
             let display_path = if rel_path.is_empty() {
-                file_path.to_string_lossy().replace('\\', "/")
+                file_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| file_path.to_string_lossy().replace('\\', "/"))
             } else {
                 rel_path
             };

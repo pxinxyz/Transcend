@@ -226,6 +226,18 @@ impl SymbolFinder {
             } else {
                 file_path.to_string_lossy().replace('\\', "/")
             };
+            // When `path` names a single file, the search root IS that file, so stripping the
+            // prefix yields "" and every returned symbol carried `file: ""` -- the same defect
+            // fixed in `search`, present here too. Fall back to the file's own name, which is
+            // the only form relative to a root that is the file itself.
+            let display_path = if display_path.is_empty() {
+                file_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|| file_path.to_string_lossy().replace('\\', "/"))
+            } else {
+                display_path
+            };
 
             let outline =
                 match OutlineScanner::parse_bytes(&display_path, &bytes, &lang, &outline_options) {

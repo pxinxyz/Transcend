@@ -591,7 +591,7 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
     rel_dir = os.path.join(scratch, "relativity")
     shutil.rmtree(rel_dir, ignore_errors=True)
     os.makedirs(os.path.join(rel_dir, "sub"))
-    open(os.path.join(rel_dir, "root.rs"), "w").write("rel_marker\n")
+    open(os.path.join(rel_dir, "root.rs"), "w").write("rel_marker\npub fn root_fn() {}\n")
     open(os.path.join(rel_dir, "sub", "deep.rs"), "w").write("rel_marker\n")
 
     dir_res = j(s.call("search", {"pattern": "rel_marker", "path": rel_dir}))
@@ -605,6 +605,27 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         bool(file_files)
         and all(not os.path.isabs(p) for p in file_files)
         and file_files == ["root.rs"],
+    )
+
+    # The same defect existed in find_symbol and outline: with a file root the former returned
+    # an empty path and the latter an ABSOLUTE one, while both report a relative path under a
+    # directory root. Three tools disagreeing about the same file forces callers to special-case
+    # each, so all three must agree.
+    root_file = os.path.join(rel_dir, "root.rs")
+    fs_res = j(s.call("find_symbol", {"name": "root_fn", "path": root_file, "exact": True}))
+    fs_files = [x.get("file", "") for x in fs_res.get("symbols") or []]
+    check(
+        "find_symbol", "symbol paths are relative with a file root",
+        f"file root -> {fs_files}",
+        bool(fs_files) and fs_files == ["root.rs"],
+    )
+
+    ol_res = j(s.call("outline", {"path": root_file}))
+    ol_files = [f.get("file", "") for f in ol_res.get("files") or []]
+    check(
+        "outline", "outline paths are relative with a file root",
+        f"file root -> {ol_files}",
+        bool(ol_files) and ol_files == ["root.rs"],
     )
 
     # ---- outline summary must describe the returned payload ---------------
