@@ -8,10 +8,11 @@ authors.workspace = true
 [dependencies]
 transcend-core = { workspace = true }
 transcend-protocol = { workspace = true }
-rmcp = { workspace = true, features = ["server", "macros", "transport-io", "schemars"] }
+rmcp = { workspace = true, features = ["server", "client", "macros", "transport-io", "schemars"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }

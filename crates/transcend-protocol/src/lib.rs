@@ -4,9 +4,9 @@
 //! All request and response structures derive `schemars::JsonSchema` for
 //! automated schema generation within the Model Context Protocol.
 
-use std::collections::BTreeMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Request parameters for code searching.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -15,7 +15,12 @@ pub struct SearchRequest {
     #[serde(alias = "query", alias = "regex")]
     pub pattern: String,
     /// Optional directory or file path to search within. Defaults to current directory.
-    #[serde(alias = "dir", alias = "directory", alias = "file_path", alias = "search_path")]
+    #[serde(
+        alias = "dir",
+        alias = "directory",
+        alias = "file_path",
+        alias = "search_path"
+    )]
     pub path: Option<String>,
     /// Optional search tuning options.
     pub options: Option<SearchOptions>,
@@ -38,6 +43,11 @@ pub struct SearchOptions {
     pub context_lines: Option<usize>,
     /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
     pub include_hidden: Option<bool>,
+    /// Whether to honour `.gitignore`. Defaults to true.
+    ///
+    /// Set to false to search ignored paths (vendored SDKs, generated code, build output).
+    /// Independent of `include_hidden`: disabling it does not pull in dotfiles.
+    pub respect_gitignore: Option<bool>,
     /// Optional maximum number of file clusters with empty matches to return before pruning (default: 10).
     pub max_empty_clusters: Option<usize>,
 }
@@ -83,6 +93,9 @@ pub struct DirectoryRadar {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SearchResponse {
     /// Total number of matches encountered across all searched files.
+    ///
+    /// Counting stops at a safety ceiling on pathologically broad patterns. When
+    /// `count_capped` is true this value is a **lower bound**, not an exact count.
     pub total_matches: usize,
     /// Total number of distinct files containing matches.
     pub total_files: usize,
@@ -92,6 +105,12 @@ pub struct SearchResponse {
     pub directory_radar: Vec<DirectoryRadar>,
     /// Whether individual line matches were capped due to the match budget.
     pub truncated: bool,
+    /// Whether `total_matches` hit the internal safety ceiling and was cut short.
+    ///
+    /// A capped count depends on traversal scheduling, so it is not reproducible
+    /// between runs. Narrow the pattern or scope the path when this is true.
+    #[serde(default)]
+    pub count_capped: bool,
 }
 
 /// Request parameters for file discovery.
@@ -128,6 +147,11 @@ pub struct FindOptions {
     pub case_sensitive: Option<bool>,
     /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
     pub include_hidden: Option<bool>,
+    /// Whether to honour `.gitignore`. Defaults to true.
+    ///
+    /// Set to false to discover ignored paths (vendored SDKs, generated code, build output).
+    /// Independent of `include_hidden`: disabling it does not pull in dotfiles.
+    pub respect_gitignore: Option<bool>,
 }
 
 /// A discovered filesystem entry with compact metadata.
@@ -284,7 +308,12 @@ pub struct OutlineSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct OutlineRequest {
     /// File path or directory to outline. If a directory, traverses respecting ignore rules.
-    #[serde(alias = "file_path", alias = "file", alias = "dir", alias = "directory")]
+    #[serde(
+        alias = "file_path",
+        alias = "file",
+        alias = "dir",
+        alias = "directory"
+    )]
     pub path: Option<String>,
     /// Optional direct code content (for in-memory buffer / unsaved code inspection).
     pub content: Option<String>,
@@ -315,6 +344,11 @@ pub struct OutlineOptions {
     pub include_relationships: Option<bool>,
     /// Whether to include hidden files and directories (e.g. .github, .env). Defaults to false.
     pub include_hidden: Option<bool>,
+    /// Whether to honour `.gitignore`. Defaults to true.
+    ///
+    /// Set to false to outline ignored paths (vendored SDKs, generated code, build output).
+    /// Independent of `include_hidden`: disabling it does not pull in dotfiles.
+    pub respect_gitignore: Option<bool>,
 }
 
 /// Response returned by an outline operation.
@@ -418,7 +452,11 @@ pub struct PatchRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<PatchMode>,
     /// Target locator: symbol name (e.g. "Heartbeat::poll" or "SetupVmcsForProcessor").
-    #[serde(skip_serializing_if = "Option::is_none", alias = "symbol", alias = "name")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "symbol",
+        alias = "name"
+    )]
     pub target_symbol: Option<String>,
     /// Occurrence index if multiple symbols share the name (0-based, default: 0).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -440,6 +478,10 @@ pub struct PatchRequest {
     /// If true, performs validation and diff calculation without writing to disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+    /// Optional workspace root boundary to guard against path traversal escape.
+    /// Defaults to the engine's active workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
 }
 
 /// Response returned by a patch operation.
@@ -475,6 +517,10 @@ pub struct BatchPatchRequest {
     /// If true, performs validation and diff calculation without writing to disk.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+    /// Optional workspace root boundary to guard against path traversal escape.
+    /// Defaults to the engine's active workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
 }
 
 /// Response returned by a batch patch operation.
@@ -505,7 +551,12 @@ pub struct FindSymbolRequest {
     #[serde(alias = "symbol", alias = "query", alias = "pattern")]
     pub name: String,
     /// Optional directory or file path to search within. Defaults to current directory.
-    #[serde(alias = "file", alias = "file_path", alias = "dir", alias = "directory")]
+    #[serde(
+        alias = "file",
+        alias = "file_path",
+        alias = "dir",
+        alias = "directory"
+    )]
     pub path: Option<String>,
     /// Optional symbol kind filter (e.g. "function", "struct", "macro", "interface").
     pub kind: Option<SymbolKind>,
@@ -579,13 +630,21 @@ pub struct LspDefinitionRequest {
     pub path: String,
     /// Identifier name or symbol to find definition for (e.g. "poll", "Config::new").
     /// If provided, Tree-sitter resolves its coordinate in the file before querying LSP.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "name",
+        alias = "query"
+    )]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "col",
+        alias = "column"
+    )]
     pub character: Option<usize>,
 }
 
@@ -617,13 +676,21 @@ pub struct LspReferencesRequest {
     #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Identifier name or symbol to find references for.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "name",
+        alias = "query"
+    )]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "col",
+        alias = "column"
+    )]
     pub character: Option<usize>,
     /// Whether to include the declaration/definition itself in the results. Defaults to false.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -664,13 +731,21 @@ pub struct LspHoverRequest {
     #[serde(alias = "file", alias = "file_path")]
     pub path: String,
     /// Identifier name or symbol to hover over.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "name", alias = "query")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "name",
+        alias = "query"
+    )]
     pub symbol: Option<String>,
     /// 1-based line number (optional if symbol is provided).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
     /// 1-based column number (optional if symbol is provided).
-    #[serde(skip_serializing_if = "Option::is_none", alias = "col", alias = "column")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "col",
+        alias = "column"
+    )]
     pub character: Option<usize>,
 }
 
@@ -723,7 +798,12 @@ pub struct LspDiagnosticItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct LspDiagnosticsRequest {
     /// File or directory path to retrieve diagnostics for. If omitted, returns all workspace diagnostics.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "file", alias = "file_path", alias = "dir")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "file",
+        alias = "file_path",
+        alias = "dir"
+    )]
     pub path: Option<String>,
     /// Optional severity filter (e.g. only return errors).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -882,7 +962,11 @@ pub struct ExecRequest {
     #[serde(alias = "cmd")]
     pub command: String,
     /// Working directory for execution. If omitted, defaults to the current workspace root.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "working_directory", alias = "dir")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "working_directory",
+        alias = "dir"
+    )]
     pub cwd: Option<String>,
     /// Transport mode: "auto" (default), "pipe", or "pty".
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1101,6 +1185,10 @@ pub struct WriteFileRequest {
     /// Whether to automatically create missing parent directories. Defaults to true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub create_parents: Option<bool>,
+    /// Optional workspace root boundary to guard against path traversal escape.
+    /// Defaults to the engine's active workspace root.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<String>,
 }
 
 /// Response returned by a write_file operation.
@@ -1199,7 +1287,12 @@ pub struct GitFileEntry {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct GitStatusRequest {
     /// Optional directory path within the git repository. Defaults to active workspace root.
-    #[serde(skip_serializing_if = "Option::is_none", alias = "dir", alias = "directory", alias = "workspace_root")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "dir",
+        alias = "directory",
+        alias = "workspace_root"
+    )]
     pub path: Option<String>,
 }
 
