@@ -13,469 +13,159 @@
   <a href="https://conventionalcommits.org"><img src="https://img.shields.io/badge/Conventional%20Commits-1.0.0-%23FE5196?logo=conventionalcommits&logoColor=white" alt="Conventional Commits"></a>
   <a href="https://github.com/pxinxyz/Transcend/releases"><img src="https://img.shields.io/github/v/release/pxinxyz/Transcend?color=blue&label=version" alt="Release"></a>
   <a href="https://modelcontextprotocol.io"><img src="https://img.shields.io/badge/MCP-23%20Tools-8A2BE2" alt="MCP Compatible"></a>
-  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-115%20passed-brightgreen" alt="Tests"></a>
+  <a href="https://github.com/pxinxyz/Transcend"><img src="https://img.shields.io/badge/tests-154%20passing-brightgreen" alt="Tests"></a>
   <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-2024%20edition-orange?logo=rust" alt="Rust Edition"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
 </p>
 
 ---
 
-## The Paradigm Shift
+Transcend embeds a Rust-native codebase intelligence engine directly into the agent
+lifecycle over the **Model Context Protocol**. Instead of spawning `grep`, `find`, `cat`
+and `sed` and asking the model to act as a regex filter and coordinate calculator, agents
+call 23 typed primitives that return structured, token-compact data with exact source
+spans.
 
-Modern AI coding agents (Claude Code, Cursor, Windsurf, Zed, Antigravity) are trapped in an obsolete loop inherited from terminal workflows:
+Two things it does that shell tooling cannot:
 
-1. Execute generic CLI subprocesses (`grep`, `find`, `cat`, `sed`, `head`, `tail`)
-2. Ingest megabytes of human-formatted terminal stdout into the prompt
-3. Force the model to act as a **text parser, regex filter, and coordinate calculator**
-4. Waste 80%+ of the context budget on whitespace and boilerplate before reasoning begins
-5. Attempt brittle string replacements that fail on whitespace drift or silently introduce syntax errors
+- **Compiler-resolved semantics.** Seven tools have no shell equivalent — the LSP tier,
+  plus `terminal_write`, `terminal_resize` and `set_workspace`. Text search cannot tell a
+  real reference from one in a comment, and cannot infer a type at all.
+- **Verified mutations.** `patch` and `batch_patch` parse the spliced buffer with
+  Tree-sitter *before* touching disk and refuse invalid syntax with exact line/column;
+  `batch_patch` aborts atomically across files.
 
-**Transcend fundamentally replaces this paradigm.**
+For measured comparisons against `rg`, `cat` and native file tooling — including where
+Transcend is *larger* or slower — see **[BENCHMARK.md](BENCHMARK.md)**.
 
-Instead of launching external shell utilities and parsing unstructured strings, Transcend embeds a high-performance **Rust-native codebase intelligence engine** directly into the agent lifecycle via the **Model Context Protocol (MCP)**. 
+## Tools
 
-Transcend replaces blind scraping with **23 typed, AST-aware, LSP-native, terminal execution, and version control primitives** organized across four computational tiers:
+| Tool | Purpose |
+|:---|:---|
+| **Discovery & search** | |
+| `find` | File discovery with a directory-density radar and extension census |
+| `search` | Regex search returning per-file clusters plus a directory density radar |
+| `find_symbol` | Locate definitions by name, qualified path, or kind across the workspace |
+| **Reading** | |
+| `outline` | AST symbol hierarchy, or a syntax-valid `skeleton` with bodies elided |
+| `read_symbol` | One symbol's exact source, doc comment and byte span |
+| `read_file` | Line/byte bounded reader with binary detection |
+| **Writing** | |
+| `write_file` | Atomic write with collision and parent-directory guards |
+| `patch` | Edit by symbol, span or text with Tree-sitter preflight |
+| `batch_patch` | Transactional multi-file changeset with all-or-nothing semantics |
+| `delete_path` | Workspace-contained deletion with a recursion guard |
+| `set_workspace` | Set or auto-detect the workspace root for relative paths |
+| **Language servers** | |
+| `lsp_definition` | Compiler-resolved definition, with a Tree-sitter fallback |
+| `lsp_references` | Compiler-resolved references (no comment or string false positives) |
+| `lsp_hover` | Inferred type signature and distilled documentation |
+| `lsp_diagnostics` | Compiler diagnostics, with a native `cargo check` JSON fallback |
+| `lsp_status` | Audit installed language servers, paths and install recipes |
+| `lsp_install` | Install a language server via the host package manager |
+| **Execution** | |
+| `exec` | Hybrid one-shot execution: pipe or PTY, blocking or detached |
+| `terminal_read` | Cursor-based incremental output streaming |
+| `terminal_write` | Interactive stdin delivery to a detached session |
+| `terminal_resize` | PTY dimension control |
+| `terminal_kill` | Process-tree termination (Job Objects / POSIX process groups) |
+| **Version control** | |
+| `git_status` | Structured porcelain-v2 status instead of scraped text |
 
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                       LLM AGENT                                        │
-└───────────────────────────────────────────┬────────────────────────────────────────────┘
-                                            │ Model Context Protocol (MCP)
-                                            ▼
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    TRANSCEND ENGINE                                    │
-│                                                                                        │
-│  [ Tier 1: Codebase Intelligence & File Lifecycle ]                                    │
-│    find               Topological Radar & Extension Census                             │
-│    search             Clustered Ripgrep Heatmaps & Content Search                      │
-│    find_symbol        Smart Casing & Subsequence Definition Finder                     │
-│    outline            AST Structural Tree or Syntax-Valid Skeletons                     │
-│    read_symbol        Surgical Semantic Symbol Extraction                              │
-│    read_file          Line-Bounded Fast Chunked Reader with Binary-Safety              │
-│    write_file         Atomic File Creator with Overwrite & Parent Directory Guards     │
-│    delete_path        Workspace-Contained File & Recursive Directory Deletion          │
-│    patch              AST-Guarded Patching with Splicing Modes (Insert/Prepend/Append) │
-│    batch_patch        Consolidated Multi-File Atomic Changeset with Rollback           │
-│    set_workspace      Dynamic Workspace Root Anchor & Auto-Resolution                  │
-│                                                                                        │
-│  [ Tier 2: Language Server Protocol (LSP) ]                                            │
-│    lsp_definition     Exact Cross-File Definition Navigation (Tree-sitter Bridge)      │
-│    lsp_references     Semantic Multi-File Usage Extraction                             │
-│    lsp_hover          Distilled Type Signatures & Cleaned Documentation                │
-│    lsp_diagnostics    Auto-Warming Real-Time Compiler Diagnostics (JSON Fallback)      │
-│    lsp_status         Audit Detected Language Servers, Locations & Recipes             │
-│    lsp_install        Automated Language Server Installation via Host Package Managers │
-│                                                                                        │
-│  [ Tier 3: Hybrid Terminal & PTY Execution ]                                           │
-│    exec               Hybrid One-Shot Execution with Auto-Detach (Pipe vs PTY)         │
-│    terminal_read      Cursor-Based Incremental Output Streaming                        │
-│    terminal_write     Interactive Stdin Delivery & Keystroke Injection                 │
-│    terminal_resize    PTY Dimension Adjustment (Rows / Cols)                           │
-│    terminal_kill      Process Tree Termination (Windows Job Objects / POSIX PGID)      │
-│                                                                                        │
-│  [ Tier 4: Version Control & Git Lifecycle ]                                           │
-│    git_status         Structured Porcelain v2 Git Repository Inspector                 │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
+## Languages
 
----
+18 language profiles, each with a compiled Tree-sitter grammar feeding `outline`,
+`find_symbol` and `read_symbol`. The LSP tier discovers an installed language server
+per profile and otherwise falls back to a Tree-sitter heuristic; the response reports
+which engine answered. C and C++ are separate profiles sharing `clangd`.
 
-## Tier 1: Codebase Intelligence Primitives
+| | | |
+|:---|:---|:---|
+| Rust (`rust-analyzer`) | TypeScript / JS (`typescript-language-server`) | Python (`pyright`, `ruff`) |
+| Go (`gopls`) | C / C++ (`clangd`) | C# (`csharp-ls`) |
+| Java (`jdtls`) | Kotlin (`kotlin-language-server`) | PHP (`intelephense`) |
+| Ruby (`solargraph`) | Swift (`sourcekit-lsp`) | Dart (`dart language-server`) |
+| Zig (`zls`) | Lua (`lua-language-server`) | Bash (`bash-language-server`) |
+| SQL (`sql-language-server`) | Markdown (`marksman`) | |
 
-### 1. `find` — Topological Radar & File Census
-Replaces blind `find` / `fd` commands that return overwhelming flat lists.
-- **Directory Radar**: Aggregates directory densities (`{"src/auth": 14, "src/db": 8}`) so agents navigate codebases hierarchically.
-- **Extension Census**: Summarizes project composition (`{"rs": 45, "ts": 12, "sql": 4}`).
-- **Directory Diversity**: Prevents deep subtrees (like `node_modules` or vendor folders) from starving other project areas of visibility.
-- **Budget Control**: Hard byte and file limits with deterministic truncated flags.
-
-### 2. `search` — Density Heatmaps & Clustered Search
-Replaces raw `grep` / `ripgrep` shell invocations.
-- **Hierarchical Clustering**: Groups matches by directory cluster and file, exposing density heatmaps where patterns concentrate.
-- **Line Length Compaction**: Automatically truncates minified lines or SVG paths to prevent context window explosion.
-- **Multi-Threaded Traversal**: In-process parallel scanning using `ignore` and `grep-regex` matching kernels.
-- **Ignore Control**: `respect_gitignore` (default `true`) is independent of `include_hidden`, so vendored or generated paths listed in `.gitignore` can be searched without also pulling in dotfiles and `.git/`.
-
-### 3. `find_symbol` — Global Definition Finder
-Bridges the gap between content search and surgical inspection.
-- **Two-Stage Hybrid Engine**: Parallel ripgrep word-boundary pre-filtering (sub-millisecond across thousands of files) followed by in-process Tree-sitter AST extraction on matching candidate files.
-- **Zero File Guesswork**: Resolves symbols by bare name (`SetupVmcsForProcessor`) or qualified path (`Heartbeat::poll`, `Uart::write_byte`) across entire repositories without knowing which file contains the definition.
-- **Classification & Coordinates**: Returns exact declaration signatures, docstrings, spans, visibility, and symbol kinds (functions, structs, classes, macros, typedefs, methods, traits).
-
-### 4. `outline` — AST Symbol Hierarchy & Skeletons
-Replaces reading full source files just to understand their high-level structure.
-- **Format: `tree`**: Deep semantic symbol hierarchy detailing classes, methods, functions, interfaces, structs, macros, and fields with exact byte and line coordinates.
-- **Format: `skeleton`**: Generates **100% syntax-valid code stubs** where function/class bodies are pruned to `{ ... }` while preserving all signatures, types, and docstrings.
-- **70–90% Token Reduction**: Reduces 1,500-line source files into ~350 tokens of clean, parseable syntax.
-
-### 5. `read_symbol` — Surgical Semantic Extraction
-Replaces manual line slicing and coordinate arithmetic (`sed -n 42,88p`).
-- **Qualified Locators**: Inspect symbols by simple name (`login`) or qualified hierarchy (`AuthManager::validate_token`).
-- **Context Preservation**: Automatically extracts leading docstrings, annotations, attributes, and surrounding comments.
-- **Zero Coordinate Math**: The agent never needs to calculate line numbers or offsets to view a function.
-
-### 6. `read_file` — Structured Bounded Line/Byte Reader
-Provides safe, token-bounded inspection of arbitrary non-code and configuration assets (`.env`, `.toml`, `.json`, logs).
-- **Line-Bounded Slicing**: Requests specific slices (`start_line`, `end_line`) with 1-based line numbering.
-- **Binary Detection Safety**: Probes initial bytes for NUL bytes, omitting raw binary blobs to protect agent context.
-- **Strict Byte Caps**: Enforces hard byte budgets (`max_bytes`) to prevent catastrophic multi-megabyte prompt dumps.
-
-### 7. `write_file` — Atomic File Creator
-Replaces unverified shell file redirects (`cat << 'EOF' > ...` or `Set-Content`).
-- **Atomic Disk Swaps**: Writes to a sibling temporary file, flushes to disk with `sync_all()`, and executes an atomic filesystem rename.
-- **Collision Protection**: Default `overwrite: false` fails cleanly if a file already exists, preventing accidental overwrites.
-- **Directory Provisioning**: Automatically provisions nested parent directories (`mkdir -p`) when `create_parents: true`.
-
-### 8. `delete_path` — Workspace-Contained File & Directory Deletion
-Replaces dangerous `rm -rf` commands with safety-governed workspace deletion.
-- **Path-Traversal Containment**: Canonicalizes target paths and verifies they remain strictly within the workspace boundary, blocking any `..` escape attacks.
-- **Recursion Guard**: Requires explicit `recursive: true` to delete non-empty directory trees.
-
-### 9. `patch` — AST-Guarded Surgical Code Modifier
-Replaces brittle regex replacements and unverified diff tools.
-- **In-Memory Preflight AST Verification**: Before writing anything to disk, parses the modified buffer with Tree-sitter. If syntax errors or missing tokens (`ERROR` or `MISSING` nodes) are detected, the patch is **rejected immediately with exact diagnostics**.
-- **Auto-Healing Indentation**: Dynamically calculates surrounding indentation margins, eliminating indentation mismatch errors common in LLM generations.
-- **Splicing Modes**: Supports `replace`, `insert_before`, `insert_after`, `prepend_to_symbol` (injecting into symbol body), and `append_to_symbol` (adding methods/items right before the closing delimiter).
-- **Multi-Modal Targeting**: Target changes via `target_symbol` (AST node replacement), `target_span` (precise coordinates), or `target_text` (guarded substring).
-- **Unified Diff Output & Dry Runs**: Generates clean unified diffs and supports safe simulation via `dry_run: true`.
-
-### 10. `batch_patch` — Multi-File Transactional Atomic Changesets
-Solves the danger of multi-file refactorings leaving repositories in half-broken intermediate states.
-- **Workspace-Wide Preflight**: Validates Tree-sitter AST syntax for **all** target files simultaneously before committing any changes.
-- **All-or-Nothing Disk Atomicity**: If any single file in the batch fails AST validation or encounter conflicts, zero files are modified on disk.
-- **Automated Rollback**: If an I/O error occurs mid-application, automatically restores all previously modified files from in-memory backups.
-
-### 11. `set_workspace` — Workspace Root Configuration & Auto-Resolution
-Dynamically sets or anchors the active project directory for all operations.
-- **Anchor Detection**: Auto-detects workspace root via `Cargo.toml`, `.git`, or `package.json` boundaries when unset.
-- **Seamless Path Resolution**: All path-based tools (`search`, `find`, `outline`, `patch`, `read_file`, `exec`) resolve relative paths against the active workspace root.
-
----
-
-## Tier 2: Language Server Protocol (LSP) Subsystem
-
-Transcend integrates official, standardized language servers over asynchronous stdio JSON-RPC 2.0 and distills responses into token-compact models for agents.
-
-```
-┌───────────────────────────┐         ┌───────────────────────────────────┐
-│   Tree-sitter Bridge      │         │     Token Distiller & Compactor   │
-│  (Symbol -> Line/Col)     │         │  (Prune JSON Bloat, Format Spans) │
-└─────────────┬─────────────┘         └─────────────────▲─────────────────┘
-              │                                         │
-              ▼                                         │
-┌───────────────────────────────────────────────────────┴─────────────────┐
-│                         LspSessionPool                                  │
-│  - Auto-Discovery (PATH detection, Workspace root discovery)            │
-│  - Process Lifecycle (Spawn, Handshake, Document Sync didOpen/didChange)│
-│  - Graceful Fallback (Tree-sitter heuristics when server is uninstalled)│
-└─────────────────────────────────────┬───────────────────────────────────┘
-                                      │ stdio JSON-RPC 2.0
-           ┌──────────────────────────┼──────────────────────────┐
-           ▼                          ▼                          ▼
-   [ rust-analyzer ]              [ gopls ]                  [ clangd ]
-```
-
-### 12. `lsp_definition` — Cross-File Semantic Definition Navigation
-- **Tree-sitter Coordinate Bridge**: Accepts symbol queries (`"TerminalEngine::exec"`) and maps them to 0-based `(line, col)` coordinates in microseconds before querying the language server.
-- **Semantic Resolution**: Accurately resolves type aliases, trait implementations, macros, and imports across modular boundaries.
-- **Zero Crashes via Heuristics**: If a language server binary is not installed locally, Transcend gracefully falls back to Tree-sitter heuristics.
-
-### 13. `lsp_references` — Multi-File Semantic Usages
-- **True References**: Distinguishes semantic references from substring collisions, variable shadows, or commented-out code.
-- **Clustered Preview**: Returns occurrences grouped by file path with snippet previews and exact line/character coordinates.
-
-### 14. `lsp_hover` — Distilled Type Signatures & Docstrings
-- **Distilled Intelligence**: Strips raw HTML, unformatted markdown, and verbose JSON protocol wrappers into clean function signatures, type bounds, and docstrings.
-- **Immediate Context**: Inspect complex generic signatures and traits without having to navigate away to the source definition.
-
-### 15. `lsp_diagnostics` — Compiler & Typechecker Diagnostics
-- **Live Background Stream**: Subscribes to `textDocument/publishDiagnostics` published by language servers during session edits.
-- **Precise Filtering**: Filters diagnostics by file path and severity (`Error`, `Warning`, `Information`, `Hint`).
-- **Native Fallback**: Automatically invokes in-process `cargo check --message-format=json` compiler diagnostics when language server binaries are unavailable.
-
-### 16. `lsp_status` — Language Server Audit & Recipe Discovery
-Audits all 18 supported language server profiles across system `PATH` and toolchain directories (`~/.cargo/bin`, `%APPDATA%\npm`, `~/.transcend/bin`, `~/go/bin`).
-- **Dynamic Resolution**: Discovers candidate binaries dynamically in priority order with zero hardcoded paths.
-- **Probe & Version**: Safely queries `--version` or `version` with bounded timeouts, filtering out shell errors.
-- **Recipe Manifest**: Returns available installation recipes and detects whether each package manager is available on the host.
-
-### 17. `lsp_install` — Automated Language Server Installation
-Enables agents and developers to install missing language servers on demand.
-- **Auto-Selection**: Inspects available host package managers (`npm`, `rustup`, `cargo`, `go`, `pip`, `dotnet`, `winget`, `brew`) and selects the optimal recipe.
-- **Async Execution & Safety**: Bounded 180-second timeout with full stdout/stderr capture and exit code checks.
-- **Immediate Verification**: Confirms post-install executable discovery and fetches the active version string without requiring system restart.
-
----
-
-## Tier 3: Hybrid Terminal & PTY Execution Subsystem
-
-Transcend solves the fundamental dilemma of agent shell execution by decoupling **transport** (`pipe` vs. `pty`) from **lifecycle** (`blocking` vs. `detached`).
-
-```
-                              ┌───────────────────────────────────┐
-                              │            LLM Agent              │
-                              └─────────────────┬─────────────────┘
-                                                │
-                 ┌──────────────────────────────┴──────────────────────────────┐
-                 │                                                             │
-                 ▼                                                             ▼
-       [ Routine / Batch CLI ]                                      [ Interactive / TTY CLI ]
-    cargo check, git status, find                                   npm run dev, python -i, REPL
-                 │                                                             │
-                 ▼                                                             ▼
-      Transport: PipeTransport                                     Transport: PtyTransport
-    (tokio::process async pipes)                                  (native ConPTY / openpty)
-                 │                                                             │
-                 └──────────────────────────────┬──────────────────────────────┘
-                                                │
-                                                ▼
-                                    ┌───────────────────────┐
-                                    │   CursorRingBuffer    │
-                                    │  (Fixed-size circular │
-                                    │   monotonic stream)   │
-                                    └───────────┬───────────┘
-                                                │
-                                                ▼
-                                   Process Tree Governance
-                           Windows Job Objects / POSIX PGID
-                                                │
-                        ┌───────────────────────┴───────────────────────┐
-                        ▼                                               ▼
-         [ Exited within timeout_ms ]                     [ Still running at timeout_ms ]
-           Return status: "exited"                          TimeoutAction::Detach (default)
-           output, exit_code, cursor                        Return status: "detached", session_id
-```
-
-### 18. `exec` — Hybrid Execution with Auto-Detach
-- **Fast Path (Single Turn)**: Routine commands that exit within `timeout_ms` (e.g. `cargo check`, `git status`) return immediate exit codes and output in a single tool turn without multi-turn polling overhead.
-- **Auto-Detach (Long-Running Tasks)**: Long-running servers (`npm run dev`, `cargo watch`, Python REPLs) automatically detach without hanging the turn, returning a persistent `session_id`.
-- **Decoupled Transport**: Automatically uses `pipe` for quiet batch utilities and `pty` (ConPTY / openpty) for TTY-aware tools.
-- **Direct Raw Mode**: Supports `raw: true` for direct binary execution avoiding shell interpretation.
-
-### 19. `terminal_read` — Cursor-Based Incremental Output Streaming
-- **Monotonic Cursor**: Accepts `cursor: usize` and returns `next_cursor: usize`. Subsequent turns read only new output, eliminating repetitive context-wasteful re-reads.
-- **Pattern Await**: Optional `wait_for_pattern` waits for specific terminal prompts (e.g. `Ready on http://localhost`) before returning.
-- **CR (`\r`) Line Folding**: Interactive CLI progress bars, spinners, and download counters are folded to their final state in-place, slashing token usage by up to 90%.
-- **ANSI Sanitization**: In-process terminal escape sequence stripping via `strip-ansi-escapes`.
-- **Ring Buffer Bounds**: 1 MB bounded circular buffer with head/tail slicing protects against out-of-memory crashes on runaway output.
-
-### 20. `terminal_write` — Interactive Stdin Delivery
-- Injects keystrokes, commands, and interactive responses (`y\n`, Ctrl+C `\x03`) into active detached sessions and REPLs.
-
-### 21. `terminal_resize` — PTY Dimension Control
-- Adjusts pseudo terminal column and row geometry (`cols`, `rows`) to adapt output layouts for CLI dashboards and TUIs.
-
-### 22. `terminal_kill` — Process Tree Termination
-- **Windows Job Objects**: Binds process trees to kernel Job Objects with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, ensuring that complex child/grandchild processes (`node.exe`, `vite.exe`) are killed atomically without port leaks.
-- **Asynchronous PTY Disposal**: Cleans up ConPTY pseudo console handles on dedicated background worker threads to prevent Win32 synchronous pipe-drain deadlocks.
-
----
-
-## Tier 4: Version Control & Git Lifecycle
-
-### 23. `git_status` — Structured Porcelain v2 Git Inspector
-Replaces terminal string scraping like `git status -s` with strongly-typed, token-compact JSON.
-- **Full State Breakdown**: Categorizes modified files into `staged`, `unstaged`, `untracked`, and `conflicted` lists.
-- **Branch & Tracking Awareness**: Extracts active branch (`branch`), tracking upstream (`upstream`), and precise commit divergence (`ahead`, `behind`).
-- **Clean Indicator**: `is_clean: true` allows agents to instantly verify repository state before or after batch modifications.
-- **Clean Indicator**: `is_clean: true` allows agents to instantly verify repository state before or after batch modifications.
-
----
-
-## Polyglot AST & Language Server Engine (18 Languages)
-
-Transcend features native, compiled **Tree-sitter** grammar parsers paired with seamless language server auto-discovery for 18 industry-standard languages:
-
-| Language | Tree-sitter Grammar | Official Language Server | Key Symbols Extracted |
-|:---|:---|:---|:---|
-| **Rust** | `tree-sitter-rust` | `rust-analyzer` | Functions, Impls, Structs, Enums, Traits, Macros, Consts |
-| **TypeScript / JS** | `tree-sitter-typescript` | `typescript-language-server` | Classes, Interfaces, Methods, Enums, Types, Functions |
-| **Python** | `tree-sitter-python` | `pyright` / `ruff` | Classes, Methods, Functions, Decorated Items, Docstrings |
-| **Go** | `tree-sitter-go` | `gopls` | Functions, Methods (with Receivers), Types, Interfaces, Structs |
-| **C / C++** | `tree-sitter-c` / `cpp` | `clangd` | Classes, Namespaces, Methods, Templates, Macros |
-| **C#** | `tree-sitter-c-sharp` | `csharp-ls` | Classes, Interfaces, Records, Structs, Methods, Namespaces |
-| **Java** | `tree-sitter-java` | `jdtls` | Classes, Interfaces, Records, Enums, Methods |
-| **Kotlin** | `tree-sitter-kotlin-ng` | `kotlin-language-server` | Classes, Objects, Functions, Interfaces, Companion Objects |
-| **PHP** | `tree-sitter-php` | `intelephense` | Classes, Interfaces, Traits, Enums, Functions, Methods |
-| **Ruby** | `tree-sitter-ruby` | `solargraph` | Classes, Modules, Methods, Singleton Methods |
-| **Swift** | `tree-sitter-swift` | `sourcekit-lsp` (or Heuristic) | Classes, Structs, Protocols, Enums, Extensions, Functions |
-| **Dart** | `tree-sitter-dart` | `dart language-server` | Classes, Mixins, Enums, Extensions, Methods, Functions |
-| **Zig** | `tree-sitter-zig` | `zls` | Functions, Structs, Tests, Enums, Unions |
-| **Lua** | `tree-sitter-lua` | `lua-language-server` | Global & Local Functions, Table Methods |
-| **Bash / Shell** | `tree-sitter-bash` | `bash-language-server` | Shell Functions, Aliases |
-| **SQL** | `tree-sitter-sequel` | `sql-language-server` | Create Table, Create View, Stored Procedures, Functions |
-| **Markdown** | `tree-sitter-md` | `marksman` | Document Headings (H1–H6) |
-
----
-
-## Token Efficiency Benchmarks
-
-Empirical context consumption comparisons measured across popular open-source repositories:
-
-| Target File / Operation | Standard CLI / Cat Workflow | Transcend Primitive | Token Savings |
-|:---|:---|:---|:---|
-| **Flask `app.py`** (Explore structure) | 1,840 lines (`cat`) &rarr; **~7,400 tokens** | `outline(skeleton)` &rarr; **820 tokens** | **88.9% reduction** |
-| **Gin `gin.go`** (Inspect `Engine` type) | 680 lines (`cat`) &rarr; **~3,100 tokens** | `read_symbol("Engine")` &rarr; **290 tokens** | **90.6% reduction** |
-| **Hypervisor `VMCS.c`** (Inspect function) | 420 lines (`view_file`) &rarr; **~2,800 tokens** | `read_symbol("SetupVmcs")` &rarr; **310 tokens** | **88.9% reduction** |
-| **FastAPI codebase** (Repository map) | Recursive `fd` &rarr; **~9,200 tokens** | `find(radar=true)` &rarr; **440 tokens** | **95.2% reduction** |
-| **Cross-file Symbol Jump** (Find declaration) | Multiple `grep` + file reads &rarr; **~4,500 tokens** | `lsp_definition` &rarr; **180 tokens** | **96.0% reduction** |
-| **Build output / Progress spinner** | Terminal raw logs &rarr; **~5,200 tokens** | `terminal_read` (CR folded) &rarr; **410 tokens** | **92.1% reduction** |
-
----
-
-## Quickstart & Installation
-
-### Build from Source
+## Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/pxinxyz/Transcend.git
 cd Transcend
-
-# Build the release binary
-cargo build --release
-
-# The compiled binary is located at target/release/transcend
+cargo build --release          # binary at target/release/transcend
+cargo test --workspace         # 154 tests
 ```
 
-Run test suite to verify:
-```bash
-cargo test --workspace
-```
-
-### CLI Subcommands
-
-Transcend operates both as an MCP server daemon and as a standalone CLI tool:
+Transcend runs as an MCP server over stdio by default, and as a CLI for language-server
+management:
 
 ```bash
-# Audit detected language servers, binary paths, and recipes
-transcend lsp status
-
-# Audit a specific language server
-transcend lsp status typescript
-
-# Automatically install an official language server
-transcend lsp install typescript
-
-# Install using a specific package manager
-transcend lsp install python --method pip
-
-# Export every registered tool schema (name, description, JSON Schema) as <tool>.json
-transcend export-schemas --out ./schemas
+transcend                                  # MCP server daemon over stdio
+transcend lsp status [language]            # audit servers, binaries and recipes
+transcend lsp install <language> [-m pkg]  # install via the host package manager
+transcend export-schemas --out ./schemas   # dump tool schemas from the live router
 ```
 
-`export-schemas` reads the **live tool router**, so the exported schemas cannot drift
-from what the server actually serves. It replaces an earlier in-test schema dump that
-wrote into a hardcoded per-machine agent config directory.
+`export-schemas` reads the running tool router, so the exported schemas cannot drift from
+what the server actually serves.
 
----
+## MCP configuration
 
-## Model Context Protocol (MCP) Configuration
+Transcend speaks standard `stdio` JSON-RPC 2.0. Register the binary with your client:
 
-Transcend communicates over standard `stdio` JSON-RPC 2.0. Add it to your agent or editor configuration:
-
-> **Schema portability.** Transcend rewrites every advertised tool schema into a
-> portable JSON Schema subset (`$ref` inlined, no `$defs`/`$schema`, no `type`
-> arrays or `anyOf`, no `format`/`minimum`). Hosts that enforce a restricted subset
-> — DeepSeek Harness validates only
-> `type`/`oneOf`/`properties`/`required`/`additionalProperties`/`items`/`enum`/`const`
-> — reject the entire tool otherwise, so the raw `schemars` output would register
-> zero tools. No configuration is needed; this is handled by the server.
-
-### Claude Desktop
-Add to `claude_desktop_config.json`:
-```json
+```jsonc
+// Claude Desktop (claude_desktop_config.json) / Claude Code (~/.claude.json)
 {
   "mcpServers": {
-    "transcend": {
-      "command": "/path/to/transcend",
-      "args": []
-    }
+    "transcend": { "command": "/path/to/transcend", "args": [] }
   }
 }
 ```
 
-### Claude Code CLI
-Add to `~/.claude.json`:
-```json
-{
-  "mcpServers": {
-    "transcend": {
-      "command": "/path/to/transcend"
-    }
-  }
-}
-```
+For Cursor and Windsurf, add an MCP server in **Settings → Features → MCP** with type
+`stdio` and the same command.
 
-### Cursor & Windsurf
-Add a new MCP server in **Settings &rarr; Features &rarr; MCP**:
-- **Name**: `transcend`
-- **Type**: `stdio`
-- **Command**: `/path/to/transcend`
+> **Schema portability.** Tool schemas are rewritten into a portable JSON Schema subset
+> (`$ref` inlined; no `$defs`, `$schema`, `type` arrays, `anyOf` or `format`). Some hosts
+> enforce a restricted subset and would otherwise reject every tool — DeepSeek Harness
+> validates only `type`/`oneOf`/`properties`/`required`/`additionalProperties`/`items`/
+> `enum`/`const`. This is handled by the server; no configuration is needed. See
+> [Verifying MCP integration](#verifying-mcp-integration).
 
-### Windows Example
-```json
-{
-  "mcpServers": {
-    "transcend": {
-      "command": "C:\\Projects\\General Workspace\\Idea\\Transcend\\target\\release\\transcend.exe"
-    }
-  }
-}
-```
+## Platform support
 
----
+The execution subsystem is OS-specific, isolated behind `#[cfg(...)]` in
+`transcend-core/src/terminal/platform.rs` and `lsp/installer.rs`:
 
-## Project Architecture
+| Concern | Windows | Linux / macOS |
+|:---|:---|:---|
+| Interactive terminals | ConPTY via `portable-pty` | `openpty` (`setsid` session leader) |
+| Process-tree kill | Job Object (`KILL_ON_JOB_CLOSE`), `taskkill /T /F` fallback | Own process group (`setpgid`), then a descendant sweep (`/proc/<pid>/task/*/children`, or `pgrep -P`) |
+| Default shell | PowerShell (`pwsh` if present), `cmd /C` when `&&`/`\|\|` is detected | `$SHELL`, else `/bin/bash`, with `-c` |
+| PTY line input | `\n` translated to `\r` | `\n` passed through |
 
-Transcend is designed with strict boundaries and zero unnecessary dependencies:
+**Windows 10 Pro 22H2 (build 19045) is the verified platform.** The Unix branches are
+implemented and unit-tested where testable, but their integration paths — process groups,
+the `pgrep` sweep, `openpty` behaviour — have not been exercised on a Linux or macOS host.
+Treat them as unproven until someone runs the suite there. There is no hosted CI.
+
+`.gitattributes` pins LF repository-wide; without it a Windows checkout stores CRLF in the
+working tree while the index holds LF, so `cargo fmt --check` disagrees between machines.
+
+## Architecture
 
 ```text
 Transcend/
 ├── crates/
-│   ├── transcend-protocol/   # Strongly-typed schemas, JSON-RPC contracts, and request/response models
-│   ├── transcend-core/       # Core computational engines:
-│   │   ├── find.rs / search.rs  # Ripgrep-grade search, directory radar, and diversity sampling
-│   │   ├── find_symbol.rs       # Smart casing & token subsequence definition finder
-│   │   ├── outline/             # 18 Tree-sitter parsers, semantic hierarchy, and syntax skeletonizer
-│   │   ├── patch.rs             # In-memory preflight AST verification, splicing, and batch changesets
-│   │   ├── file_ops.rs          # Bounded line/byte reader, atomic file creator, and contained deletion
-│   │   ├── git_ops.rs           # In-process porcelain v2 git status inspector
-│   │   ├── lsp/                 # LSP stdio JSON-RPC pool, coordinate bridge, installer, and token distillation
-│   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
-│   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (23 tools)
-│   └── transcend-cli/        # Binary entry point and CLI runner
-├── .gitattributes            # LF line-ending policy (see Platform Support)
-├── banner.png                # Transcend visual identity
+│   ├── transcend-protocol/   # Typed request/response contracts and JSON schemas
+│   ├── transcend-core/       # Engines: search, traversal, outline, patch, lsp, terminal
+│   ├── transcend-server/     # MCP tool router (rmcp) and stdio serving
+│   └── transcend-cli/        # Binary entry point and CLI subcommands
+├── BENCHMARK.md              # Measured comparison against native tooling
+├── .gitattributes            # LF line-ending policy
 └── Cargo.toml                # Workspace definition
 ```
-
----
-
-## Platform Support
-
-The execution subsystem is genuinely OS-specific, and the code that differs is isolated
-behind `#[cfg(...)]` in `transcend-core/src/terminal/platform.rs` (shell resolution,
-process-tree ownership) and `lsp/installer.rs` (package-manager recipes):
-
-| Concern | Windows | Linux / macOS |
-|:---|:---|:---|
-| Interactive terminals | ConPTY via `portable-pty` | `openpty` via `portable-pty` (`setsid` session leader) |
-| Process-tree ownership | Job Object with `KILL_ON_JOB_CLOSE`, `taskkill /T /F` fallback | Own process group (`setpgid`) signalled, then a descendant sweep (`/proc/<pid>/task/*/children` on Linux, `pgrep -P` elsewhere) |
-| Default shell | PowerShell (`pwsh` if present, else `powershell.exe`), `cmd /C` when `&&`/`\|\|` chaining is detected | `$SHELL`, falling back to `/bin/bash`, invoked with `-c` |
-| PTY line input | `\n` translated to `\r` (console hosts submit only on carriage return) | `\n` passed through |
-
-**Windows is the platform this project is currently verified on** (Windows 10 Pro 22H2,
-build 19045). The Unix branches are implemented and unit-tested where testable, but their
-integration paths — process groups, the `pgrep` descendant sweep, `openpty` behaviour —
-have not been exercised on a Linux or macOS host. Treat them as unproven until someone
-runs the suite there.
-
-`.gitattributes` pins LF repository-wide. Without it a Windows checkout stores CRLF in the
-working tree while the index holds LF, so `cargo fmt --check` disagrees between machines
-and every diff is noisy.
-
----
 
 ## Development
 
@@ -493,46 +183,38 @@ traversal throughput is the point of the project.
 ### Verifying MCP integration
 
 `cargo test` covers the protocol over an in-memory duplex transport. To check a real
-harness end to end, point its MCP client at the release binary and confirm the tools
-appear with a normalized schema:
+harness end to end, point its MCP client at the release binary and confirm all 23 tools
+appear with a normalized schema. For DeepSeek Harness
+(`~/.dsh/profiles/<profile>/cordis.patch.yml`):
 
-```bash
-cargo build --release -p transcend-cli
-# then register it, e.g. for DeepSeek Harness (~/.dsh/profiles/<profile>/cordis.patch.yml):
-#
-#   - insert:
-#       - id: mcp-transcend
-#         name: '@deepseek-ai/dsh-mcp-client'
-#         config:
-#           serverName: transcend
-#           transport: stdio
-#           command: '/abs/path/to/target/release/transcend'
-#           cwd: '/abs/path/to/repo'
-#           failOnStartupError: true
-#
-# A bare top-level entry is an id-targeted *override*, not an insertion: it must be
-# nested under `insert:` or the loader warns `entry not found` and silently skips it.
+```yaml
+- insert:
+    - id: mcp-transcend
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: transcend
+        transport: stdio
+        command: '/abs/path/to/target/release/transcend'
+        cwd: '/abs/path/to/repo'
+        failOnStartupError: true
 ```
 
----
+The entry must be nested under `insert:`. A bare top-level entry is an id-targeted
+*override*, not an insertion, and the loader skips it with `entry not found`.
 
 ## Contributing
 
-Transcend follows the [Conventional Commits](https://conventionalcommits.org) specification.
+Commits follow the [Conventional Commits](https://conventionalcommits.org) specification:
 
 ```text
-<type>[optional scope]: <description>
-
 feat(patch): add in-memory AST syntax validation
 fix(outline): resolve method receiver binding in Go
 docs(readme): update MCP setup instructions
 ```
 
----
-
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
 
 <p align="center">
   <sub>Made with &#9829; by <a href="https://github.com/pxinxyz">pxin</a></sub>
