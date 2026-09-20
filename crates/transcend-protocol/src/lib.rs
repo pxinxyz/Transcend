@@ -73,9 +73,23 @@ pub struct FileCluster {
     /// File path containing matches (relative to search root).
     pub file: String,
     /// Total number of matches encountered in this file.
+    ///
+    /// Always exact: the counter is incremented for every match the searcher sees, even
+    /// when the match budget stops the line text from being collected.
     pub match_count: usize,
     /// Extracted line matches for this file.
+    ///
+    /// Empty while `match_count` is non-zero when the global budget ran out before this
+    /// file. [`Self::matches_truncated`] distinguishes that from a file with no matches.
     pub matches: Vec<SearchMatch>,
+    /// Whether matches were omitted from [`Self::matches`] by the global budget.
+    ///
+    /// A consumer needing the line text for a truncated cluster must re-query with a
+    /// larger `max_matches` or a narrower path. The counts and
+    /// [`SearchResponse::directory_radar`] stay accurate either way, which is why the
+    /// text is dropped rather than the whole cluster.
+    #[serde(default)]
+    pub matches_truncated: bool,
 }
 
 /// Macro-level directory radar summarizing match distribution across the directory tree.

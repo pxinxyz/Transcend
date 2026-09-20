@@ -170,6 +170,8 @@ impl SearchScanner {
                         file: relative_path,
                         match_count: file_match_count,
                         matches: local_matches,
+                        // Decided below, once the global budget is known.
+                        matches_truncated: false,
                     });
                 }
 
@@ -194,17 +196,29 @@ impl SearchScanner {
             file.matches.sort_by_key(|m| m.line_number);
         }
 
-        // Apply global max_matches budget across files
+        // Apply global max_matches budget across files.
+        //
+        // Clusters are ordered by density before this point, so the most concentrated
+        // files keep their text. A cluster whose text is dropped still reports its exact
+        // `match_count`, and `matches_truncated` records that the omission was the budget
+        // rather than an absence of matches — without it a consumer cannot tell an empty
+        // cluster from an exhausted one.
         let mut accumulated_matches = 0;
         for file in &mut files {
             if accumulated_matches >= max_matches {
-                file.matches.clear();
+                if !file.matches.is_empty() {
+                    file.matches.clear();
+                }
+                file.matches_truncated = file.match_count > 0;
             } else if accumulated_matches + file.matches.len() > max_matches {
                 let allowed = max_matches - accumulated_matches;
                 file.matches.truncate(allowed);
                 accumulated_matches += allowed;
+                file.matches_truncated = file.match_count > file.matches.len();
             } else {
                 accumulated_matches += file.matches.len();
+                // A file can also be short of its count when `max_per_file` capped it.
+                file.matches_truncated = file.match_count > file.matches.len();
             }
         }
 

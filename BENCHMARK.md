@@ -88,9 +88,11 @@ Both reported **26 matches** — no divergence in the count. Transcend returns f
 line bodies (budget-capped) plus a `directory_radar` locating density
 (`ignore/src` 25, `core/flags` 1). `rg` returns every line verbatim but no aggregation.
 
-**Where `search` loses:** it returns *clusters with empty match arrays* once the budget
-is hit (`walk.rs {match_count: 5, matches: []}`). A consumer that wants the actual lines
-must re-query or re-grep. `rg` never does this.
+**Where `search` loses:** it returns clusters with empty match arrays once the budget is
+hit (`walk.rs {match_count: 5, matches: []}`). A consumer that wants the actual lines
+must re-query. **Mitigated:** each cluster now carries `matches_truncated`, so an
+exhausted cluster is distinguishable from a file with no matches, and `match_count` stays
+exact for the radar either way. `rg` still returns every line verbatim in one shot.
 
 ### 3.2 `outline` — 4.44x reduction on a 7,220-line file
 
@@ -335,8 +337,9 @@ The real differentiator is **a different class of answer**:
 2. **LSP queries degraded on a cold repository.** **Fixed**: semantic requests now use a
    cold-start deadline and `goto_definition` retries while the server indexes (§3.7).
 3. **Budget-capped results include empty match arrays**, so a consumer must re-query to
-   get line text, unlike `rg`. **Unchanged** — this is a deliberate trade-off for keeping
-   `directory_radar` counts truthful, but it is a real ergonomic cost.
+   get line text, unlike `rg`. **Mitigated**: clusters now report `matches_truncated`, so
+   the omission is explicit rather than indistinguishable from an empty file. The
+   re-query is still required — keeping `directory_radar` counts truthful depends on it.
 
 Plus one unexplained observation: the regex-alternation query returning 0 matches.
 

@@ -3849,6 +3849,68 @@ pub fn compute_checksum(val: u32) -> u32 {
         assert!(!parsed.count_capped);
     }
 
+    /// A budget-capped cluster must stay distinguishable from a file with no matches.
+    ///
+    /// The cluster's `match_count` stays exact for the directory radar, but its text is
+    /// dropped once the global budget is exhausted. `matches_truncated` is what tells a
+    /// consumer to re-query instead of concluding the file was empty.
+    #[test]
+    fn test_search_budget_marks_clusters_whose_matches_were_dropped() {
+        let sandbox = TestSandbox::create();
+        // Two files: one dense, one sparse, so the budget must ration between them.
+        fs::write(sandbox.dir.join("dense.txt"), "needle\n".repeat(28)).unwrap();
+        fs::write(sandbox.dir.join("sparse.txt"), "needle\nneedle\n").unwrap();
+
+        let engine = NativeEngine::new();
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "needle".to_string(),
+                path: Some(sandbox.path_str()),
+                options: Some(SearchOptions {
+                    max_matches: Some(10),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        // The count is never capped by the line budget.
+        assert_eq!(res.total_matches, 30, "counts must stay exact");
+        assert!(res.truncated, "line budget was exceeded");
+
+        let dense = res.files.iter().find(|f| f.file.contains("dense")).unwrap();
+        let sparse = res
+            .files
+            .iter()
+            .find(|f| f.file.contains("sparse"))
+            .unwrap();
+
+        // Every cluster reports its true density, yet the text is budgeted.
+        assert_eq!(dense.match_count, 28);
+        assert_eq!(sparse.match_count, 2);
+        let retained: usize = res.files.iter().map(|f| f.matches.len()).sum();
+        assert!(retained <= 10, "retained {retained} exceeds the budget");
+
+        // Any cluster whose text falls short of its count must say so.
+        for cluster in &res.files {
+            assert_eq!(
+                cluster.matches_truncated,
+                cluster.match_count > cluster.matches.len(),
+                "cluster {} has match_count={} but {} retained and matches_truncated={}",
+                cluster.file,
+                cluster.match_count,
+                cluster.matches.len(),
+                cluster.matches_truncated
+            );
+        }
+
+        // Dense-first ordering means the densest file keeps its text.
+        assert!(!dense.matches.is_empty(), "densest file should retain text");
+
+        // The radar still reflects true density for both files.
+        let total_radar: usize = res.directory_radar.iter().map(|d| d.match_count).sum();
+        assert_eq!(total_radar, 30, "radar must not be affected by the budget");
+    }
+
     #[test]
     fn test_batch_patch_transactional_rollback() {
         let sandbox = TestSandbox::create();
