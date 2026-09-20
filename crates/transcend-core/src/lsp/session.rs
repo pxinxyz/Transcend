@@ -127,7 +127,6 @@ impl LspSession {
         // Background stdout reader task
         let pending_clone = Arc::clone(&pending_requests);
         let diags_clone = Arc::clone(&diagnostics_cache);
-        let root_clone = workspace_root.clone();
 
         tokio::spawn(async move {
             let mut reader = LspMessageReader::new();
@@ -158,11 +157,15 @@ impl LspSession {
                                 && let Some(uri_str) = params.get("uri").and_then(|u| u.as_str())
                             {
                                 let file_path = uri_to_path(uri_str);
-                                let rel_path = file_path
-                                    .strip_prefix(&root_clone)
-                                    .unwrap_or(&file_path)
-                                    .to_string_lossy()
-                                    .replace('\\', "/");
+                                // Store the ABSOLUTE path, normalised to forward slashes.
+                                // These values are both the cache key and the `file` field of
+                                // every LspDiagnosticItem, and the caller filters them against
+                                // the caller's own (absolute, engine-resolved) path. Deriving a
+                                // path relative to the session root here made the filter
+                                // arithmetically incapable of matching: a relative key can
+                                // never contain an absolute path, so every filter returned
+                                // zero diagnostics and a broken file looked clean.
+                                let file_key = file_path.to_string_lossy().replace('\\', "/");
 
                                 let mut items = Vec::new();
                                 if let Some(diags) =
@@ -223,7 +226,7 @@ impl LspSession {
                                             + 1;
 
                                         items.push(LspDiagnosticItem {
-                                            file: rel_path.clone(),
+                                            file: file_key.clone(),
                                             severity,
                                             span: SourceSpan {
                                                 start_line,
@@ -241,7 +244,7 @@ impl LspSession {
                                 }
 
                                 let mut cache = diags_clone.write().await;
-                                cache.insert(rel_path, items);
+                                cache.insert(file_key, items);
                             }
                         }
                     }

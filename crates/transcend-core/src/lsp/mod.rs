@@ -202,6 +202,11 @@ impl LspEngine {
         }
 
         let active_sessions = self.pool.active_sessions().await;
+        // Whether any language server actually answered. An empty result from a live server is
+        // a verdict ("this file is clean"), which is a completely different thing from "no
+        // server was available" -- conflating the two let the `cargo check` fallback replace a
+        // correct clean result with errors from unrelated files in the same workspace.
+        let lsp_consulted = !active_sessions.is_empty();
         let mut all_diags = Vec::new();
 
         for session in active_sessions {
@@ -211,8 +216,9 @@ impl LspEngine {
             all_diags.extend(res.diagnostics);
         }
 
-        // 2. If no diagnostics obtained from LSP sessions (or no LSP installed), attempt native compiler JSON fallback
-        if all_diags.is_empty() {
+        // 2. Only fall back to native compiler JSON when no language server was available.
+        //    An empty-but-consulted LSP result must be returned as-is.
+        if !lsp_consulted {
             let path_filter = req.path.clone();
             let sev_filter = req.severity;
             let root = workspace_root.clone();

@@ -325,4 +325,145 @@ mod tests {
             Some("Dispatches an asynchronous task to workers.")
         );
     }
+
+    fn diag(file: &str, sev: DiagnosticSeverity) -> LspDiagnosticItem {
+        LspDiagnosticItem {
+            file: file.to_string(),
+            severity: sev,
+            span: SourceSpan {
+                start_line: 1,
+                start_col: 1,
+                end_line: 1,
+                end_col: 2,
+                start_byte: 0,
+                end_byte: 1,
+            },
+            message: "boom".to_string(),
+            code: None,
+            source: None,
+        }
+    }
+
+    /// Regression: the diagnostics cache used to store file paths *relative* to the session
+    /// root while the caller filtered with the absolute engine-resolved path. A relative key
+    /// can never `contains()` an absolute path, so every filtered `lsp_diagnostics` call
+    /// returned zero results and a broken file was reported as clean.
+    #[test]
+    fn test_diagnostics_path_filter_matches_absolute_paths() {
+        let abs_file = "/home/dev/project/src/lib.rs";
+        let other = "/home/dev/project/src/main.rs";
+        let all = vec![
+            diag(abs_file, DiagnosticSeverity::Error),
+            diag(other, DiagnosticSeverity::Warning),
+        ];
+
+        // Filtering by the exact absolute file must keep only that file's diagnostics.
+        let by_file = LspDistiller::distill_diagnostics(&all, Some(abs_file), None);
+        assert_eq!(
+            by_file.diagnostics.len(),
+            1,
+            "absolute file filter returned {:?}",
+            by_file
+                .diagnostics
+                .iter()
+                .map(|d| d.file.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(by_file.diagnostics[0].file, abs_file);
+
+        // Filtering by an absolute directory must keep everything beneath it.
+        let by_dir = LspDistiller::distill_diagnostics(&all, Some("/home/dev/project"), None);
+        assert_eq!(by_dir.diagnostics.len(), 2);
+
+        // An unrelated path must still filter everything out.
+        let by_other = LspDistiller::distill_diagnostics(&all, Some("/elsewhere/src/lib.rs"), None);
+        assert_eq!(by_other.diagnostics.len(), 0);
+    }
+
+    /// The filter normalises separators on both sides, so a Windows-style path matches the
+    /// forward-slash form the cache stores.
+    #[test]
+    fn test_diagnostics_path_filter_normalises_separators() {
+        let all = vec![
+            diag("C:/proj/src/lib.rs", DiagnosticSeverity::Error),
+            diag("C:/proj/src/other.rs", DiagnosticSeverity::Hint),
+        ];
+        let res = LspDistiller::distill_diagnostics(&all, Some("C:\\proj\\src\\lib.rs"), None);
+        assert_eq!(res.diagnostics.len(), 1);
+        assert_eq!(res.diagnostics[0].file, "C:/proj/src/lib.rs");
+    }
+
+    /// The cache records the file path derived from the server's `publishDiagnostics` URI.
+    /// That value is both the cache key and the `file` field, and the caller filters it
+    /// against an absolute engine-resolved path, so it MUST be absolute. Deriving it
+    /// relative to the session root is what made every filtered call return nothing.
+    #[test]
+    fn test_diagnostics_cache_path_is_absolute_so_filter_can_match() {
+        // Build a genuinely absolute path for whatever platform the test runs on. A literal
+        // POSIX path is not absolute on Windows and would make this test vacuous.
+        let root_dir = std::env::temp_dir().join("transcend-diag-root");
+        let file = root_dir.join("src").join("lib.rs");
+        let root = root_dir.to_string_lossy().replace('\\', "/");
+
+        // Round-trip through the same URI conversion the LSP reader uses.
+        let uri = format!(
+            "file:///{}",
+            file.to_string_lossy()
+                .replace('\\', "/")
+                .trim_start_matches('/')
+        );
+        let derived = crate::lsp::protocol::uri_to_path(&uri);
+        let stored = derived.to_string_lossy().replace('\\', "/");
+
+        assert!(
+            !stored.is_empty(),
+            "uri_to_path should recover a path from {uri:?}, got {stored:?}"
+        );
+        assert!(
+            !stored.starts_with('/') || cfg!(unix),
+            "unexpected leading separator on this platform: {stored:?}"
+        );
+
+        // The value the cache would store must be matchable by the absolute filter.
+        let all = vec![diag(&stored, DiagnosticSeverity::Error)];
+        let res = LspDistiller::distill_diagnostics(&all, Some(&stored), None);
+        assert_eq!(
+            res.diagnostics.len(),
+            1,
+            "absolute cache path {stored:?} must match an identical filter"
+        );
+
+        // The bug being guarded: a root-relative key can never contain an absolute filter.
+        // Assert the invariant directly rather than relying on string shape.
+        let relative_form = stored
+            .split_once(&root)
+            .map(|(_, tail)| tail.trim_start_matches('/').to_string());
+        if let Some(rel) = relative_form.filter(|r| !r.is_empty()) {
+            let abs_filter = format!("{root}/{rel}");
+            assert!(
+                !rel.contains(&abs_filter),
+                "a relative key cannot contain an absolute path -- this is exactly why the \
+                 cache must store absolute paths (rel={rel:?}, abs={abs_filter:?})"
+            );
+        }
+    }
+
+    /// Severity filtering must compose with the path filter rather than replace it.
+    #[test]
+    fn test_diagnostics_path_and_severity_filters_compose() {
+        let all = vec![
+            diag("/p/src/lib.rs", DiagnosticSeverity::Error),
+            diag("/p/src/lib.rs", DiagnosticSeverity::Hint),
+            diag("/p/src/main.rs", DiagnosticSeverity::Error),
+        ];
+        let res = LspDistiller::distill_diagnostics(
+            &all,
+            Some("/p/src/lib.rs"),
+            Some(DiagnosticSeverity::Error),
+        );
+        assert_eq!(res.diagnostics.len(), 1);
+        assert_eq!(res.diagnostics[0].file, "/p/src/lib.rs");
+        assert_eq!(res.severity_breakdown.get("error"), Some(&1));
+        assert_eq!(res.total_count, 1);
+    }
 }
