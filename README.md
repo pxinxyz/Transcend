@@ -112,26 +112,31 @@ what the server actually serves.
 
 ## MCP configuration
 
-Transcend speaks standard `stdio` JSON-RPC 2.0. Register the binary with your client:
+Transcend speaks standard `stdio` JSON-RPC 2.0, so any MCP-capable client can host it.
 
-```jsonc
-// Claude Desktop (claude_desktop_config.json) / Claude Code (~/.claude.json)
-{
-  "mcpServers": {
-    "transcend": { "command": "/path/to/transcend", "args": [] }
-  }
-}
-```
+**The easy way: just ask your agent.** MCP registration differs per client and changes
+often, so rather than copying a config snippet that will be stale in six months, point
+your coding agent at this repository and let it wire itself up:
 
-For Cursor and Windsurf, add an MCP server in **Settings → Features → MCP** with type
-`stdio` and the same command.
+> Clone `https://github.com/pxinxyz/Transcend`, build it with `cargo build --release`,
+> and register `target/release/transcend` as a `transcend` MCP server over stdio.
+
+That works in Claude Code, Cursor, Zed, Codex, Windsurf, DeepSeek Harness, Hermes Agent,
+Kimi, and anything else that speaks MCP. If it can read this README, it can do the setup.
+
+The manual path is the usual one for your client: a `mcpServers` entry in
+`claude_desktop_config.json` or `~/.claude.json`, an MCP server under
+**Settings → Features → MCP** in Cursor and Windsurf, or an entry in the client's own MCP
+config file. Type is always `stdio`; the command is the absolute path to the binary.
+
+Either way, confirm 23 `transcend` tools appear — see
+[Verifying MCP integration](#verifying-mcp-integration) if they don't.
 
 > **Schema portability.** Tool schemas are rewritten into a portable JSON Schema subset
 > (`$ref` inlined; no `$defs`, `$schema`, `type` arrays, `anyOf` or `format`). Some hosts
-> enforce a restricted subset and would otherwise reject every tool — DeepSeek Harness
-> validates only `type`/`oneOf`/`properties`/`required`/`additionalProperties`/`items`/
-> `enum`/`const`. This is handled by the server; no configuration is needed. See
-> [Verifying MCP integration](#verifying-mcp-integration).
+> enforce a restricted subset and would otherwise reject *every* tool rather than the one
+> that offends — which is why a server advertising raw `schemars` output registers zero
+> tools there. Handled by the server; nothing to configure.
 
 ## Platform support
 
@@ -182,25 +187,16 @@ traversal throughput is the point of the project.
 
 ### Verifying MCP integration
 
-`cargo test` covers the protocol over an in-memory duplex transport. To check a real
-harness end to end, point its MCP client at the release binary and confirm all 23 tools
-appear with a normalized schema. For DeepSeek Harness
-(`~/.dsh/profiles/<profile>/cordis.patch.yml`):
+`cargo test` covers the protocol over an in-memory duplex transport
+(`test_mcp_stdio_protocol_round_trip` drives `initialize` → `tools/list` → `tools/call`).
+For a real end-to-end check, `cargo run -p transcend-cli -- export-schemas --out ./schemas`
+must produce 23 files; it reads the live router, so a missing or malformed schema there is
+a server defect rather than a client one.
 
-```yaml
-- insert:
-    - id: mcp-transcend
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: transcend
-        transport: stdio
-        command: '/abs/path/to/target/release/transcend'
-        cwd: '/abs/path/to/repo'
-        failOnStartupError: true
-```
-
-The entry must be nested under `insert:`. A bare top-level entry is an id-targeted
-*override*, not an insertion, and the loader skips it with `entry not found`.
+Client-specific registration quirks belong in that client's own documentation. One that
+has bitten this project: in DeepSeek Harness a profile patch entry must be nested under
+`insert:` — a bare top-level entry is an id-targeted *override*, not an insertion, and the
+loader skips it with `entry not found`.
 
 ## Contributing
 
