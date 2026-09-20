@@ -53,6 +53,26 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## `search` cluster paths broke their own contract for a file root (fixed)
+
+`FileCluster.file` is documented as "relative to search root". Probing the three root shapes:
+
+| root | reported path |
+|---|---|
+| `<dir>` | `root.rs`, `sub/deep.rs` |
+| `<subdir>` | `deep.rs` |
+| `<file>` | `C:/.../proj/root.rs` — **absolute** |
+
+An earlier fix in this series made the single-file case non-empty by falling back to the
+absolute path, which satisfied "names the file" but broke the documented meaning and made
+`search` disagree with `find` and `outline` — both report `root.rs` for the same file.
+
+Fixed in `5d8aaef`: with a file root the file's own name is reported, since that is the only
+relative form available and it matches the other tools. The existing regression test asserted
+only non-emptiness plus a filename suffix, so it passed on *both* forms; it now asserts the
+exact value and that the path is not absolute. A weaker assertion let a wrong fix through for
+several rounds, which is the argument for asserting the contract rather than a proxy for it.
+
 ## Outline summary counters described different stages (fixed)
 
 Found by probing whether a count field means the same thing across tools. On an 8-file,
