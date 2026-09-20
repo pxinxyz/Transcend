@@ -53,6 +53,31 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## Misspelled options are silently defaulted (reported, not fixed)
+
+An option name that does not exist is accepted without complaint, so the default applies and
+the caller cannot tell. Verified live on a directory of 150 files:
+
+| request | returned |
+|---|---|
+| `find max_results: 5` | 5 entries |
+| `find max_result: 5` (typo) | **100 entries** |
+| `search max_matches: 3` | 3 matches |
+| `search max_match: 3` (typo) | **50 matches** |
+
+Asking for a *smaller* budget than the default silently returns up to 20x more output than
+intended. The reverse is worse: asking for more results than the default returns fewer, so
+relevant results are missing with no signal — the same confident-wrong-answer shape as the
+other defects here.
+
+The protocol carries **56 `alias` attributes**, so being forgiving about naming is clearly
+deliberate. Forgiving *silently* is not the same as forgiving usefully.
+
+**Not fixed**: making it loud needs `deny_unknown_fields` on the option structs, which rejects
+any unexpected key and is therefore a breaking change for hosts that send extra metadata.
+Pinned by `misspelled_option_names_are_silently_ignored`; the contract probe asserts the
+desirable behaviour and fails until the decision is taken.
+
 ## Defect found by the contract probe (fixed)
 
 **`terminal_read` gave up on `wait_for_pattern` without saying so.** `wait_for_pattern` is
