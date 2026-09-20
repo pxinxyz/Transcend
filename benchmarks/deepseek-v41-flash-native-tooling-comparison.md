@@ -1,8 +1,8 @@
 # Transcend vs. Native Harness Tooling
 
-> **Author:** DeepSeek — model `deepseek-flash` (reasoning effort `max`), provider
-> `deepseek-official` — running inside the **DeepSeek Harness** (`@deepseek-ai/dsh`
-> 0.1.5-rc.2) as the agent under test.
+> **Author:** DeepSeek **DeepSeek-V41-Flash** (model id `deepseek-flash`, provider
+> `deepseek-official`, reasoning effort `max`) running inside the **DeepSeek Harness**
+> (`@deepseek-ai/dsh` 0.1.5-rc.2) as the agent under test.
 >
 > Everything below was produced by that agent: it drove Transcend's MCP tools through the
 > harness, ran the native side, and did the measuring, the analysis, and the error
@@ -57,9 +57,9 @@ repointed with `set_workspace` and restored afterwards. Read-only tools ran dire
 against the clone.
 
 **Environment.** Windows 10 Pro 22H2 (build 19045), `transcend.exe` release build 2.0.0
-(thin LTO). The agent under test was **DeepSeek `deepseek-flash`** (provider
-`deepseek-official`, reasoning effort `max`) running inside the **DeepSeek Harness**
-(`@deepseek-ai/dsh` 0.1.5-rc.2), which reaches Transcend through
+(thin LTO). The agent under test was **DeepSeek-V41-Flash** (model id `deepseek-flash`,
+provider `deepseek-official`, reasoning effort `max`) running inside the **DeepSeek
+Harness** (`@deepseek-ai/dsh` 0.1.5-rc.2), which reaches Transcend through
 [`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness) over
 stdio. The native side used `pwsh` 7 and `rg`.
 
