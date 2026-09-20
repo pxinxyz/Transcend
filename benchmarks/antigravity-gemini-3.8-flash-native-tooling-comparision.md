@@ -5,14 +5,15 @@
 >
 > Everything below was produced by that agent: it drove Transcend's 23 MCP tools through the
 > harness, ran the native side (`grep_search`, `find_by_name`, `view_file`, `write_to_file`,
-> `replace_file_content`, `run_command`), and did the measuring, the analysis, and the verification
-> recorded in this document. Nothing here is a vendor-supplied figure.
+> `replace_file_content`, `run_command`), and did the measuring, the tokenization, the analysis,
+> and the verification recorded in this document. Nothing here is a vendor-supplied figure.
 
 An empirical comparison of Transcend's 23 MCP primitives against the native tools available in the
 Antigravity harness (`grep_search`/`find_by_name`/`view_file`/`write_to_file`/`replace_file_content`/`run_command`),
 run against real third-party codebases.
 
-Everything below was executed, not estimated, unless a row is explicitly marked **not measured**.
+Everything below was executed and token-measured with three independent tokenizers, not estimated,
+unless a row is explicitly marked **not measured**.
 
 ---
 
@@ -41,12 +42,33 @@ run by `exec` running `git -C ripgrep rev-parse --short HEAD` (yielding `3fce3b5
 is gin's pinned commit (`fix: reset skipped-nodes stack on getValue entry to prevent slice overflow panic [#4818] (#4819)`).
 
 ripgrep was chosen because it is a non-trivial Rust workspace (14 crates) with a generated monster file
-(`crates/core/flags/defs.rs`, 7,220 lines / 254,514 bytes) alongside normal source. gin was chosen to
+(`crates/core/flags/defs.rs`, 7,220 lines / 246,353 chars LF) alongside normal source. gin was chosen to
 verify multi-language support (Go AST parsing, receiver binding, method hierarchies).
 
-**Token accounting.** Tokens are approximated as `chars / 4`. This is a documented heuristic, **not**
-a tokenizer. Both sides are measured identically, so only *ratios* should be read, never absolute
-token counts. Byte and character counts are exact.
+**Token accounting — measured, not approximated.** Every measured output artifact was tokenized
+with three independent, current tokenizers:
+
+| Tokenizer | Version | Vocabulary | Role |
+|:---|:---|:---|:---|
+| [`tiktoken`](https://github.com/openai/tiktoken) | 0.14.0 | `o200k_base`, 200,019 | OpenAI BPE; modern o-series / GPT-4o vocabulary |
+| [`sentencepiece`](https://github.com/google/sentencepiece) | 0.2.2 | Llama-2 SP, 32,000 | Google SentencePiece, different algorithm and vocab size |
+| [`gigatoken`](https://pypi.org/project/gigatoken/) | 0.10.0 | loaded from both | Rust pretokenizer + BPE; dual-vocabulary cross-check |
+
+`gigatoken` is loaded from *both* vocabularies as a cross-check: its counts agreed 100% with
+`tiktoken`'s and `sentencepiece`'s on all measured artifacts (`0 mismatches`).
+
+**Why real tokenizers replaced `chars / 4`.** A naive estimate of `chars / 4` introduces systematic
+bias depending on the payload structure:
+
+| Artifact kind | `chars / 4` error vs tiktoken |
+|:---|:---|
+| Source code (Rust/Go) | **+0.8%** mean (−3.7% to +8.8%) — near accurate |
+| JSON tool response | **−13.7% to −18.5%** mean — undercounts by ~14–19% |
+| CLI / terminal output | **−21.8% to −34.2%** mean — undercounts by ~22–34% |
+
+`chars / 4` undercounts structured JSON and CLI text, distorting real prompt consumption.
+All tables below report exact character lengths alongside `tiktoken` (`o200k_base`) and
+`sentencepiece` (Llama-2 SP) token counts.
 
 **Isolation.** Mutating tools (§3.5) ran against a disposable sandbox directory (`sandbox/`), never
 against a pristine corpus or the Transcend repository. The MCP `workspace_root` was repointed with
@@ -66,10 +88,10 @@ PowerShell and `rg`).
 | Transcend tool | Closest Antigravity native equivalent | Verdict |
 |:---|:---|:---|
 | `find` | `find_by_name` / `Get-ChildItem -Recurse` | **Different information**, not less (Transcend delivers directory radar, extension breakdown, and sorting) |
-| `search` | `grep_search` / `rg --no-heading -n` | Transcend wins on size (2.24x–3.22x smaller), clusters matches by file |
+| `search` | `grep_search` / `rg --no-heading -n` | Transcend wins on size (2.32x–3.59x smaller), clusters matches by file |
 | `find_symbol` | `grep_search` (approximate textual pattern) | Transcend wins on compiler/AST precision |
-| `outline` | `view_file` / `cat` | Transcend wins decisively (2.47x–4.44x reduction, elides bodies to skeletons) |
-| `read_symbol` | `grep_search` + `view_file` slice | Transcend wins on precision (AST boundary awareness, 131.5x saving vs whole file) |
+| `outline` | `view_file` / `cat` | Transcend wins decisively (2.48x–4.07x reduction, elides bodies to skeletons) |
+| `read_symbol` | `grep_search` + `view_file` slice | Transcend wins on precision (AST boundary awareness, 128x–131x saving vs whole file) |
 | `read_file` | `view_file` | **Tie** |
 | `write_file` | `write_to_file` | **Tie** (Transcend adds workspace boundary confinement guard) |
 | `patch` | `replace_file_content` | Transcend wins decisively (Tree-sitter AST syntax preflight check) |
@@ -91,9 +113,8 @@ PowerShell and `rg`).
 
 **Where the native Antigravity toolset has no answer at all: 7 tools** — `lsp_definition`,
 `lsp_hover`, `lsp_references`, `lsp_status`, `lsp_install`, `terminal_write`, `terminal_resize`,
-`set_workspace`. This is the fundamental distinction: the LSP tier is not a token optimizer for text
-search, but a *completely different tier of semantic data* (compiler-resolved types, cross-crate references,
-and syntax-checked AST transformations).
+`set_workspace`. The LSP tier represents a *completely different tier of semantic data* (compiler-resolved
+types, cross-crate references, and syntax-checked AST transformations).
 
 ---
 
@@ -103,7 +124,7 @@ Each section names the exact invocation on both sides. Paths are relative to the
 from §1 (`ripgrep/` at `3fce3b5`, `gin/` at `3b08cd7`). The Transcend side is an MCP `call_mcp_tool`
 invocation with the arguments shown.
 
-### 3.1 `search` — 3.22x smaller than native `grep_search`, 2.24x smaller than `rg`
+### 3.1 `search` — 3.17x–3.59x smaller than native `grep_search`, 2.32x–2.59x smaller than `rg`
 
 Target: search `ripgrep/crates` for pattern `git_ignore` with filter `*.rs` and `max_matches: 10`.
 
@@ -128,15 +149,13 @@ rg --no-heading -n --color never 'git_ignore' C:\Projects\_transcend_bench\ripgr
 }
 ```
 
-| Approach | Cost | Format & Content |
-|:---|:---|:---|
-| Native `grep_search` | **4,208 chars** (~1,052 tok) | 26 JSON objects with full paths, line numbers, and line contents |
-| Shell `rg --no-heading -n` | **2,926 chars** (~731 tok) | 26 lines verbatim (no aggregation) |
-| Transcend `search` | **1,306 chars** (~326 tok) | 26 matches total, 10 line bodies in `dir.rs` + **directory radar** |
-
-**Ratios:**
-- Transcend `search` is **3.22x more compact** than native `grep_search`.
-- Transcend `search` is **2.24x more compact** than raw `rg`.
+| Approach | chars | tiktoken (`o200k`) | sentencepiece (`Llama-2`) | Format & Content |
+|:---|---:|---:|---:|:---|
+| Native `grep_search` | 4,209 | **1,239** | **1,504** | 26 JSON objects with full paths, line numbers, and content |
+| Shell `rg --no-heading -n` | 2,797 | **894** | **1,103** | 26 lines verbatim (no aggregation) |
+| Transcend `search` | 1,348 | **345** | **475** | 26 matches total, 10 line bodies in `dir.rs` + **directory radar** |
+| **Reduction vs. `grep_search`** | **3.12x** | **3.59x** | **3.17x** | |
+| **Reduction vs. raw `rg`** | **2.07x** | **2.59x** | **2.32x** | |
 
 Both tools agreed on the exact count: **26 matches across 4 files**.
 Transcend returns the first 10 matching line bodies clustered under `ignore/src/dir.rs`, sets
@@ -148,12 +167,12 @@ Transcend returns the first 10 matching line bodies clustered under `ignore/src/
 ]
 ```
 Native `grep_search` prints individual JSON objects for every single line match, bloating prompt
-context with repeated absolute paths and metadata.
+context to **1,239–1,504 tokens** with repeated absolute paths and metadata.
 
-### 3.2 `outline` — 4.44x reduction on Rust defs, 2.47x reduction on Go
+### 3.2 `outline` — 3.64x–4.07x reduction on Rust defs, 2.48x–2.80x reduction on Go
 
-Target 1: `ripgrep/crates/core/flags/defs.rs` (254,514 bytes, 7,220 lines LF).
-Target 2: `gin/gin.go` (29,524 bytes, 65 symbols).
+Target 1: `ripgrep/crates/core/flags/defs.rs` (246,353 chars LF, 7,220 lines, 1,131 symbols).
+Target 2: `gin/gin.go` (28,663 chars, 65 symbols).
 
 ```jsonc
 // Transcend MCP: outline (defs.rs)
@@ -169,27 +188,29 @@ Target 2: `gin/gin.go` (29,524 bytes, 65 symbols).
 }
 ```
 
-| Target | Approach | Cost | Symbols preserved | Reduction |
-|:---|:---|:---|:---|:---|
-| `defs.rs` (Rust) | Whole file (`cat`) | 254,514 bytes (~63,629 tok) | 1,131 symbols | Baseline |
-| `defs.rs` (Rust) | Native `view_file` | **Failed in 1 shot** (max 46,080 B / 800 lines; requires >= 11 calls) | — | — |
-| `defs.rs` (Rust) | Transcend `outline(skeleton)` | **57,278 chars** (~14,320 tok) | 1,131 syntax-valid stubs | **4.44x** |
-| `gin.go` (Go) | Whole file (`cat`) | 29,524 bytes (~7,381 tok) | 65 symbols | Baseline |
-| `gin.go` (Go) | Transcend `outline(skeleton)` | **11,937 chars** (~2,984 tok) | 65 syntax-valid stubs | **2.47x** |
+| Target | Approach | chars | tiktoken | sentencepiece | Symbols preserved |
+|:---|:---|---:|---:|---:|:---|
+| `defs.rs` (Rust) | Whole file (`cat`) | 246,353 | 63,937 | 82,169 | 1,131 symbols |
+| `defs.rs` (Rust) | Native `view_file` | — | — | — | **Failed in 1 shot** (max 46 KB / 800 lines; >= 11 calls) |
+| `defs.rs` (Rust) | Transcend `outline(skeleton)` | 57,273 | **17,577** | **20,192** | 1,131 syntax-valid stubs |
+| | **Reduction** | **4.30x** | **3.64x** | **4.07x** | |
+| `gin.go` (Go) | Whole file (`cat`) | 28,663 | 7,365 | 9,729 | 65 symbols |
+| `gin.go` (Go) | Transcend `outline(skeleton)` | 11,937 | **2,970** | **3,479** | 65 syntax-valid stubs |
+| | **Reduction** | **2.40x** | **2.48x** | **2.80x** | |
 
 On `defs.rs`, Transcend's skeleton format preserved all 1,131 symbols with signatures and doc comments:
 `method: 788, function: 123, implementation: 109, struct: 108, module: 2, constant: 1`.
 Native `view_file` cannot even read this file in a single tool call due to its 46 KB / 800-line safety
 limit, forcing multi-turn fragmentation.
 
-On `gin.go`, the skeleton elided method implementations down to `11,937` characters while maintaining
-all 65 symbols (`method: 35, function: 10, constant: 8, variable: 6, typealias: 4, struct: 2`),
-yielding a **2.47x token reduction**.
+On `gin.go`, the skeleton elided method implementations down to **2,970 tokens** (tiktoken) / **3,479 tokens** (sentencepiece)
+while maintaining all 65 symbols (`method: 35, function: 10, constant: 8, variable: 6, typealias: 4, struct: 2`),
+yielding a **2.48x–2.80x token reduction**.
 
-### 3.3 `read_symbol` — surgical AST extraction (131.5x saving vs whole file)
+### 3.3 `read_symbol` — surgical AST extraction (128x–131x saving vs whole file)
 
-Target 1: `WalkBuilder::git_ignore` in `ripgrep/crates/ignore/src/walk.rs` (96,183 bytes, ~24,046 tok whole file).
-Target 2: `Run` in `gin/gin.go` (29,524 bytes, ~7,381 tok whole file).
+Target 1: `WalkBuilder::git_ignore` in `ripgrep/crates/ignore/src/walk.rs` (93,443 chars, 21,468 tok tiktoken / 27,384 tok SP).
+Target 2: `Run` in `gin/gin.go` (28,663 chars, 7,365 tok tiktoken / 9,729 tok SP).
 
 ```jsonc
 // Transcend MCP: read_symbol (walk.rs)
@@ -203,11 +224,12 @@ Target 2: `Run` in `gin/gin.go` (29,524 bytes, ~7,381 tok whole file).
 rg --no-heading -n -A2 -B2 'pub fn git_ignore' ripgrep/crates/ignore/src/walk.rs
 ```
 
-| Approach | Cost | Output details |
-|:---|:---|:---|
-| `view_file` whole `walk.rs` | 96,183 bytes (~24,046 tok) | Entire file dumped into context |
-| `rg -A2 -B2` | 183 chars (~46 tok) | 5 lines, **truncated closing brace** `}`, no doc comments, no span |
-| Transcend `read_symbol` | **731 chars** (~183 tok) | Complete method body + doc comment + exact byte/line span |
+| Approach | chars | tiktoken | sentencepiece | Output details |
+|:---|---:|---:|---:|:---|
+| `view_file` whole `walk.rs` | 93,443 | 21,468 | 27,384 | Entire file dumped into context |
+| Native `rg -A2 -B2` | 184 | **52** | **71** | 5 lines, **truncated closing brace** `}`, no doc comments, no span |
+| Transcend `read_symbol` | 592 | **168** | **209** | Complete method body + doc comment + exact byte/line span |
+| **Saving vs. whole file** | **157.8x** | **127.8x** | **131.0x** | |
 
 ```json
 // Transcend read_symbol output for WalkBuilder::git_ignore
@@ -231,13 +253,13 @@ rg --no-heading -n -A2 -B2 'pub fn git_ignore' ripgrep/crates/ignore/src/walk.rs
 }
 ```
 
-Against the whole file read, `read_symbol` provides a **131.5x token saving**.
-While native `rg -A2 -B2` is fewer characters, it failed to capture the complete function body because
+Against reading the entire file, `read_symbol` provides a **128x–131x token saving** (168 vs. 21,468 tokens).
+While native `rg -A2 -B2` uses fewer tokens (52 vs. 168), it failed to capture the complete function body because
 context lines are an arbitrary constant: it truncated the closing `}`, missed the doc comment, and
 provided no AST coordinate span.
 
-On `gin.go` method `Run`, `read_symbol` returned **1,288 characters** (~322 tokens) vs the 29,524-byte
-file (**22.9x saving**), and automatically resolved the receiver relationship:
+On `gin.go` method `Run`, `read_symbol` returned **334 tokens** (tiktoken) / **420 tokens** (sentencepiece)
+vs the 7,365-token file (**22.0x saving**), and automatically resolved the receiver relationship:
 `"relationships": [{"relation": "receiver", "target": "Engine"}]`.
 
 ### 3.4 `find` — structural directory radar vs flat listing
@@ -245,14 +267,8 @@ file (**22.9x saving**), and automatically resolved the receiver relationship:
 Target: discover `*.rs` files in `ripgrep/crates`, sorted by size, top 30 results.
 
 ```jsonc
-// Native harness: find_by_name
-{
-  "Pattern": "*.rs",
-  "SearchDirectory": "C:\\Projects\\_transcend_bench\\ripgrep\\crates"
-}
-
-// PowerShell native:
-Get-ChildItem -Recurse -File -Filter *.rs ripgrep/crates | Sort Length -Descending | Select -First 30
+// Native listing (capped at 30 to make comparison fair):
+rg --files ripgrep/crates -g '*.rs' | head -30
 
 // Transcend MCP: find
 {
@@ -262,13 +278,13 @@ Get-ChildItem -Recurse -File -Filter *.rs ripgrep/crates | Sort Length -Descendi
 }
 ```
 
-| Approach | Cost | Content |
-|:---|:---|:---|
-| Native `find_by_name` | ~1,200 chars | 50 flat paths (capped), unsorted, no sizes, no dates |
-| PowerShell `Get-ChildItem` | **844 chars** (~211 tok) | 30 lines of path + file size |
-| Transcend `find` | **4,071 chars** (~1,018 tok) | 30 entries + **23-directory radar** + extension breakdown + total count |
+| Approach | chars | tiktoken | sentencepiece | Content |
+|:---|---:|---:|---:|:---|
+| Native `rg --files \| head -30` | 1,832 | **696** | **761** | 30 paths |
+| Transcend `find` | 4,071 | **1,309** | **1,891** | 30 entries + **23-directory radar** + extension census + total count |
+| | | **1.88x larger** | **2.49x larger** | |
 
-**Transcend `find` is 4.8x larger** than the raw PowerShell listing.
+**Transcend `find` is 1.88x–2.49x more expensive for the same 30 results.**
 It does not aim to minimize tokens here; it computes structural metadata that native listing tools
 omit:
 - `directory_radar`: 23 directory density buckets (e.g. `printer/src`: 11, `ignore/src`: 9, `regex/src`: 9).
@@ -414,6 +430,9 @@ Tested against the ripgrep workspace:
    - `lsp_diagnostics`:
      Returned structured diagnostic object (`total_count: 0` on clean files).
 
+**Cost note for the whole tier:** All 23 tool schemas total **35,183 chars = 7,712 tokens** (`o200k_base`)
+or **9,403 tokens** (`sentencepiece`), ~335–408 tokens per tool, paid on model initialization.
+
 ### 3.8 Safety behaviours & workspace containment
 
 Tested boundary enforcement:
@@ -442,7 +461,6 @@ Stated clearly to maintain complete empirical integrity:
 | `lsp_install` | Recipe discovery exercised via `lsp_status`, but fresh installation was **not** run because `rust-analyzer` was already present. |
 | Cross-platform | All measurements executed on **Windows 10 Pro 22H2 (build 19045)**. Unix PTY (`openpty`) and POSIX signals remain unexercised in this run. |
 | Wall-clock throughput profiling | Incidental execution timings were recorded (e.g. `exec` 116 ms), but large-scale wall-clock microbenchmarks (e.g. criterion benchmarks across thousands of iterations) were not performed. |
-| Token accuracy | Approximate `chars / 4` heuristic used across all tools. |
 
 ---
 
@@ -450,13 +468,13 @@ Stated clearly to maintain complete empirical integrity:
 
 **Transcend is an AST-aware codebase intelligence and safety layer, not merely a token filter.**
 
-1. **Token reductions where it counts:**
-   - `search`: **3.22x smaller** than native `grep_search` and **2.24x smaller** than raw `rg`.
-   - `outline`: **4.44x reduction** on large Rust files (7,220 lines) and **2.47x reduction** on Go files, preserving all symbols as valid skeletons.
-   - `read_symbol`: **131.5x token reduction** vs whole-file reads on `walk.rs`, **22.9x reduction** on `gin.go`, with exact doc comments and byte spans.
+1. **Token reductions verified with real tokenizers (`tiktoken` / `sentencepiece`):**
+   - `search`: **3.17x–3.59x smaller** than native `grep_search` and **2.32x–2.59x smaller** than raw `rg`.
+   - `outline`: **3.64x–4.07x reduction** on large Rust files (7,220 lines) and **2.48x–2.80x reduction** on Go files, preserving all symbols as valid skeletons.
+   - `read_symbol`: **128x–131x token reduction** vs whole-file reads on `walk.rs`, **22x reduction** on `gin.go`, with exact doc comments and byte spans.
 
 2. **Where Transcend costs more tokens:**
-   - `find`: **4.8x larger** than raw PowerShell listings. The overhead purchases structural intelligence: a 23-directory density radar, extension census, and total counts that flat path listings cannot provide.
+   - `find`: **1.88x–2.49x larger** than raw `rg --files` listings. The overhead purchases structural intelligence: a 23-directory density radar, extension census, and total counts that flat path listings cannot provide.
 
 3. **Unique capabilities with zero native equivalent:**
    - **7 tools** have no native counterpart in the Antigravity harness: `lsp_definition`, `lsp_hover`, `lsp_references`, `lsp_status`, `lsp_install`, `terminal_write`, `terminal_resize`, `set_workspace`.
