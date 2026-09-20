@@ -4,8 +4,8 @@
 //! to prevent abandoned processes from lingering indefinitely.
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 
@@ -42,7 +42,12 @@ impl TerminalRegistry {
                 let mut interval = tokio::time::interval(Duration::from_secs(60));
                 loop {
                     interval.tick().await;
-                    Self::reap_expired(&sessions_clone, DEFAULT_IDLE_TIMEOUT_SECS, DEFAULT_MAX_AGE_SECS).await;
+                    Self::reap_expired(
+                        &sessions_clone,
+                        DEFAULT_IDLE_TIMEOUT_SECS,
+                        DEFAULT_MAX_AGE_SECS,
+                    )
+                    .await;
                 }
             });
         }
@@ -85,10 +90,7 @@ impl TerminalRegistry {
             let lock = sessions.read().await;
             for (id, session) in lock.iter() {
                 let last_active = session.last_activity.load(Ordering::Relaxed);
-                let started_epoch = session
-                    .started_at
-                    .timestamp()
-                    .max(0) as u64;
+                let started_epoch = session.started_at.timestamp().max(0) as u64;
 
                 let idle_dur = now_epoch.saturating_sub(last_active);
                 let age_dur = now_epoch.saturating_sub(started_epoch);

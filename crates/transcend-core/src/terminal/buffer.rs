@@ -82,21 +82,13 @@ impl CursorRingBuffer {
 
     /// Read bytes from a specified cursor offset up to `max_bytes`.
     /// Returns: `(data, next_cursor, truncated, dropped_before)`.
-    pub fn read_from(
-        &self,
-        from_cursor: usize,
-        max_bytes: usize,
-    ) -> (Vec<u8>, usize, bool, usize) {
+    pub fn read_from(&self, from_cursor: usize, max_bytes: usize) -> (Vec<u8>, usize, bool, usize) {
         if from_cursor >= self.write_cursor {
             return (Vec::new(), self.write_cursor, false, 0);
         }
 
         let oldest = self.oldest_available_cursor();
-        let dropped_before = if from_cursor < oldest {
-            oldest - from_cursor
-        } else {
-            0
-        };
+        let dropped_before = oldest.saturating_sub(from_cursor);
 
         let effective_start = from_cursor.max(oldest);
         let available_bytes = self.write_cursor - effective_start;

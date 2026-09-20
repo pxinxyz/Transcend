@@ -34,11 +34,7 @@ impl ActiveTransport {
             Self::Pipe(p) => p.exit_code.load(std::sync::atomic::Ordering::Relaxed),
             Self::Pty(p) => p.exit_code.load(std::sync::atomic::Ordering::Relaxed),
         };
-        if raw >= 0 {
-            Some(raw)
-        } else {
-            None
-        }
+        if raw >= 0 { Some(raw) } else { None }
     }
 
     pub async fn write(&self, input: &[u8]) -> Result<usize, String> {
@@ -66,7 +62,8 @@ impl ActiveTransport {
     pub async fn kill(&self) {
         match self {
             Self::Pipe(p) => {
-                p.is_running.store(false, std::sync::atomic::Ordering::SeqCst);
+                p.is_running
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
                 let mut owner = p.tree_owner.lock().await;
                 owner.kill_tree();
             }

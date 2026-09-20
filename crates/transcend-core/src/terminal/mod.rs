@@ -18,12 +18,12 @@ use std::time::{Duration, Instant};
 use buffer::{CursorRingBuffer, DEFAULT_BUFFER_CAPACITY};
 use registry::TerminalRegistry;
 use session::TerminalSession;
-use transport::{ActiveTransport, PipeTransport, PtyTransport};
 use transcend_protocol::{
-    ExecRequest, ExecResponse, ExecStatus, ExecTransport, TerminalKillRequest, TerminalKillResponse,
-    TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest, TerminalResizeResponse,
-    TerminalWriteRequest, TerminalWriteResponse, TimeoutAction,
+    ExecRequest, ExecResponse, ExecStatus, ExecTransport, TerminalKillRequest,
+    TerminalKillResponse, TerminalReadRequest, TerminalReadResponse, TerminalResizeRequest,
+    TerminalResizeResponse, TerminalWriteRequest, TerminalWriteResponse, TimeoutAction,
 };
+use transport::{ActiveTransport, PipeTransport, PtyTransport};
 
 use crate::CoreError;
 
@@ -196,11 +196,10 @@ impl TerminalEngine {
 
     /// Read incremental output from a detached session using a cursor.
     pub async fn read(&self, req: &TerminalReadRequest) -> Result<TerminalReadResponse, CoreError> {
-        let session = self
-            .registry
-            .get(&req.session_id)
-            .await
-            .ok_or_else(|| CoreError::General(format!("Session not found: {}", req.session_id)))?;
+        let session =
+            self.registry.get(&req.session_id).await.ok_or_else(|| {
+                CoreError::General(format!("Session not found: {}", req.session_id))
+            })?;
 
         let max_bytes = req.max_bytes.unwrap_or(16_384);
         let from_cursor = req.cursor.unwrap_or(0);
@@ -241,12 +240,14 @@ impl TerminalEngine {
     }
 
     /// Write input to a detached session's stdin.
-    pub async fn write(&self, req: &TerminalWriteRequest) -> Result<TerminalWriteResponse, CoreError> {
-        let session = self
-            .registry
-            .get(&req.session_id)
-            .await
-            .ok_or_else(|| CoreError::General(format!("Session not found: {}", req.session_id)))?;
+    pub async fn write(
+        &self,
+        req: &TerminalWriteRequest,
+    ) -> Result<TerminalWriteResponse, CoreError> {
+        let session =
+            self.registry.get(&req.session_id).await.ok_or_else(|| {
+                CoreError::General(format!("Session not found: {}", req.session_id))
+            })?;
 
         let bytes_written = session
             .write(&req.input)
@@ -260,12 +261,14 @@ impl TerminalEngine {
     }
 
     /// Resize a detached session's terminal dimensions.
-    pub async fn resize(&self, req: &TerminalResizeRequest) -> Result<TerminalResizeResponse, CoreError> {
-        let session = self
-            .registry
-            .get(&req.session_id)
-            .await
-            .ok_or_else(|| CoreError::General(format!("Session not found: {}", req.session_id)))?;
+    pub async fn resize(
+        &self,
+        req: &TerminalResizeRequest,
+    ) -> Result<TerminalResizeResponse, CoreError> {
+        let session =
+            self.registry.get(&req.session_id).await.ok_or_else(|| {
+                CoreError::General(format!("Session not found: {}", req.session_id))
+            })?;
 
         session
             .resize(req.cols, req.rows)
@@ -279,11 +282,10 @@ impl TerminalEngine {
 
     /// Kill an active detached session and terminate its process tree.
     pub async fn kill(&self, req: &TerminalKillRequest) -> Result<TerminalKillResponse, CoreError> {
-        let session = self
-            .registry
-            .get(&req.session_id)
-            .await
-            .ok_or_else(|| CoreError::General(format!("Session not found: {}", req.session_id)))?;
+        let session =
+            self.registry.get(&req.session_id).await.ok_or_else(|| {
+                CoreError::General(format!("Session not found: {}", req.session_id))
+            })?;
 
         let (exit_code, final_output) = session.kill().await;
 
@@ -296,63 +298,132 @@ impl TerminalEngine {
     }
 
     /// Read output from an active or exited detached session (alias).
-    pub async fn terminal_read(&self, req: &TerminalReadRequest) -> Result<TerminalReadResponse, CoreError> {
+    pub async fn terminal_read(
+        &self,
+        req: &TerminalReadRequest,
+    ) -> Result<TerminalReadResponse, CoreError> {
         self.read(req).await
     }
 
     /// Write input to a detached session's stdin (alias).
-    pub async fn terminal_write(&self, req: &TerminalWriteRequest) -> Result<TerminalWriteResponse, CoreError> {
+    pub async fn terminal_write(
+        &self,
+        req: &TerminalWriteRequest,
+    ) -> Result<TerminalWriteResponse, CoreError> {
         self.write(req).await
     }
 
     /// Resize a detached session's terminal dimensions (alias).
-    pub async fn terminal_resize(&self, req: &TerminalResizeRequest) -> Result<TerminalResizeResponse, CoreError> {
+    pub async fn terminal_resize(
+        &self,
+        req: &TerminalResizeRequest,
+    ) -> Result<TerminalResizeResponse, CoreError> {
         self.resize(req).await
     }
 
     /// Kill an active detached session and terminate its process tree (alias).
-    pub async fn terminal_kill(&self, req: &TerminalKillRequest) -> Result<TerminalKillResponse, CoreError> {
+    pub async fn terminal_kill(
+        &self,
+        req: &TerminalKillRequest,
+    ) -> Result<TerminalKillResponse, CoreError> {
         self.kill(req).await
     }
 }
 
+/// Command prefixes that require a real TTY: full-screen UIs, watch loops, and
+/// bare REPLs. Matched against the resolved program token plus its arguments, never
+/// against arbitrary text elsewhere in the command line.
+const INTERACTIVE_PREFIXES: &[&str] = &[
+    "docker run -it",
+    "docker compose up",
+    "docker-compose up",
+    "npm run dev",
+    "npm run start",
+    "yarn dev",
+    "yarn start",
+    "pnpm dev",
+    "pnpm start",
+    "cargo watch",
+    "vite",
+    "vitest",
+    "webpack serve",
+    "ng serve",
+    "rails console",
+    "irb",
+    "ipython",
+    "htop",
+    "top",
+    "less",
+    "more",
+    "vim",
+    "nvim",
+    "nano",
+    "emacs",
+];
+
+/// Programs that drop into an interactive prompt when invoked without arguments.
+const BARE_REPLS: &[&str] = &[
+    "python",
+    "python3",
+    "python2",
+    "node",
+    "irb",
+    "pry",
+    "bash",
+    "sh",
+    "zsh",
+    "fish",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "cmd.exe",
+    "sqlite3",
+    "psql",
+    "mysql",
+    "redis-cli",
+    "mongosh",
+];
+
 /// Heuristics to detect whether a command likely requires PTY terminal emulation.
+///
+/// Only the command's *program token and its own arguments* are considered. Scanning
+/// the whole string for substrings misroutes ordinary commands: `git commit -m "fix
+/// node handling"` would otherwise be forced onto a PTY, which is slower and loses
+/// clean exit-code semantics.
 fn is_interactive_command(cmd: &str) -> bool {
-    let lower = cmd.to_lowercase();
-    let tokens: Vec<&str> = lower.split_whitespace().collect();
+    let tokens = tokenize_for_detection(cmd);
+    let Some(program) = tokens.first() else {
+        return false;
+    };
 
-    let interactive_starters = [
-        "npm run dev",
-        "npm run start",
-        "yarn dev",
-        "yarn start",
-        "pnpm dev",
-        "vite",
-        "cargo watch",
-        "python -i",
-        "python",
-        "node",
-        "ipython",
-        "irb",
-        "bash -i",
-        "sh -i",
-        "docker run -it",
-        "docker-compose up",
-        "watch",
-        "htop",
-        "top",
-    ];
+    // Strip any directory prefix and a Windows executable suffix so `C:\...\node.exe`
+    // and `node` classify identically.
+    let program = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    let program = program.strip_suffix(".exe").unwrap_or(&program).to_string();
 
-    for starter in interactive_starters {
-        if lower.starts_with(starter) || lower.contains(starter) {
-            return true;
-        }
+    // A bare REPL is interactive only when invoked without arguments.
+    if tokens.len() == 1 && BARE_REPLS.contains(&program.as_str()) {
+        return true;
     }
 
-    // Single token REPL invocation (e.g. `python`, `node`)
-    if tokens.len() == 1 {
-        let repls = ["python", "python3", "node", "irb", "bash", "sh", "pwsh", "powershell"];
-        if repls.contains(&tokens[0]) {
+    // Multi-token prefixes are compared against the command's own opening tokens.
+    let normalized = tokens
+        .iter()
+        .map(|t| t.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    for prefix in INTERACTIVE_PREFIXES {
+        // `vite`/`vitest` etc. must be the program token, not an argument to something else.
+        if prefix.contains(' ') {
+            if normalized.starts_with(prefix) {
+                return true;
+            }
+        } else if program == *prefix {
             return true;
         }
     }
@@ -360,10 +431,55 @@ fn is_interactive_command(cmd: &str) -> bool {
     false
 }
 
+/// Split a command into tokens for heuristic classification only.
+///
+/// Unlike the `raw` execution path this never needs to be lossless: it exists purely
+/// to find the program token, so quotes are stripped and shell operators are treated
+/// as ordinary separators.
+fn tokenize_for_detection(cmd: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+
+    for ch in cmd.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                '&' | '|' | ';' | '>' | '<' => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                    // Keep the operator so `a && b` does not look like one command.
+                    tokens.push(ch.to_string());
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transcend_protocol::{ExecStatus, ExecTransport, TerminalKillRequest, TerminalReadRequest, TimeoutAction};
+    use transcend_protocol::{
+        ExecStatus, ExecTransport, TerminalKillRequest, TerminalReadRequest, TimeoutAction,
+    };
 
     #[tokio::test]
     async fn test_terminal_exec_one_shot_pipe() {
@@ -440,7 +556,157 @@ mod tests {
             .await
             .expect("read after kill should succeed");
 
-        assert_eq!(post_kill_read.status, transcend_protocol::TerminalSessionStatus::Exited);
+        assert_eq!(
+            post_kill_read.status,
+            transcend_protocol::TerminalSessionStatus::Exited
+        );
+    }
+
+    /// Interactive detection must key off the program token, not substrings anywhere
+    /// in the command line. Misclassifying ordinary commands as interactive routes
+    /// them through a PTY, which is slower and loses clean exit-code semantics.
+    #[test]
+    fn test_is_interactive_command_classification() {
+        // Genuinely interactive: bare REPLs.
+        assert!(is_interactive_command("python"));
+        assert!(is_interactive_command("node"));
+        assert!(is_interactive_command("python3"));
+        assert!(is_interactive_command("pwsh"));
+        assert!(is_interactive_command("cmd.exe"));
+        assert!(is_interactive_command(
+            r#""C:\Program Files\nodejs\node.exe""#
+        ));
+        assert!(is_interactive_command("/usr/local/bin/python3"));
+
+        // Genuinely interactive: dev servers and watch loops.
+        assert!(is_interactive_command("npm run dev"));
+        assert!(is_interactive_command("npm run dev -- --port 3000"));
+        assert!(is_interactive_command("vite"));
+        assert!(is_interactive_command("cargo watch -x test"));
+        assert!(is_interactive_command("docker run -it ubuntu bash"));
+        assert!(is_interactive_command("htop"));
+
+        // NOT interactive: the old substring scan misrouted every one of these.
+        assert!(!is_interactive_command(
+            "git commit -m \"fix node handling\""
+        ));
+        assert!(!is_interactive_command("echo python"));
+        assert!(!is_interactive_command("grep -rn top ./src"));
+        assert!(!is_interactive_command("npm install"));
+        assert!(!is_interactive_command("cargo build --release"));
+        assert!(!is_interactive_command("node --version"));
+        assert!(!is_interactive_command("python -c 'print(1)'"));
+        assert!(!is_interactive_command("docker run --rm alpine echo hi"));
+        assert!(!is_interactive_command(""));
+        assert!(!is_interactive_command("   "));
+    }
+
+    /// Tokenization must not let an operator fuse two commands into one program token.
+    #[test]
+    fn test_tokenize_for_detection_handles_quotes_and_operators() {
+        assert_eq!(
+            tokenize_for_detection("git commit -m 'a b'"),
+            vec!["git", "commit", "-m", "a b"]
+        );
+        assert_eq!(
+            tokenize_for_detection("npm install && npm run dev"),
+            vec!["npm", "install", "&", "&", "npm", "run", "dev"]
+        );
+        // A quoted program name still resolves to a single token.
+        assert_eq!(
+            tokenize_for_detection("\"my tool\" --flag"),
+            vec!["my tool", "--flag"]
+        );
+        assert!(tokenize_for_detection("").is_empty());
+    }
+
+    /// One-shot pipe execution must capture stdout and a real exit code.
+    #[tokio::test]
+    async fn test_terminal_pipe_captures_output_and_exit_code() {
+        let engine = TerminalEngine::new();
+        let res = engine
+            .exec(&ExecRequest {
+                command: "echo pipe_exit_check".to_string(),
+                transport: Some(ExecTransport::Pipe),
+                timeout_ms: Some(10_000),
+                ..Default::default()
+            })
+            .await
+            .expect("exec should succeed");
+
+        assert_eq!(res.status, ExecStatus::Exited);
+        assert_eq!(res.exit_code, Some(0), "output was: {}", res.output);
+        assert!(res.output.contains("pipe_exit_check"));
+    }
+
+    /// A non-zero exit must be reported, not swallowed, so agents can branch on it.
+    #[tokio::test]
+    async fn test_terminal_pipe_reports_failure_exit_code() {
+        let engine = TerminalEngine::new();
+        #[cfg(windows)]
+        let cmd = "exit 7";
+        #[cfg(not(windows))]
+        let cmd = "exit 7";
+
+        let res = engine
+            .exec(&ExecRequest {
+                command: cmd.to_string(),
+                transport: Some(ExecTransport::Pipe),
+                timeout_ms: Some(10_000),
+                ..Default::default()
+            })
+            .await
+            .expect("exec should succeed");
+
+        assert_eq!(res.status, ExecStatus::Exited);
+        assert_eq!(res.exit_code, Some(7), "output was: {}", res.output);
+    }
+
+    /// Detached sessions must be discoverable and killable on every platform; this
+    /// exercises the process-tree ownership path end to end.
+    #[tokio::test]
+    async fn test_terminal_detached_session_process_tree_is_killed() {
+        let engine = TerminalEngine::new();
+
+        #[cfg(windows)]
+        let cmd = "powershell -NoProfile -Command \"Start-Sleep -Seconds 30\"";
+        #[cfg(not(windows))]
+        let cmd = "sleep 30";
+
+        let res = engine
+            .exec(&ExecRequest {
+                command: cmd.to_string(),
+                transport: Some(ExecTransport::Pipe),
+                timeout_ms: Some(300),
+                timeout_action: Some(TimeoutAction::Detach),
+                ..Default::default()
+            })
+            .await
+            .expect("exec should detach");
+
+        assert_eq!(res.status, ExecStatus::Detached);
+        let session_id = res.session_id.expect("detached session must have an id");
+
+        let kill = engine
+            .terminal_kill(&TerminalKillRequest {
+                session_id: session_id.clone(),
+            })
+            .await
+            .expect("kill should succeed");
+        assert!(kill.success);
+
+        let after = engine
+            .terminal_read(&TerminalReadRequest {
+                session_id,
+                cursor: None,
+                ..Default::default()
+            })
+            .await
+            .expect("read after kill should succeed");
+        assert!(!matches!(
+            after.status,
+            transcend_protocol::TerminalSessionStatus::Running
+        ));
     }
 
     #[tokio::test]

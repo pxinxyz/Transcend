@@ -5,14 +5,17 @@
 
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use super::super::buffer::SharedCursorRingBuffer;
-use super::super::platform::{resolve_shell, ProcessTreeOwner};
+use super::super::platform::{ProcessTreeOwner, resolve_shell};
 
 /// Active Pipe Transport Session.
 pub struct PipeTransport {
@@ -74,9 +77,19 @@ impl PipeTransport {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        let mut child = cmd.spawn().map_err(|e| {
-            format!("Failed to spawn pipe command '{}': {e}", program.display())
-        })?;
+        // Put the child in its own process group so the whole tree can be signalled
+        // as a unit. Without this, `ProcessTreeOwner` would try to `killpg` a pid that
+        // is not a group leader, which fails with ESRCH and silently leaves
+        // grandchildren (node, cargo, vite, ...) running.
+        //
+        // PTY children already become session leaders via `setsid()` inside
+        // portable-pty, so only the pipe path needs this.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to spawn pipe command '{}': {e}", program.display()))?;
 
         let pid = child.id().unwrap_or(0);
 
@@ -141,7 +154,9 @@ impl PipeTransport {
         tokio::spawn(async move {
             match child.wait().await {
                 Ok(status) => {
-                    let code = status.code().unwrap_or(if status.success() { 0 } else { 1 });
+                    let code = status
+                        .code()
+                        .unwrap_or(if status.success() { 0 } else { 1 });
                     code_clone.store(code, Ordering::SeqCst);
                     running_clone.store(false, Ordering::SeqCst);
                 }

@@ -3,14 +3,14 @@
 //! Executes interactive and TTY-aware commands inside a native pseudoterminal
 //! (ConPTY on Windows, openpty on Unix) using portable-pty.
 
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
 use super::super::buffer::SharedCursorRingBuffer;
-use super::super::platform::{resolve_shell, ProcessTreeOwner};
+use super::super::platform::{ProcessTreeOwner, resolve_shell};
 
 /// Active PTY Transport Session.
 pub struct PtyTransport {
@@ -218,15 +218,15 @@ impl Drop for PtyTransport {
         if let Ok(mut writer_guard) = self.writer.lock() {
             writer_guard.take();
         }
-        if let Ok(mut master_guard) = self.master.lock() {
-            if let Some(m) = master_guard.take() {
-                std::thread::Builder::new()
-                    .name("transcend-pty-closer".to_string())
-                    .spawn(move || {
-                        drop(m);
-                    })
-                    .ok();
-            }
+        if let Ok(mut master_guard) = self.master.lock()
+            && let Some(m) = master_guard.take()
+        {
+            std::thread::Builder::new()
+                .name("transcend-pty-closer".to_string())
+                .spawn(move || {
+                    drop(m);
+                })
+                .ok();
         }
     }
 }

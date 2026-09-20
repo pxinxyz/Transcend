@@ -3,11 +3,11 @@
 //! Represents a live or exited command execution context holding its output ring buffer,
 //! transport handle, and lifecycle metadata.
 
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::SystemTime;
 use chrono::{DateTime, Utc};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::SystemTime;
 
 use super::buffer::SharedCursorRingBuffer;
 use super::projection::TerminalProjection;

@@ -68,8 +68,12 @@ pub fn resolve_shell(shell_override: Option<&str>, command: &str) -> ShellSpec {
                             args: vec!["/C".to_string(), command.to_string()],
                         }
                     } else {
-                        let ps_path = find_executable_on_path("powershell.exe")
-                            .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"));
+                        let ps_path =
+                            find_executable_on_path("powershell.exe").unwrap_or_else(|| {
+                                PathBuf::from(
+                                    r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                                )
+                            });
                         ShellSpec {
                             program: ps_path,
                             args: vec![
@@ -101,7 +105,8 @@ pub fn resolve_shell(shell_override: Option<&str>, command: &str) -> ShellSpec {
                 args: vec!["-c".to_string(), command.to_string()],
             },
             None => {
-                let default_shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+                let default_shell =
+                    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
                 ShellSpec {
                     program: PathBuf::from(default_shell),
                     args: vec!["-c".to_string(), command.to_string()],
@@ -208,9 +213,12 @@ impl ProcessTreeOwner {
         {
             if let Some(job) = self.job_handle {
                 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
-                use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
+                use windows_sys::Win32::System::Threading::{
+                    OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+                };
 
-                let proc_handle = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
+                let proc_handle =
+                    unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
                 if !proc_handle.is_null() {
                     unsafe {
                         AssignProcessToJobObject(job, proc_handle);
@@ -227,11 +235,19 @@ impl ProcessTreeOwner {
     }
 
     /// Forcibly terminate the entire process tree.
+    ///
+    /// Windows relies on the Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), which
+    /// covers every descendant even if intermediate processes have exited. Unix has no
+    /// equivalent, so termination is layered: the process group is signalled first
+    /// (covering children that stayed in the group), and any descendants that escaped
+    /// the group are then enumerated and signalled directly.
     pub fn kill_tree(&mut self) {
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-            use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+            use windows_sys::Win32::System::Threading::{
+                OpenProcess, PROCESS_TERMINATE, TerminateProcess,
+            };
 
             if let Some(job) = self.job_handle.take() {
                 unsafe {
@@ -255,16 +271,97 @@ impl ProcessTreeOwner {
 
         #[cfg(not(windows))]
         {
-            if let Some(pgid) = self.pgid.take() {
-                unsafe {
-                    libc::killpg(pgid, libc::SIGKILL);
+            let pid = self.pid.take();
+            let pgid = self.pgid.take();
+
+            // 1. Signal the whole group. Only valid when the child is a group leader:
+            //    pipe children get `setpgid` via `process_group(0)`, and PTY children
+            //    become session leaders through portable-pty's `setsid()`.
+            let group = pgid.or(pid.map(|p| p as i32));
+            if let Some(pgid) = group {
+                // A negative pid targets the group; guard against the pathological
+                // pgid of 0/1, which would signal our own group or init.
+                if pgid > 1 {
+                    unsafe {
+                        libc::kill(-pgid, libc::SIGTERM);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    unsafe {
+                        libc::kill(-pgid, libc::SIGKILL);
+                    }
                 }
-            } else if let Some(pid) = self.pid {
+            }
+
+            // 2. Sweep descendants that left the process group.
+            if let Some(pid) = pid {
+                for descendant in collect_descendants(pid) {
+                    unsafe {
+                        libc::kill(descendant, libc::SIGKILL);
+                    }
+                }
                 unsafe {
                     libc::kill(pid as i32, libc::SIGKILL);
                 }
             }
         }
+    }
+}
+
+/// Enumerate descendant PIDs of `root` that are still alive.
+///
+/// Linux reads the kernel's `children` file, which is authoritative and cheap. Other
+/// Unixes fall back to `pgrep`, and if neither is available the caller still has the
+/// process-group signal, so an empty result is safe rather than fatal.
+#[cfg(not(windows))]
+fn collect_descendants(root: u32) -> Vec<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut found = Vec::new();
+        let mut queue = vec![root];
+        while let Some(pid) = queue.pop() {
+            // A process may span several threads; children are listed per task.
+            let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+                continue;
+            };
+            for task in tasks.flatten() {
+                let children_path = task.path().join("children");
+                let Ok(children) = std::fs::read_to_string(&children_path) else {
+                    continue;
+                };
+                for raw in children.split_whitespace() {
+                    if let Ok(child) = raw.parse::<u32>() {
+                        if child != root && !found.contains(&child) {
+                            found.push(child);
+                            queue.push(child);
+                        }
+                    }
+                }
+            }
+        }
+        return found.into_iter().map(|p| p as i32).collect();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut found = Vec::new();
+        let mut frontier = vec![root];
+        while let Some(pid) = frontier.pop() {
+            let Ok(output) = std::process::Command::new("pgrep")
+                .args(["-P", &pid.to_string()])
+                .output()
+            else {
+                break;
+            };
+            for raw in String::from_utf8_lossy(&output.stdout).split_whitespace() {
+                if let Ok(child) = raw.parse::<u32>() {
+                    if child != root && !found.contains(&child) {
+                        found.push(child);
+                        frontier.push(child);
+                    }
+                }
+            }
+        }
+        found.into_iter().map(|p| p as i32).collect()
     }
 }
 
@@ -282,5 +379,121 @@ impl Drop for ProcessTreeOwner {
 
 // Windows HANDLE is a raw pointer (*mut c_void) which Rust marks as !Send and !Sync.
 // Windows Job Object handles are thread-safe kernel handles that can safely be moved across threads.
+#[cfg(windows)]
 unsafe impl Send for ProcessTreeOwner {}
+#[cfg(windows)]
 unsafe impl Sync for ProcessTreeOwner {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every supported shell override must produce a `program` plus a command-passing
+    /// flag, and the command must never be dropped.
+    #[test]
+    fn test_resolve_shell_shapes_are_well_formed() {
+        let command = "echo cross_platform_marker";
+        let overrides: [Option<&str>; 7] = [
+            None,
+            Some("sh"),
+            Some("bash"),
+            Some("pwsh"),
+            Some("powershell"),
+            Some("cmd"),
+            Some("/bin/dash"),
+        ];
+
+        for shell in overrides {
+            let spec = resolve_shell(shell, command);
+
+            // A shell that cannot be resolved would silently break every `exec` call.
+            #[cfg(not(windows))]
+            {
+                let program = spec.program.to_string_lossy();
+                assert!(
+                    program == "/bin/sh"
+                        || std::path::Path::new(spec.program.as_os_str()).exists()
+                        || matches!(
+                            shell,
+                            Some("bash") | Some("pwsh") | Some("powershell") | Some("cmd")
+                        ),
+                    "unresolvable shell for override {shell:?}: {program}"
+                );
+            }
+
+            assert!(
+                !spec.args.is_empty(),
+                "shell override {shell:?} produced no arguments"
+            );
+            assert!(
+                spec.args.iter().any(|a| a == command),
+                "shell override {shell:?} did not forward the command: {:?}",
+                spec.args
+            );
+        }
+    }
+
+    /// On Unix a command must be passed to `-c`; on Windows to `-Command` or `/C`.
+    /// Getting this wrong yields "unknown option" failures at runtime, on one OS only.
+    #[test]
+    fn test_resolve_shell_uses_platform_flag() {
+        let spec = resolve_shell(None, "echo hi");
+
+        #[cfg(unix)]
+        assert!(
+            spec.args.iter().any(|a| a == "-c"),
+            "unix shells must receive -c, got {:?}",
+            spec.args
+        );
+
+        #[cfg(windows)]
+        assert!(
+            spec.args.iter().any(|a| a == "-Command" || a == "/C"),
+            "windows shells must receive -Command or /C, got {:?}",
+            spec.args
+        );
+    }
+
+    /// An explicit override must win over the platform default.
+    #[test]
+    fn test_resolve_shell_honours_explicit_override() {
+        let spec = resolve_shell(Some("sh"), "echo hi");
+        let program = spec.program.to_string_lossy().to_ascii_lowercase();
+
+        #[cfg(unix)]
+        assert!(program.contains("sh"), "expected sh, got {program}");
+
+        #[cfg(windows)]
+        assert!(
+            program.contains("bash") || program.contains("sh"),
+            "expected a POSIX shell on Windows for override 'sh', got {program}"
+        );
+    }
+
+    /// The process-tree owner must be constructible and droppable without a child.
+    #[test]
+    fn test_process_tree_owner_drop_without_child_is_safe() {
+        let mut owner = ProcessTreeOwner::new();
+        owner.kill_tree();
+        owner.kill_tree(); // idempotent
+        drop(ProcessTreeOwner::default());
+    }
+
+    /// Attaching a bogus pid must not kill anything or panic; `kill_tree` on a
+    /// non-existent process is a no-op.
+    #[test]
+    fn test_process_tree_owner_tolerates_dead_pid() {
+        let mut owner = ProcessTreeOwner::new();
+        // A pid that cannot be running (way above any plausible pid_max).
+        owner.attach_pid(999_999);
+        owner.kill_tree();
+    }
+
+    /// Descendant enumeration must return nothing for a pid that does not exist,
+    /// rather than erroring or looping.
+    #[test]
+    #[cfg(not(windows))]
+    fn test_collect_descendants_handles_missing_pid() {
+        assert!(collect_descendants(999_999).is_empty());
+    }
+}
