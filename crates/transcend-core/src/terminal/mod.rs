@@ -709,6 +709,98 @@ mod tests {
         ));
     }
 
+    /// A PTY session must actually be interactive: input written to stdin has to
+    /// reach the child and its output has to come back through the ring buffer.
+    ///
+    /// Regression test. `PtyTransport::spawn` used to route every command through
+    /// `resolve_shell`, so a bare REPL became `powershell -Command "powershell
+    /// -NoProfile -NoLogo"`: the wrapper ran the inner command, which printed its
+    /// banner and exited, leaving a dead session. `terminal_write` then reported
+    /// `bytes_written` while nothing reached any process — a silent failure at the
+    /// byte level. `cmd.exe` masked the bug because `cmd /C cmd.exe` happens to stay
+    /// interactive, which is why only that shell was covered before.
+    #[tokio::test]
+    async fn test_pty_session_is_actually_interactive() {
+        let engine = TerminalEngine::new();
+
+        #[cfg(windows)]
+        let (cmd, marker) = (
+            "powershell -NoProfile -NoLogo",
+            "pty_stdin_roundtrip_marker",
+        );
+        #[cfg(not(windows))]
+        let (cmd, marker) = ("sh", "pty_stdin_roundtrip_marker");
+
+        let res = engine
+            .exec(&ExecRequest {
+                command: cmd.to_string(),
+                transport: Some(ExecTransport::Pty),
+                timeout_ms: Some(2000),
+                timeout_action: Some(TimeoutAction::Detach),
+                ..Default::default()
+            })
+            .await
+            .expect("pty exec should start an interactive session");
+
+        let session_id = res
+            .session_id
+            .expect("detached PTY session must have an id");
+
+        // The session must still be running: a shell that already exited cannot
+        // accept input, and that is exactly the bug this guards.
+        assert_eq!(
+            res.status,
+            ExecStatus::Detached,
+            "PTY session exited immediately; the command was run instead of an \
+             interactive shell being started. Output was: {:?}",
+            res.output
+        );
+
+        #[cfg(windows)]
+        let input = format!("Write-Output '{marker}'\r\n");
+        #[cfg(not(windows))]
+        let input = format!("echo {marker}\n");
+
+        let write = engine
+            .terminal_write(&TerminalWriteRequest {
+                session_id: session_id.clone(),
+                input,
+            })
+            .await
+            .expect("terminal_write should succeed");
+        assert!(write.bytes_written > 0);
+
+        // Poll rather than sleep a fixed amount: ConPTY latency varies by machine.
+        let mut seen = String::new();
+        for _ in 0..40 {
+            let read = engine
+                .terminal_read(&TerminalReadRequest {
+                    session_id: session_id.clone(),
+                    cursor: Some(0),
+                    ..Default::default()
+                })
+                .await
+                .expect("terminal_read should succeed");
+            seen = read.output;
+            if seen.contains(marker) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        let _ = engine
+            .terminal_kill(&TerminalKillRequest {
+                session_id: session_id.clone(),
+            })
+            .await;
+
+        assert!(
+            seen.contains(marker),
+            "stdin never reached the PTY child. terminal_write reported success but \
+             no command ran. Captured output: {seen:?}"
+        );
+    }
+
     #[tokio::test]
     async fn test_terminal_exec_pty() {
         let engine = TerminalEngine::new();

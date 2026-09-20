@@ -12,6 +12,131 @@ pub struct ShellSpec {
     pub args: Vec<String>,
 }
 
+/// Resolve the invocation for `command` as a single `program` plus its arguments.
+///
+/// `wrap_in_shell` distinguishes the two callers:
+///
+/// - `true` (pipe execution): every command runs through a shell, so shell syntax
+///   (`&&`, pipes, globs, `$VAR`) works. This is what a one-shot CLI invocation wants.
+/// - `false` (interactive PTY): a bare shell or REPL is invoked **directly** so it stays
+///   interactive. Wrapping it would run the program as a one-shot argument and exit
+///   immediately — `powershell -Command "powershell -NoProfile -NoLogo"` prints a banner
+///   and returns, leaving a dead session that accepts writes and silently ignores them.
+///   Compound or argument-bearing commands are still wrapped, since those need a shell.
+pub fn resolve_shell_spec(
+    shell_override: Option<&str>,
+    command: &str,
+    wrap_in_shell: bool,
+) -> ShellSpec {
+    if !wrap_in_shell && let Some(spec) = bare_repl_spec(command) {
+        return spec;
+    }
+    resolve_shell(shell_override, command)
+}
+
+/// Build a direct invocation for a command that is nothing but a shell or REPL program.
+///
+/// Returns `None` for anything compound (`a && b`), pipe or redirect syntax, or a
+/// program given work to do, because those require a shell to interpret.
+fn bare_repl_spec(command: &str) -> Option<ShellSpec> {
+    let tokens = tokenize_command(command);
+    let (first, rest) = tokens.split_first()?;
+
+    // Strip a directory prefix and a Windows executable suffix so `C:\...\pwsh.exe`
+    // and `pwsh` resolve identically.
+    let program = first.rsplit(['/', '\\']).next().unwrap_or(first);
+    let lowered = program.to_ascii_lowercase();
+    let stem = lowered.strip_suffix(".exe").unwrap_or(&lowered);
+
+    const INTERACTIVE_PROGRAMS: &[&str] = &[
+        "bash",
+        "cmd",
+        "fish",
+        "irb",
+        "mongosh",
+        "mysql",
+        "node",
+        "nu",
+        "nushell",
+        "powershell",
+        "psql",
+        "pwsh",
+        "python",
+        "python2",
+        "python3",
+        "redis-cli",
+        "sh",
+        "sqlite3",
+        "zsh",
+    ];
+    if !INTERACTIVE_PROGRAMS.contains(&stem) {
+        return None;
+    }
+
+    // Session modifiers such as `-NoProfile` leave the shell interactive and must be
+    // preserved. Anything else (`-Command`, `-c`, `-e`, a script path) is work to run,
+    // which belongs in a shell.
+    const SESSION_MODIFIERS: &[&str] = &[
+        "-nologo",
+        "-noprofile",
+        "-noninteractive",
+        "-nol",
+        "-nop",
+        "-noexit",
+    ];
+    for token in rest {
+        if !SESSION_MODIFIERS.contains(&token.to_ascii_lowercase().as_str()) {
+            return None;
+        }
+    }
+
+    Some(ShellSpec {
+        program: PathBuf::from(first),
+        args: rest.to_vec(),
+    })
+}
+
+/// Split a command line into tokens, honouring single and double quotes.
+///
+/// Used only for classification; the result is never executed. Shell operators are
+/// emitted as their own tokens so a compound command is never mistaken for a bare one.
+fn tokenize_command(cmd: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+
+    for ch in cmd.chars() {
+        match quote {
+            Some(q) => {
+                if ch == q {
+                    quote = None;
+                } else {
+                    current.push(ch);
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                c if c.is_whitespace() => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                }
+                '&' | '|' | ';' | '<' | '>' => {
+                    if !current.is_empty() {
+                        tokens.push(std::mem::take(&mut current));
+                    }
+                    tokens.push(ch.to_string());
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
 /// Resolves the optimal shell command for the current platform and optional user override.
 pub fn resolve_shell(shell_override: Option<&str>, command: &str) -> ShellSpec {
     #[cfg(windows)]
