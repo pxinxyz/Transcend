@@ -512,11 +512,19 @@ pub struct PatchResponse {
     pub target_span: Option<SourceSpan>,
     /// Whether the spliced source parsed without syntax errors.
     ///
-    /// True also when no check was possible: `validate_ast` only runs for a file whose
-    /// extension has a registered grammar, so for `.json`, `.toml`, `.txt` and similar this
-    /// reports true without anything having been parsed. Treat it as "no errors were found",
-    /// not as "the syntax was verified"; `syntax_errors` is empty in both cases.
+    /// Meaningful only when [`Self::ast_validated`] is true. When it is false no parse happened
+    /// -- `validate_ast` only runs for an extension with a registered grammar, so `.json`,
+    /// `.toml`, `.txt` and similar are never checked -- and this reports true because no errors
+    /// were *found*, not because the syntax was verified. `syntax_errors` is empty in both
+    /// cases, which is why the two must be read together.
     pub ast_valid: bool,
+    /// Whether AST preflight actually parsed the result.
+    ///
+    /// False when validation was disabled, or when the target extension has no registered
+    /// grammar. A caller that needs the syntax guarantee must check this before trusting
+    /// `ast_valid`; a caller patching configuration files can use it to know the guarantee was
+    /// never available rather than silently receiving a vacuous one.
+    pub ast_validated: bool,
     /// Syntax errors detected during AST preflight.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syntax_errors: Vec<PatchSyntaxError>,
@@ -553,10 +561,14 @@ pub struct BatchPatchResponse {
     pub results: Vec<PatchResponse>,
     /// Number of distinct files patched.
     pub total_files_patched: usize,
-    /// Whether every patched file parsed without syntax errors. See `PatchResponse.ast_valid`
-    /// for the caveat: files with no registered grammar are reported valid without having
-    /// been parsed.
+    /// Whether every patched file parsed without syntax errors. Meaningful only when
+    /// [`Self::all_ast_validated`] is true; see `PatchResponse.ast_valid` for why.
     pub all_ast_valid: bool,
+    /// Whether AST preflight ran for every patched file.
+    ///
+    /// False when validation was disabled, or when any patched file's extension has no
+    /// registered grammar -- so `all_ast_valid` cannot be trusted as a syntax guarantee.
+    pub all_ast_validated: bool,
     /// Accumulated syntax errors across any files that failed AST preflight.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syntax_errors: Vec<PatchSyntaxError>,

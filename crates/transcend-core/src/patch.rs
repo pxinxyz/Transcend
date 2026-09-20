@@ -77,6 +77,7 @@ impl Patcher {
                         file: display_path.to_string(),
                         target_span: None,
                         ast_valid: false,
+                        ast_validated: false,
                         syntax_errors: vec![],
                         diff: None,
                         message: sym_res.message.unwrap_or_else(|| {
@@ -109,6 +110,7 @@ impl Patcher {
                         file: display_path.to_string(),
                         target_span: None,
                         ast_valid: false,
+                        ast_validated: false,
                         syntax_errors: vec![],
                         diff: None,
                         message: format!("Target text needle '{}' not found in file", needle),
@@ -124,6 +126,7 @@ impl Patcher {
                         file: display_path.to_string(),
                         target_span: None,
                         ast_valid: false,
+                        ast_validated: false,
                         syntax_errors: vec![],
                         diff: None,
                         message: format!(
@@ -144,6 +147,7 @@ impl Patcher {
                         file: display_path.to_string(),
                         target_span: None,
                         ast_valid: false,
+                        ast_validated: false,
                         syntax_errors: vec![],
                         diff: None,
                         message: format!(
@@ -167,6 +171,7 @@ impl Patcher {
                     file: display_path.to_string(),
                     target_span: None,
                     ast_valid: false,
+                    ast_validated: false,
                     syntax_errors: vec![],
                     diff: None,
                     message: "Must specify one of 'target_symbol', 'target_span', or 'target_text'"
@@ -188,6 +193,7 @@ impl Patcher {
                     file: display_path.to_string(),
                     target_span: Some(target_span),
                     ast_valid: false,
+                    ast_validated: false,
                     syntax_errors: vec![],
                     diff: None,
                     message: format!(
@@ -334,8 +340,16 @@ impl Patcher {
         );
 
         // 4. AST Preflight Verification
+        //
+        // `ast_validated` records whether a parse ACTUALLY happened, which is not the same as
+        // whether it was requested. Validation needs both `validate_ast` and a registered
+        // grammar, so for `.json`, `.toml`, `.txt` and anything else unparsed the preflight is
+        // skipped -- and `ast_valid: true` then meant "no errors were found", which is
+        // trivially true when nothing was checked. A caller gating a follow-up on `ast_valid`
+        // received a guarantee that was never established.
         let validate_ast = req.validate_ast.unwrap_or(true);
         let lang_opt = SupportedLang::from_path(Path::new(&req.path));
+        let mut ast_validated = false;
 
         if validate_ast && let Some(lang) = lang_opt {
             let mut parser = Parser::new();
@@ -343,6 +357,8 @@ impl Patcher {
             if let Ok(()) = parser.set_language(&ts_lang)
                 && let Some(tree) = parser.parse(&new_source, None)
             {
+                // A parse happened: from here `ast_valid` carries real information.
+                ast_validated = true;
                 let root = tree.root_node();
                 if root.has_error() || root.is_error() {
                     let mut errors = Vec::new();
@@ -354,6 +370,7 @@ impl Patcher {
                                         file: display_path.to_string(),
                                         target_span: Some(target_span),
                                         ast_valid: false,
+                                        ast_validated: true,
                                         syntax_errors: errors,
                                         diff: Some(diff),
                                         message: "AST preflight verification failed: syntax errors detected in spliced code. Disk was not modified.".to_string(),
@@ -379,6 +396,7 @@ impl Patcher {
                 file: display_path.to_string(),
                 target_span: Some(target_span),
                 ast_valid: true,
+                ast_validated,
                 syntax_errors: vec![],
                 diff: Some(diff),
                 message: msg,
@@ -398,6 +416,7 @@ impl Patcher {
                     file: req.path.clone(),
                     target_span: None,
                     ast_valid: false,
+                    ast_validated: false,
                     syntax_errors: vec![],
                     diff: None,
                     message: format!("File does not exist: {}", p.display()),
@@ -452,6 +471,10 @@ impl Patcher {
                 results: vec![],
                 total_files_patched: 0,
                 all_ast_valid: true,
+                // Nothing was submitted, so nothing was parsed. Reporting a successful
+                // validation here would be the same vacuous guarantee this field exists to
+                // expose.
+                all_ast_validated: false,
                 syntax_errors: vec![],
                 diff: None,
                 message: "No patches provided in batch.".to_string(),
@@ -460,7 +483,6 @@ impl Patcher {
 
         let validate_ast = req.validate_ast.unwrap_or(true);
         let dry_run = req.dry_run.unwrap_or(false);
-
         // Phase 1: In-Memory Sequential Simulation & AST Preflight
         let mut working_buffers: std::collections::HashMap<std::path::PathBuf, Vec<u8>> =
             std::collections::HashMap::new();
@@ -494,6 +516,7 @@ impl Patcher {
                             file: patch_req.path.clone(),
                             target_span: None,
                             ast_valid: false,
+                            ast_validated: false,
                             syntax_errors: vec![],
                             diff: None,
                             message: format!("File does not exist: {}", path_buf.display()),
@@ -509,6 +532,7 @@ impl Patcher {
                                 file: patch_req.path.clone(),
                                 target_span: None,
                                 ast_valid: false,
+                                ast_validated: false,
                                 syntax_errors: vec![],
                                 diff: None,
                                 message: format!("Failed to read file {}: {e}", path_buf.display()),
@@ -565,12 +589,18 @@ impl Patcher {
             Some(consolidated_diff)
         };
 
+        // Derived from what each patch actually did, not asserted. `all_ast_valid` is only a
+        // syntax guarantee when every patch was really parsed; for a batch of `.json` or
+        // `.toml` files none are, and the aggregate used to claim otherwise.
+        let all_validated = simulated_results.iter().all(|r| r.ast_validated);
+
         if any_failed {
             return Ok(BatchPatchResponse {
                 success: false,
                 results: simulated_results,
                 total_files_patched: 0,
                 all_ast_valid: false,
+                all_ast_validated: false,
                 syntax_errors: accumulated_syntax_errors,
                 diff: final_diff,
                 message: "Batch patch aborted: one or more patches failed AST preflight validation or target resolution. No files modified on disk.".to_string(),
@@ -585,6 +615,7 @@ impl Patcher {
                 // file count here overstated what happened.
                 total_files_patched: 0,
                 all_ast_valid: true,
+                all_ast_validated: all_validated,
                 syntax_errors: vec![],
                 diff: final_diff,
                 message: "Dry run: all patches in batch successfully validated. No changes written to disk.".to_string(),
@@ -644,6 +675,7 @@ impl Patcher {
                 results: simulated_results,
                 total_files_patched: 0,
                 all_ast_valid: false,
+                all_ast_validated: false,
                 syntax_errors: vec![],
                 diff: None,
                 message: format!(
@@ -672,6 +704,7 @@ impl Patcher {
             // Only files actually written to disk count as patched.
             total_files_patched: written_files.len(),
             all_ast_valid: true,
+            all_ast_validated: all_validated,
             syntax_errors: vec![],
             diff: final_diff,
             message: format!(
@@ -1037,34 +1070,74 @@ mod tests {
         );
     }
 
-    /// Pins the documented limitation of `ast_valid`: validation only runs for extensions
-    /// with a registered grammar, so a syntax-breaking edit to a file with no grammar is
-    /// reported as valid. This is deliberate and now documented; the test exists so that
-    /// changing the behaviour is a conscious decision rather than a silent drift.
+    /// A skipped AST preflight must not be reported as a performed one.
+    ///
+    /// Validation needs both `validate_ast` and a registered grammar, so for `.json` (and
+    /// `.toml`, `.txt`, ...) nothing is parsed. `ast_valid` is then true because no errors were
+    /// *found*, not because the syntax was verified, and `syntax_errors` is empty either way --
+    /// so `ast_validated` is the only thing that distinguishes the two. Before it existed, a
+    /// caller gating a follow-up on `ast_valid` received a guarantee that was never
+    /// established: a syntax-breaking edit to a `.json` file reported `ast_valid: true`.
     #[test]
-    fn ast_valid_is_vacuously_true_for_extensions_without_a_grammar() {
+    fn ast_preflight_that_did_not_run_is_reported_as_unvalidated() {
         let dir = scratch_dir("no-grammar");
         let path = dir.join("data.json");
         std::fs::write(&path, "{\"a\":1}").expect("seed fixture");
 
-        let req = PatchRequest {
+        let res = Patcher::patch(&PatchRequest {
             path: path.to_string_lossy().to_string(),
             target_text: Some("1".to_string()),
             replacement: "(((((".to_string(),
             validate_ast: Some(true),
             dry_run: Some(true),
             ..Default::default()
-        };
+        })
+        .expect("patch should succeed");
 
-        let res = Patcher::patch(&req).expect("patch should succeed");
         assert!(res.success, "{}", res.message);
         assert!(
-            res.ast_valid,
-            "no grammar exists for .json, so nothing was parsed and no error is reported"
+            !res.ast_validated,
+            "no grammar exists for .json, so no parse happened and ast_validated must be false"
         );
         assert!(
-            res.syntax_errors.is_empty(),
-            "nothing was parsed, so no syntax errors can have been found"
+            res.ast_valid,
+            "ast_valid stays true because nothing was found -- which is exactly why \
+             ast_validated has to be read alongside it"
+        );
+        assert!(res.syntax_errors.is_empty());
+
+        // The positive case: a Rust file IS parsed, so the guarantee is real.
+        let rust_path = dir.join("real.rs");
+        std::fs::write(&rust_path, "pub fn alpha() -> u32 { 1 }\n").expect("seed fixture");
+        let ok = Patcher::patch(&PatchRequest {
+            path: rust_path.to_string_lossy().to_string(),
+            target_symbol: Some("alpha".to_string()),
+            replacement: "pub fn alpha() -> u32 { 2 }".to_string(),
+            validate_ast: Some(true),
+            dry_run: Some(true),
+            ..Default::default()
+        })
+        .expect("patch should succeed");
+        assert!(ok.success, "{}", ok.message);
+        assert!(
+            ok.ast_validated,
+            "a Rust file has a grammar, so the preflight ran"
+        );
+        assert!(ok.ast_valid, "and it found no errors");
+
+        // Validation switched off explicitly: no parse, no guarantee.
+        let off = Patcher::patch(&PatchRequest {
+            path: rust_path.to_string_lossy().to_string(),
+            target_symbol: Some("alpha".to_string()),
+            replacement: "pub fn alpha() -> u32 { 3 }".to_string(),
+            validate_ast: Some(false),
+            dry_run: Some(true),
+            ..Default::default()
+        })
+        .expect("patch should succeed");
+        assert!(
+            !off.ast_validated,
+            "validate_ast: false means no parse, even for a supported language"
         );
     }
 

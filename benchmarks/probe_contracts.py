@@ -808,6 +808,40 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
         exact.get("exit_code") == 42,
     )
 
+    # ---- ast_valid is only a guarantee when ast_validated says so ---------
+    # Validation needs both `validate_ast` and a registered grammar, so for `.json` nothing is
+    # parsed. `ast_valid` is then true because no errors were found, not because the syntax was
+    # verified, and `syntax_errors` is empty either way -- so `ast_validated` is the only thing
+    # that separates the two.
+    json_path = os.path.join(scratch, "astprobe.json")
+    open(json_path, "w").write('{"a":1}')
+    r = j(s.call("patch", {"path": json_path, "target_text": "1",
+                           "replacement": "(((((", "dry_run": True}))
+    check(
+        "patch", "a skipped AST preflight reports ast_validated=false",
+        f"ast_valid={r.get('ast_valid')} ast_validated={r.get('ast_validated')}",
+        r.get("ast_validated") is False,
+    )
+
+    rs_path = os.path.join(scratch, "astprobe.rs")
+    open(rs_path, "w").write("pub fn alpha() -> u32 { 1 }\n")
+    r = j(s.call("patch", {"path": rs_path, "target_symbol": "alpha",
+                           "replacement": "pub fn alpha() -> u32 { 2 }", "dry_run": True}))
+    check(
+        "patch", "a performed AST preflight reports ast_validated=true",
+        f"ast_valid={r.get('ast_valid')} ast_validated={r.get('ast_validated')}",
+        r.get("ast_validated") is True and r.get("ast_valid") is True,
+    )
+
+    r = j(s.call("patch", {"path": rs_path, "target_symbol": "alpha",
+                           "replacement": "pub fn alpha() -> u32 { 3 }",
+                           "validate_ast": False, "dry_run": True}))
+    check(
+        "patch", "validate_ast=false reports ast_validated=false",
+        f"ast_validated={r.get('ast_validated')}",
+        r.get("ast_validated") is False,
+    )
+
     # ---- lsp_definition / lsp_hover on a known symbol --------------------
     r = j(s.call("lsp_definition", {"path": os.path.join(scratch, "sample.rs"),
                                     "symbol": "alpha"}))
