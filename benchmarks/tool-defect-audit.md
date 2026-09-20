@@ -6,6 +6,27 @@ Findings marked **CONFIRMED** were independently reproduced by me (not just repo
 
 Note on ownership: none of these are caught by the existing suite.
 
+## Status
+
+| # | Defect | Status |
+|---|---|---|
+| 1 | `batch_patch` persisted in-memory buffers | **fixed** (`c414c8d`) |
+| 2 | `outline` panicked truncating a multibyte skeleton | **fixed** (`520f9d4`) |
+| 3 | `lsp_diagnostics` with `path` always returns zero | open |
+| 4 | `outline` drops files past `max_files`, reports `truncated:false` | open |
+| 5 | `find_symbol` can omit the exact match (cap before sort) | open |
+| 6 | `find_symbol.case_sensitive` default | **withdrawn** — doc was wrong, see below |
+| 7 | `exec` ignored `max_output_bytes` on the kill path | **fixed** (`b867a5e`) |
+| 8 | `lsp_references.include_declaration` ignored on fallback | open |
+| 9 | `read_file.max_bytes` enforced as a char budget | open |
+| 10 | `search` on a single file reports `file:""` | open |
+| 11 | `search` reports `truncated:false` when `max_per_file` capped | open |
+| 12 | `symbol_kinds`/`exported_only` no-ops for some languages | open |
+| 13 | `ast_valid:true` when no grammar exists | open |
+| 14 | `lsp_status` silently empty for an unknown language | open |
+| 15 | Shared workspace root makes results order-dependent | open |
+| — | `exec.raw` silently ignored on the PTY path | **fixed** (`b867a5e`) |
+
 ---
 
 ## HIGH
