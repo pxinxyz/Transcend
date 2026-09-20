@@ -53,6 +53,29 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## The file-root path defect existed in three tools, not one (fixed)
+
+Comparing how every tool reports a path for the same root found the same defect three times:
+
+| tool | file root | directory root |
+|---|---|---|
+| `search` | `""` (fixed `5d8aaef`) | `root.rs`, `sub/deep.rs` |
+| `find_symbol` | `""` | `root.rs` |
+| `outline` | `C:/.../root.rs` — **absolute** | `root.rs` |
+
+All three fell back differently from the same cause: when the root *is* the file, `strip_prefix`
+yields `""`. `search` fell back to the absolute path, `find_symbol` kept the empty string,
+`outline` echoed the absolute one. With directory roots they agreed, so the divergence only
+appeared for a file root — which is why it survived until the conventions were compared
+side by side rather than tested one tool at a time.
+
+Fixed in `824bfa7`: all three report the file's own name. Regression test asserts all three
+agree, and the probe (now 50 of 53) covers each.
+
+**Method note:** this is the payoff from comparing conventions across tools rather than
+auditing each in isolation. Three rounds of per-tool probing missed it; one cross-tool
+comparison found it in all three at once.
+
 ## `search` cluster paths broke their own contract for a file root (fixed)
 
 `FileCluster.file` is documented as "relative to search root". Probing the three root shapes:
