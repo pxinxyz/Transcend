@@ -837,6 +837,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_exit_code_fidelity_across_shells() {
+        let engine = TerminalEngine::new();
+
+        // Commands with deterministic outcomes, so the assertion does not depend on what is in
+        // the working directory. An earlier version searched for a marker string and matched
+        // this very test file.
+        let run = |cmd: &str, shell: Option<&str>| {
+            let engine = engine.clone();
+            let cmd = cmd.to_string();
+            let shell = shell.map(str::to_string);
+            async move {
+                engine
+                    .exec(&ExecRequest {
+                        command: cmd,
+                        shell,
+                        timeout_ms: Some(20_000),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap_or_else(|e| panic!("exec failed: {e}"))
+            }
+        };
+
+        // Success is reported exactly, and PowerShell's own `exit N` is exact.
+        assert_eq!(
+            run("rg --version", None).await.exit_code,
+            Some(0),
+            "rg --version"
+        );
+        assert_eq!(
+            run("exit 5", Some("powershell")).await.exit_code,
+            Some(5),
+            "exit 5"
+        );
+        assert_eq!(
+            run("exit 0", Some("powershell")).await.exit_code,
+            Some(0),
+            "exit 0"
+        );
+
+        // Known limitation, pinned rather than left to be rediscovered.
+        //
+        // The default shell is PowerShell, and PowerShell collapses SOME specific non-zero codes
+        // to 1 when the command is a nested executable: `cmd /c exit 42` reports 1, and `rg`
+        // failing with its documented code 2 also reports 1. Success versus failure survives in
+        // every case observed, so a caller asking "did this work?" is never misled; only a
+        // caller branching on a specific non-zero code is.
+        //
+        // The assertions below therefore pin the PROPERTY (zero stays zero, non-zero stays
+        // non-zero) rather than the exact codes, because the exact codes are what is degraded.
+        // If a future change makes them exact these tests still pass -- tighten them then.
+        #[cfg(windows)]
+        {
+            for (cmd, shell) in [
+                ("cmd /c exit 42", None),
+                ("rg --version --definitely-bad-flag", None),
+            ] {
+                let res = run(cmd, shell).await;
+                assert_ne!(
+                    res.exit_code,
+                    Some(0),
+                    "{cmd:?} fails, so a caller must not see success; output was {:?}",
+                    res.output
+                );
+            }
+
+            // Naming the shell preserves the exact code, which is the workaround.
+            assert_eq!(
+                run("cmd /c exit 42", Some("cmd")).await.exit_code,
+                Some(42),
+                "shell=cmd must report the exact code"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn test_wait_for_pattern_reports_when_the_pattern_never_appears() {
         let engine = TerminalEngine::new();
 
