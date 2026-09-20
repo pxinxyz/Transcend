@@ -53,10 +53,31 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
-## Open defect found by the efficiency harness
+## Defect found by the contract probe (fixed)
 
-**`lsp_diagnostics` reported a broken file as clean.** Found by
-`benchmarks/efficiency.py`; root-caused and fixed.
+**`terminal_read` gave up on `wait_for_pattern` without saying so.** `wait_for_pattern` is
+documented as "pattern to await in the terminal output stream before returning"; the poll
+loop fell out of its deadline and returned the buffer as though the wait had succeeded, so
+"the pattern appeared" and "I waited and gave up" were indistinguishable. An agent waiting
+for a build to print a completion line would proceed on a build that never got there.
+
+Verified live before the fix: a read with `wait_for_pattern` set to a string that cannot
+occur returned `Ok` with the shell banner and no failure indication. Fixed in `aaec581`; the
+wait now distinguishes a match from a timeout and a process exit, and returns an error naming
+the pattern and the reason. Regression test drives a real PTY and was confirmed to fail
+against the previous behaviour.
+
+Also checked and found **correct**, so they do not need re-litigating:
+
+- `search.max_line_length` marks the clip inline (`... [truncated N chars]`) rather than via a
+  flag; `truncated` stays false because the *match budget* was not what clipped the line. The
+  inline marker makes the omission visible, so this is a defensible reading of the contract.
+- `git_status` distinguishes staged, unstaged and untracked correctly, verified against
+  `git status --porcelain=v2` on a repo constructed with all three states.
+
+## Defect found by the efficiency harness (fixed)
+
+**`lsp_diagnostics` reported a broken file as clean.**
 
 Reproducer: a standalone crate with two genuine compiler errors
 (`let s: String = 42;` and a call to a missing function). `cargo check` reports both.
