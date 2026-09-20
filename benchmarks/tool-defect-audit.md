@@ -17,14 +17,12 @@ python benchmarks/efficiency.py --corpus <rust-checkout> --run-diagnostics
 python benchmarks/schema_tax.py --compare pre-doc-trim   # schema token cost
 ```
 
-`probe_contracts.py` currently reports **62 of 65 honoured**. The three failures are all the
-two items deliberately left for a decision — `read_file`'s missing failure discriminator (2
-checks) and misspelled options being silently defaulted (1). A green run would mean both
-decisions had been taken.
+`probe_contracts.py` currently reports **71 of 71 honoured** — fully green, with every
+previously-reported defect closed.
 
-Item 24 (exit-code fidelity) **passes** there, because the probe asserts the property that
-actually holds — zero means success, and a failing command never reports 0 — rather than the
-exact code, which is the part that is degraded.
+Item 24 (exit-code fidelity) passes there because the probe asserts the property that actually
+holds — zero means success, and a failing command never reports 0 — rather than the exact code,
+which is the part that is degraded.
 
 ## Status
 
@@ -42,7 +40,7 @@ exact code, which is the part that is degraded.
 | 10 | `search` on a single file reports `file:""` | **fixed** (`74a0413`) |
 | 11 | `search` reports `truncated:false` when `max_per_file` capped | **fixed** (`74a0413`) |
 | 12 | `symbol_kinds`/`exported_only` no-ops for some languages | **fixed** (`2414bb6`) |
-| 13 | `ast_valid:true` when no grammar exists | **documented** (`1161274`) — behaviour change needs a contract decision |
+| 13 | `ast_valid:true` when no grammar exists | **fixed** (`863678e`) — `ast_validated` added |
 | 14 | `lsp_status` silently empty for an unknown language | **fixed** (`85f8aae`) |
 | 15 | Shared workspace root makes results order-dependent | **narrowed** (`aaf28af`) — ordering, not safety |
 | 16 | `batch_patch` counted requested rather than written files | **fixed** (`c414c8d`) |
@@ -52,11 +50,26 @@ exact code, which is the part that is degraded.
 | 20 | Zero and inverted count budgets reinterpreted rather than refused | **fixed** (`e02d48e`) |
 | 21 | File-root paths wrong in `search`, `find_symbol` **and** `outline` | **fixed** (`5d8aaef`, `824bfa7`) |
 | 22 | `terminal_read.wait_for_pattern` gave up silently | **fixed** (`aaec581`) |
-| 23 | Misspelled option names silently defaulted | **reported**, not fixed |
+| 23 | Misspelled option names silently defaulted | **fixed** (`5fa0eee`) — `deny_unknown_fields` |
 | 24 | Non-zero exit codes not always exact through the default shell | **documented** (`abbcdb8`) |
 
-**21 of 24 fixed, 2 documented as needing a contract decision, 1 reported.** Every fix carries a
-regression test that was confirmed to fail against the pre-fix code.
+**23 of 24 fixed, 1 documented as a shell limitation.** Every fix carries a regression test
+that was confirmed to fail against the pre-fix code.
+
+### The three contract decisions, taken and implemented
+
+- `read_file` gained `success` (`839bec5`), so a missing file, a directory and an empty file
+  are distinguishable without parsing prose.
+- `patch` gained `ast_validated` and `batch_patch` gained `all_ast_validated` (`863678e`), so a
+  skipped preflight is no longer reported as a performed one. The batch flag is derived from
+  the per-patch flags rather than asserted, and an empty batch reports `false`.
+- All 26 request and option structs gained `#[serde(deny_unknown_fields)]` (`5fa0eee`), so a
+  misspelled option is rejected by name instead of silently applying the default.
+
+All three are breaking for Rust callers building the structs literally. The first two are
+additive for MCP clients; the third is not — a client sending an undefined key now gets an
+error rather than having it ignored. The documented aliases still resolve, which is asserted,
+so only the accidental forgiveness was removed.
 
 Three findings were corrected during the work, which is worth keeping visible:
 
