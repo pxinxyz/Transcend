@@ -141,7 +141,8 @@ impl LspEngine {
         }
 
         let sym_name = req.symbol.as_deref().unwrap_or("");
-        let fallback = HeuristicFallback::find_references(engine, file_path, sym_name, limit);
+        let fallback =
+            HeuristicFallback::find_references(engine, file_path, sym_name, include_decl, limit);
         Ok(fallback)
     }
 

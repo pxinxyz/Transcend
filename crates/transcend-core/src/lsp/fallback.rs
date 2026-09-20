@@ -11,6 +11,7 @@ use transcend_protocol::{
     SearchOptions, SearchRequest, SourceSpan,
 };
 
+use crate::outline::symbol_reader::SymbolReader;
 use crate::{Engine, NativeEngine};
 
 pub struct HeuristicFallback;
@@ -81,14 +82,28 @@ impl HeuristicFallback {
     }
 
     /// Heuristic find-references using ripgrep word-boundary pattern search.
+    ///
+    /// `include_declaration` defaults to `false`, meaning the declaration itself is excluded
+    /// and only call sites are returned. The heuristic locates the declaration via the same
+    /// outline pass used by `hover`, then drops the match that spans it. This is
+    /// line-granular: a call on the same line as the declaration is removed with it.
     pub fn find_references(
         engine: &NativeEngine,
         file_path: &Path,
         symbol_name: &str,
+        include_declaration: bool,
         limit: usize,
     ) -> LspReferencesResponse {
         let bare_name = symbol_name.split("::").last().unwrap_or(symbol_name).trim();
         let search_root = file_path.parent().unwrap_or(file_path);
+
+        // Where the declaration lives, so it can be excluded. `None` means it could not be
+        // located, in which case nothing is dropped rather than guessing.
+        let declaration = if include_declaration {
+            None
+        } else {
+            Self::locate_declaration(engine, file_path, bare_name)
+        };
 
         // Regex word boundary pattern: \b<symbol>\b
         let pattern = format!(r"\b{}\b", regex::escape(bare_name));
@@ -108,6 +123,12 @@ impl HeuristicFallback {
                 let mut references = Vec::new();
                 for file_entry in &search_res.files {
                     for m in &file_entry.matches {
+                        if let Some((decl_file, decl_line)) = declaration.as_ref()
+                            && Self::same_file(&file_entry.file, decl_file)
+                            && m.line_number == *decl_line
+                        {
+                            continue;
+                        }
                         references.push(LspReferenceLocation {
                             file: file_entry.file.clone(),
                             span: SourceSpan {
@@ -124,7 +145,9 @@ impl HeuristicFallback {
                 }
 
                 LspReferencesResponse {
-                    total_found: search_res.total_matches,
+                    // Report the post-filter count so total_found cannot claim more
+                    // references than `references` actually contains.
+                    total_found: references.len(),
                     references,
                     truncated: search_res.truncated,
                     engine: "tree-sitter:heuristic".to_string(),
@@ -137,6 +160,42 @@ impl HeuristicFallback {
                 engine: "tree-sitter:heuristic".to_string(),
             },
         }
+    }
+
+    /// Find the (file, 1-based line) of a symbol's own declaration, if it can be located.
+    fn locate_declaration(
+        engine: &NativeEngine,
+        file_path: &Path,
+        symbol_name: &str,
+    ) -> Option<(String, usize)> {
+        let content = fs::read_to_string(file_path).ok()?;
+        let res = engine
+            .outline(&OutlineRequest {
+                path: Some(file_path.to_string_lossy().to_string()),
+                content: Some(content),
+                options: None,
+            })
+            .ok()?;
+
+        let mut symbols = Vec::new();
+        for file_outline in &res.files {
+            SymbolReader::collect_symbols(&file_outline.symbols, &[], &mut symbols);
+        }
+        let found = symbols
+            .into_iter()
+            .find(|s| s.symbol.name == symbol_name || s.qualified_name.ends_with(symbol_name))?;
+
+        Some((
+            file_path.to_string_lossy().replace('\\', "/"),
+            found.symbol.span.start_line,
+        ))
+    }
+
+    /// Compare two display paths that may differ in separator style or absoluteness.
+    fn same_file(a: &str, b: &str) -> bool {
+        let norm = |s: &str| s.replace('\\', "/");
+        let (a, b) = (norm(a), norm(b));
+        a == b || a.ends_with(&b) || b.ends_with(&a)
     }
 
     /// Heuristic hover using Tree-sitter outline signature and doc comments.

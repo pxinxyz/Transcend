@@ -999,6 +999,68 @@ mod tests {
         assert!(res.files[0].matches[0].line_text.contains("[truncated"));
     }
 
+    /// Regression: `include_declaration` defaults to false, meaning the declaration itself
+    /// must be excluded from references. The heuristic fallback dropped the flag entirely, so
+    /// the default and `include_declaration: true` returned byte-identical sets containing
+    /// the definition line -- the caller got no indication the filter had been skipped.
+    #[test]
+    fn test_heuristic_find_references_respects_include_declaration() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let src = sandbox.dir.join("widget.rs");
+        // Line 1 is the declaration; line 3 is a call site.
+        fs::write(
+            &src,
+            "pub fn widget_build() -> u32 { 1 }\n\nfn caller() -> u32 { widget_build() }\n",
+        )
+        .unwrap();
+
+        let without = crate::lsp::fallback::HeuristicFallback::find_references(
+            &engine,
+            &src,
+            "widget_build",
+            false,
+            50,
+        );
+        let with = crate::lsp::fallback::HeuristicFallback::find_references(
+            &engine,
+            &src,
+            "widget_build",
+            true,
+            50,
+        );
+
+        let lines_without: Vec<usize> = without
+            .references
+            .iter()
+            .map(|r| r.span.start_line)
+            .collect();
+        let lines_with: Vec<usize> = with.references.iter().map(|r| r.span.start_line).collect();
+
+        assert!(
+            !lines_with.is_empty(),
+            "the call site must be found, got {lines_with:?}"
+        );
+        assert!(
+            !lines_without.contains(&1),
+            "default (include_declaration: false) must exclude the declaration on line 1, got {lines_without:?}"
+        );
+        assert!(
+            lines_with.contains(&1),
+            "include_declaration: true must include the declaration, got {lines_with:?}"
+        );
+        assert!(
+            lines_with.len() > lines_without.len(),
+            "the flag must change the result: {lines_without:?} vs {lines_with:?}"
+        );
+        assert_eq!(
+            without.total_found,
+            without.references.len(),
+            "total_found must agree with the returned references"
+        );
+    }
+
     /// Regression: when `path` names a single file, the search root *is* that file, so
     /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
     #[test]
