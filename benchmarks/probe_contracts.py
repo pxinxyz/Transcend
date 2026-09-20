@@ -491,6 +491,29 @@ def run_param_probes(s: McpSession, scratch: str) -> None:
             f"bytes_written={wr.get('bytes_written')} output_tail={seen[-120:]!r}",
             marker in seen,
         )
+
+        # wait_for_pattern: a pattern that never appears must be reported, not silently
+        # skipped. Returning the output as though the wait had succeeded makes "matched" and
+        # "gave up" indistinguishable.
+        raw_wait = s.call("terminal_read", {
+            "session_id": sid, "cursor": 0,
+            "wait_for_pattern": "THIS_WILL_NEVER_APPEAR_ZZZ", "timeout_ms": 700,
+        })
+        check(
+            "terminal_read", "wait_for_pattern reports a pattern that never appears",
+            f"raw={raw_wait[:140]!r}",
+            raw_wait.startswith(("[rpc-error]", "[tool-error]")),
+        )
+
+        raw_ok = s.call("terminal_read", {
+            "session_id": sid, "cursor": 0,
+            "wait_for_pattern": marker, "timeout_ms": 5000,
+        })
+        check(
+            "terminal_read", "wait_for_pattern returns output when the pattern is present",
+            f"contains_marker={marker in raw_ok}",
+            marker in raw_ok,
+        )
         s.call("terminal_kill", {"session_id": sid})
     else:
         check("terminal_write", "a detached pty session is returned", f"raw={raw[:160]!r}", False)

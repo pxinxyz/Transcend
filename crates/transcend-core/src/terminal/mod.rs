@@ -218,12 +218,37 @@ impl TerminalEngine {
         if let Some(ref pattern) = req.wait_for_pattern {
             let wait_ms = req.timeout_ms.unwrap_or(5_000);
             let deadline = Instant::now() + Duration::from_millis(wait_ms);
+            let mut matched = false;
+            let mut process_ended = false;
             while Instant::now() < deadline {
                 let (peek_output, _, _, _) = session.read(from_cursor, usize::MAX);
-                if peek_output.contains(pattern) || !session.is_running() {
+                if peek_output.contains(pattern) {
+                    matched = true;
+                    break;
+                }
+                if !session.is_running() {
+                    process_ended = true;
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+
+            // A caller asking to await a pattern is waiting for a condition to hold. When it
+            // never does, returning the output as though the wait had succeeded makes the two
+            // outcomes indistinguishable -- the same confident-wrong-answer shape as an empty
+            // diagnostics set read as "clean". The output still exists, so say what happened
+            // and let the caller decide, rather than reporting success.
+            if !matched {
+                let reason = if process_ended {
+                    "the session's process exited before it appeared"
+                } else {
+                    "it did not appear within timeout_ms"
+                };
+                return Err(CoreError::General(format!(
+                    "wait_for_pattern: pattern {pattern:?} was not found; {reason}. \
+                     The session is still available; retry with terminal_read without \
+                     wait_for_pattern to collect output."
+                )));
             }
         } else if let Some(wait_ms) = req.timeout_ms {
             let deadline = Instant::now() + Duration::from_millis(wait_ms);
@@ -808,6 +833,93 @@ mod tests {
             seen.contains(marker),
             "stdin never reached the PTY child. terminal_write reported success but \
              no command ran. Captured output: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_pattern_reports_when_the_pattern_never_appears() {
+        let engine = TerminalEngine::new();
+
+        #[cfg(windows)]
+        let cmd = "powershell -NoProfile -NoLogo";
+        #[cfg(not(windows))]
+        let cmd = "sh";
+
+        let res = engine
+            .exec(&ExecRequest {
+                command: cmd.to_string(),
+                transport: Some(ExecTransport::Pty),
+                timeout_ms: Some(2000),
+                timeout_action: Some(TimeoutAction::Detach),
+                ..Default::default()
+            })
+            .await
+            .expect("pty exec should start a session");
+        let session_id = res.session_id.expect("detached session id");
+
+        // A pattern that cannot appear. The wait times out, and the caller must be told:
+        // returning the output as though the wait had succeeded makes "matched" and "gave up"
+        // indistinguishable, which is how an agent concludes a build finished when it did not.
+        let absent = engine
+            .terminal_read(&TerminalReadRequest {
+                session_id: session_id.clone(),
+                cursor: Some(0),
+                wait_for_pattern: Some("THIS_PATTERN_WILL_NEVER_APPEAR_ZZZ".to_string()),
+                timeout_ms: Some(700),
+                ..Default::default()
+            })
+            .await;
+        assert!(
+            absent.is_err(),
+            "a wait_for_pattern that never matched must not report success; got {:?}",
+            absent.map(|r| r.output)
+        );
+        let msg = absent.unwrap_err().to_string();
+        assert!(
+            msg.contains("THIS_PATTERN_WILL_NEVER_APPEAR_ZZZ"),
+            "the error should name the pattern that was not found, got: {msg}"
+        );
+
+        // A pattern that IS present must still succeed, so the guard does not break the
+        // feature it protects.
+        #[cfg(windows)]
+        let marker = "wait_pattern_present_marker";
+        #[cfg(not(windows))]
+        let marker = "wait_pattern_present_marker";
+        #[cfg(windows)]
+        let input = format!("Write-Output '{marker}'\r\n");
+        #[cfg(not(windows))]
+        let input = format!("echo {marker}\n");
+
+        engine
+            .terminal_write(&TerminalWriteRequest {
+                session_id: session_id.clone(),
+                input,
+            })
+            .await
+            .expect("terminal_write should succeed");
+
+        let present = engine
+            .terminal_read(&TerminalReadRequest {
+                session_id: session_id.clone(),
+                cursor: Some(0),
+                wait_for_pattern: Some(marker.to_string()),
+                timeout_ms: Some(8_000),
+                ..Default::default()
+            })
+            .await;
+
+        let _ = engine
+            .terminal_kill(&TerminalKillRequest {
+                session_id: session_id.clone(),
+            })
+            .await;
+
+        let found = present.expect("a pattern that appears must be reported as found");
+        assert!(
+            found.output.contains(marker),
+            "the matched read should carry the output, got {:?}",
+            found.output
         );
     }
 
