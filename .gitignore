@@ -1,6 +1,9 @@
 # Legacy reference files
 /LEGACY/
 
+# Parked design ideas and speculative notes, kept local until they are ready
+/IDEAS/
+
 # Cloned Rust MCP SDK reference
 /rust-sdk/
 

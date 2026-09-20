@@ -15,6 +15,7 @@ Owns the Transcend Cargo workspace and its four constituent crates:
 - **Conventional Commits**: All git commit messages MUST strictly adhere to the [Conventional Commits v1.0.0](conventionalcommits.md) specification (see §4).
 - `LEGACY/` is gitignored and reserved for untracked legacy reference materials (§14.5 containment).
 - `rust-sdk/` is gitignored and reserved for local SDK reference (official `modelcontextprotocol/rust-sdk` clone).
+- `IDEAS/` is gitignored and reserved for parked design notes and speculative work. Nothing in it is committed, so treat it as local scratch: it is not a contract, not reviewed, and may contradict the code.
 - In-process native Rust implementations; zero external script/CLI binary runtime dependencies.
 
 ## 4. Conventional Commits Specification
