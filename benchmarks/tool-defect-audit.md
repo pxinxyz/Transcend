@@ -53,6 +53,30 @@ while fixing items 3 and 1.
   `FileOps::write_file` performs no boundary check at all when called directly with
   `workspace_root: None`, and nothing previously said so.
 
+## Boundary budgets were reinterpreted instead of refused (fixed)
+
+Found by probing error paths and boundaries, all verified live first:
+
+| input | before | after |
+|---|---|---|
+| `read_file {start_line: 8, end_line: 3}` on a 10-line file | `start_line: 8, end_line: 8`, **empty content**, no message | refused, both bounds named |
+| `outline {max_files: 0}` | empty census, `summary.total_files: 0` for a directory holding a file | refused |
+| `search {max_matches: 0}` | budget silently ignored, every match returned | refused |
+| `find_symbol {limit: 0}` | no results | refused |
+
+The `read_file` one is the worst of the three: the response *claimed* to cover line 8 while
+returning nothing, so a caller trusting the reported range would read the wrong lines.
+The `outline` one reported a false census — a directory with a file in it described as
+having none, flagged `truncated: true`, which implies something was capped rather than that
+the caller asked for nothing. And zero meant *opposite* things in sibling tools: ignored by
+`search`, taken literally by `find_symbol`.
+
+Fixed in `e02d48e`: all five count budgets (`search.max_matches`, `search.max_per_file`,
+`outline.max_files`, `outline.max_symbols`, `find_symbol.limit`) plus the inverted line range
+are now refused, with the error naming the default. Rejecting is the honest option because
+"none" and "unlimited" are opposite readings of zero and a caller who passed 0 cannot be
+assumed to have meant either.
+
 ## Misspelled options are silently defaulted (reported, not fixed)
 
 An option name that does not exist is accepted without complaint, so the default applies and
