@@ -996,7 +996,9 @@ pub struct ExecRequest {
     /// Maximum bytes of output to return in the response (default: 32,768 bytes).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<usize>,
-    /// If true, executes the command binary directly without shell wrapping.
+    /// Execute the command binary directly without shell wrapping. Forces the pipe
+    /// transport: direct execution is meaningless for an interactive PTY session, so
+    /// requesting `raw` with `transport: "pty"` is contradictory and the flag wins.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<bool>,
 }

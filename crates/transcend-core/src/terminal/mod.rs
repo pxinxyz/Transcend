@@ -75,6 +75,11 @@ impl TerminalEngine {
             ExecTransport::Pipe => false,
             ExecTransport::Auto => is_interactive_command(&req.command),
         };
+        // `raw` means "run this binary directly, unwrapped". Only the pipe transport can
+        // honour that, so an explicit `raw: true` must not be silently dropped when the
+        // transport resolved to PTY (which happened before this guard).
+        let requested_raw = req.raw.unwrap_or(false);
+        let use_pty = use_pty && !requested_raw;
 
         let buffer = Arc::new(Mutex::new(CursorRingBuffer::new(DEFAULT_BUFFER_CAPACITY)));
 
@@ -172,15 +177,20 @@ impl TerminalEngine {
                     })
                 }
                 TimeoutAction::Kill => {
-                    let (exit_code, output) = session.kill().await;
-                    let cursor = session.buffer.lock().unwrap().write_cursor();
+                    // Kill first, then drain through `read` so the caller's byte budget and
+                    // the truncation flag are honoured. `session.kill()` alone returns a
+                    // hard-coded 65536-byte projection and cannot report that it truncated
+                    // anything, which is exactly backwards on this path: a timeout that has
+                    // to be killed is the case where output is largest.
+                    session.kill().await;
+                    let (output, cursor, truncated, exit_code) = session.read(0, max_output_bytes);
                     Ok(ExecResponse {
                         status: ExecStatus::Exited,
                         exit_code: exit_code.or(Some(137)),
                         session_id: None,
                         output,
                         cursor,
-                        truncated: false,
+                        truncated,
                         elapsed_ms,
                     })
                 }
