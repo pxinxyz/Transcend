@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
@@ -43,7 +43,15 @@ pub struct LspSession {
     /// Monotonic timestamp of the last request served by this session, used by the
     /// pool to reclaim idle language servers.
     last_used_millis: AtomicU64,
+    /// Set once the server has answered a semantic request, meaning its index is warm.
+    warmed: AtomicBool,
 }
+
+/// Deadline for the first semantic request on a session.
+///
+/// Generous on purpose: rust-analyzer needs tens of seconds to index a fresh clone, and
+/// answering late is strictly better than silently degrading to a textual heuristic.
+const COLD_START_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Milliseconds since an arbitrary process-local epoch.
 fn now_millis() -> u64 {
@@ -252,6 +260,7 @@ impl LspSession {
             req_counter: AtomicU64::new(1),
             _child: Arc::new(Mutex::new(child)),
             last_used_millis: AtomicU64::new(now_millis()),
+            warmed: AtomicBool::new(false),
         });
 
         // Perform LSP handshake
@@ -317,6 +326,27 @@ impl LspSession {
                 ))
             }
         }
+    }
+
+    /// Send a semantic request using the warm/cold deadline, marking the server warm
+    /// once it answers.
+    ///
+    /// Only semantic requests go through here: the `initialize` handshake is answered
+    /// immediately even by a server that has indexed nothing, so it must not be taken as
+    /// evidence that the index is ready.
+    async fn send_semantic_request(
+        &self,
+        method: &str,
+        params: Value,
+        warm_timeout: Duration,
+    ) -> Result<Value, String> {
+        let result = self
+            .send_request(method, params, self.request_timeout(warm_timeout))
+            .await;
+        if result.is_ok() {
+            self.mark_warmed();
+        }
+        result
     }
 
     /// Send a notification (no response expected).
@@ -404,7 +434,7 @@ impl LspSession {
         });
 
         let raw = self
-            .send_request("textDocument/definition", params, Duration::from_secs(5))
+            .send_semantic_request("textDocument/definition", params, Duration::from_secs(5))
             .await?;
         let targets = LspDistiller::distill_definition(&raw, &self.workspace_root);
         Ok(targets)
@@ -429,7 +459,7 @@ impl LspSession {
         });
 
         let raw = self
-            .send_request("textDocument/references", params, Duration::from_secs(10))
+            .send_semantic_request("textDocument/references", params, Duration::from_secs(10))
             .await?;
         let result = LspDistiller::distill_references(&raw, &self.workspace_root, limit);
         Ok(result)
@@ -451,10 +481,38 @@ impl LspSession {
         });
 
         let raw = self
-            .send_request("textDocument/hover", params, Duration::from_secs(5))
+            .send_semantic_request("textDocument/hover", params, Duration::from_secs(5))
             .await?;
         let hover_data = LspDistiller::distill_hover(&raw);
         Ok(hover_data)
+    }
+
+    /// Deadline for a semantic request, widened while the server is still warming up.
+    ///
+    /// A freshly spawned server has to index the project before answering anything, so
+    /// the first request can legitimately take far longer than a warm one. With only the
+    /// warm deadline, a query against a fresh clone times out, the caller falls back to
+    /// the Tree-sitter heuristic, and the caller silently loses compiler precision
+    /// precisely when it was first asked for it.
+    fn request_timeout(&self, warm: Duration) -> Duration {
+        if self.warmed.load(Ordering::Relaxed) {
+            warm
+        } else {
+            COLD_START_TIMEOUT
+        }
+    }
+
+    /// Record that the server answered, so subsequent requests use the warm deadline.
+    fn mark_warmed(&self) {
+        self.warmed.store(true, Ordering::Relaxed);
+    }
+
+    /// Whether this server has answered a semantic request yet.
+    ///
+    /// While false the server is still indexing, so an empty or failed result is not
+    /// evidence that the symbol has no definition.
+    pub fn is_warmed(&self) -> bool {
+        self.warmed.load(Ordering::Relaxed)
     }
 
     /// Retrieve active compiler diagnostics from the cache.

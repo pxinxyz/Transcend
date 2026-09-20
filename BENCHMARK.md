@@ -184,25 +184,41 @@ Detached session (`pty_4310_2`), then `terminal_kill`:
 The process-tree extension worked, including returning the unread buffered output
 (`final_output`) at kill time.
 
-**However — a real defect found: `terminal_write` does not reach the shell over a
-PowerShell PTY.** After starting `powershell -NoProfile -NoLogo` as a PTY session,
-`terminal_resize` succeeded, but three successive `terminal_write` calls (52 bytes
-total, including `echo pty_echo_probe` and a newline-terminated `Write-Output`) produced
-**zero** output. `terminal_read` with `wait_for_pattern` timed out with
-`next_cursor` unmoved at 20 — meaning nothing was echoed by the PTY and nothing executed.
+**`terminal_write` over a PowerShell PTY — found broken, now fixed.** At the time of
+the original run, three successive `terminal_write` calls (52 bytes total, including
+`echo pty_echo_probe` and a newline-terminated `Write-Output`) produced **zero** output,
+and `terminal_read` timed out with `next_cursor` unmoved at 20.
+
+The cause turned out to be two independent defects, neither PowerShell-specific — the
+existing `cmd.exe` test passed only because it never asserted on output:
+
+1. **Every PTY command was shell-wrapped.** `PtyTransport::spawn` routed the command
+   through `resolve_shell`, turning `powershell -NoProfile -NoLogo` into
+   `powershell -Command "powershell -NoProfile -NoLogo"`, which ran the inner command,
+   printed its banner and exited. A bare shell or REPL is now invoked directly
+   (`resolve_shell_spec(.., wrap_in_shell = false)`), while compound commands and pipe
+   execution are still wrapped.
+2. **ConPTY's startup query was never answered.** The child emitted
+   `ESC[?9001h ESC[?1004h ESC[6n` and blocked, because `ESC[6n` is a *Device Status
+   Request* that requires a Cursor Position Report before the console host finishes
+   initialising. Nothing replied, so no prompt or banner was ever produced. The PTY
+   reader now detects that query and a pump thread writes the report back.
+
+A third issue surfaced once output flowed: a bare `\n` was being buffered rather than
+submitted, because Windows console hosts accept only carriage return as "run this line"
+(the shell showed a `>>` continuation prompt). PTY input now translates line endings to
+`\r` while preserving `\r\n` and blank lines.
+
+Verified live through the MCP path on Windows 10 Pro 22H2 (build 19045):
 
 | Call | Result |
 |:---|:---|
-| `terminal_resize(cols=100, rows=40)` | `{success: true}` |
-| `terminal_write("Write-Output 'pty_write_roundtrip_ok'\n")` | `{bytes_written: 38}`, no output |
-| `terminal_write(... "cr_terminator_ok" ...)` | `{bytes_written: 32}`, no output |
-| `terminal_write("echo pty_echo_probe\n")` | `{bytes_written: 20}`, no output |
-| `terminal_read(wait_for_pattern=...)` | timeout, `next_cursor` still 20 |
+| `exec(transport=pty, cmd="powershell -NoProfile -NoLogo")` | `detached`, 222 bytes — the prompt |
+| `terminal_write("Write-Output 'PTY_STDIN_WORKS'\n")` | `{bytes_written: 31}` |
+| `terminal_read(cursor=222, wait_for_pattern="PTY_STDIN_WORKS")` | `PTY_STDIN_WORKS` echoed **and** its output returned |
 
-Writes report success at the byte level while nothing arrives at the process. The
-in-tree test suite covers `cmd.exe` for PTY, which is a different echo path, so this
-combination is untested. **Treat interactive PTY stdin on Windows as broken until
-verified otherwise.**
+`test_pty_session_is_actually_interactive` now guards this, asserting the session stays
+running and that written input actually reaches the child and comes back.
 
 ### 3.7 LSP tier — real compiler semantics, with a cold-start caveat
 
@@ -221,12 +237,14 @@ engine: "lsp:rust-analyzer"
 `lsp_references` returned 4 compiler-resolved sites with `engine: "lsp:rust-analyzer"` —
 no false positives from comments or strings.
 
-**Cold-start caveat, measured.** The *first two* `lsp_definition` calls on the
-freshly-cloned repository returned `engine: "tree-sitter:heuristic"` instead of LSP
-results, because rust-analyzer had not finished indexing. `lsp_hover` succeeded on the
-next call. The response does report which engine answered, so this is visible rather
-than silent — but a caller must check the `engine` field, and on a cold repository the
-first LSP query degrades to a textual heuristic.
+**Cold-start caveat, measured, and now mitigated.** The *first two* `lsp_definition`
+calls on a freshly-cloned repository returned `engine: "tree-sitter:heuristic"` instead
+of LSP results, because rust-analyzer had not finished indexing and the request deadline
+was a fixed 5 seconds. Semantic requests now use a 120-second deadline until the server
+has answered once, and `goto_definition` retries for up to 90 seconds while the session
+reports itself cold, so the first query after a fresh clone gets compiler precision
+instead of silently degrading. The `engine` field still reports which engine answered, so
+a genuine heuristic fallback remains visible.
 
 **Cost note for the whole tier:** all 23 tool schemas total **35,161 bytes (~8,790
 tokens)** of context, paid on every model request. That is the price of the verbose,
@@ -308,15 +326,17 @@ The real differentiator is **a different class of answer**:
 3. **Structural aggregates.** `find`'s directory radar and `search`'s density clusters
    answer "where is this concentrated?" in one call.
 
-**Against that, three concrete problems found:**
+**Against that, the problems found — and their status:**
 
-1. **PTY stdin on Windows does not work** (`terminal_write` reports bytes written while
-   nothing reaches the process). The test suite only covers `cmd.exe`.
-2. **LSP queries degrade silently-ish on a cold repo** — the `engine` field says
-   `tree-sitter:heuristic`, but the first queries after a fresh clone do not get
-   compiler precision.
+1. **PTY stdin on Windows did not work.** Three compounding defects (shell-wrapped bare
+   REPLs, an unanswered ConPTY `ESC[6n` startup query, and un-submitted `\n` line
+   endings). All three are **fixed and verified live**; see §3.6. The old test passed
+   only because it never asserted on output.
+2. **LSP queries degraded on a cold repository.** **Fixed**: semantic requests now use a
+   cold-start deadline and `goto_definition` retries while the server indexes (§3.7).
 3. **Budget-capped results include empty match arrays**, so a consumer must re-query to
-   get line text, unlike `rg`.
+   get line text, unlike `rg`. **Unchanged** — this is a deliberate trade-off for keeping
+   `directory_radar` counts truthful, but it is a real ergonomic cost.
 
 Plus one unexplained observation: the regex-alternation query returning 0 matches.
 

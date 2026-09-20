@@ -25,6 +25,16 @@ use bridge::SymbolCoordinateBridge;
 use fallback::HeuristicFallback;
 use pool::LspSessionPool;
 
+/// How long to keep retrying a definition query while the server is still indexing.
+///
+/// rust-analyzer can need tens of seconds on a cold clone. Waiting is strictly better
+/// than answering from a textual heuristic, because the caller asked for a
+/// compiler-resolved result and the response says which engine produced it.
+const COLD_START_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Delay between retries inside the cold-start window.
+const COLD_START_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// The central LSP Engine coordinating sessions, coordinate translation, and fallback.
 #[derive(Clone, Default)]
 pub struct LspEngine {
@@ -59,13 +69,35 @@ impl LspEngine {
         // 2. Check if a language server session can be obtained
         if let Ok(Some((session, profile))) = self.pool.get_or_spawn(file_path).await
             && let Ok((line_0, col_0)) = pos
-            && let Ok(targets) = session.goto_definition(file_path, line_0, col_0).await
-            && !targets.is_empty()
         {
-            return Ok(LspDefinitionResponse {
-                targets,
-                engine: format!("lsp:{}", profile.binary_candidates[0]),
-            });
+            let engine_label = format!("lsp:{}", profile.binary_candidates[0]);
+
+            // First attempt: on a warm server this is the only one.
+            if let Ok(targets) = session.goto_definition(file_path, line_0, col_0).await
+                && !targets.is_empty()
+            {
+                return Ok(LspDefinitionResponse {
+                    targets,
+                    engine: engine_label,
+                });
+            }
+
+            // A cold server returns nothing until it has indexed the project, and an
+            // empty answer is indistinguishable from "no definition". Retry for a
+            // bounded window so the first query after a fresh clone still gets compiler
+            // precision instead of silently degrading to the textual heuristic.
+            let deadline = tokio::time::Instant::now() + COLD_START_GRACE;
+            while !session.is_warmed() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(COLD_START_POLL_INTERVAL).await;
+                if let Ok(targets) = session.goto_definition(file_path, line_0, col_0).await
+                    && !targets.is_empty()
+                {
+                    return Ok(LspDefinitionResponse {
+                        targets,
+                        engine: engine_label,
+                    });
+                }
+            }
         }
 
         // 3. Fallback to Tree-sitter heuristic

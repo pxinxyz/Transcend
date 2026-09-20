@@ -32,6 +32,7 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
 - Dynamic LSP discovery across system `PATH` and toolchain directories (`~/.cargo/bin`, `%APPDATA%\npm`, `~/.transcend/bin`, `~/go/bin`, `~/.local/bin`) with zero hardcoded paths.
 - LSP root markers may be literal filenames (`Cargo.toml`) or globs (`*.sln`, `*.csproj`); glob markers are matched against directory entries, case-insensitively.
 - LSP session pool never holds its map lock across a cold spawn: the first caller publishes a `Spawning` placeholder, and concurrent callers await it instead of launching a duplicate server. Idle sessions are reclaimed after `IDLE_SESSION_TTL`.
+- LSP warm-up: a freshly spawned server has indexed nothing, so an empty or timed-out result is not evidence that a symbol is undefined. Semantic requests use `COLD_START_TIMEOUT` until the server has answered once, and `goto_definition` retries for up to `COLD_START_GRACE` while `LspSession::is_warmed()` is false. Only semantic requests mark a session warm — the `initialize` handshake is answered immediately even by a server with no index.
 - Recipe-based language server status auditing (`lsp_status`) and automated host package manager installation (`lsp_install`) with bounded execution timeouts and version verification.
 - All errors map into `CoreError`.
 - Must satisfy the `Engine` trait.
@@ -40,6 +41,10 @@ Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations,
   - Decoupled lifecycle (`blocking` for one-shot exit within `timeout_ms`, `detached` returning persistent `session_id`).
   - Process tree governance: Windows Job Objects (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) with root process and `taskkill /T /F` fallback; POSIX own process group (`setpgid` via `process_group(0)` for pipe children, `setsid` for PTY children) signalled with SIGTERM then SIGKILL, followed by a descendant sweep (`/proc/<pid>/task/*/children` on Linux, `pgrep -P` elsewhere).
   - Interactive-command detection keys off the resolved program token, never substrings elsewhere in the command line.
+  - PTY spawning must keep the session genuinely interactive. Three invariants, each with a regression test:
+    - A bare shell/REPL is invoked **directly** (`resolve_shell_spec(.., wrap_in_shell = false)`), never as a shell argument. Wrapping turns `powershell -NoProfile -NoLogo` into `powershell -Command "..."`, which runs and exits, leaving a session that accepts writes and silently ignores them. Session modifiers (`-NoProfile`, `-NoLogo`) are preserved; anything else means "run this", so it gets wrapped. Pipe execution always wraps.
+    - The reader must answer `ESC[6n` with a Cursor Position Report. ConPTY blocks on that Device Status Request during startup, so without a reply the shell never prints a prompt or banner. Other escape sequences must NOT be answered — a spurious reply corrupts the child's stdin, and a query split across reads must not half-match.
+    - PTY input line endings are translated to `\r`. Windows console hosts submit only on carriage return; a bare `\n` is buffered and the shell shows a continuation prompt. `\r\n` collapses to one submit and blank lines are preserved.
   - Asynchronous PTY disposal on dedicated background worker thread to prevent `ClosePseudoConsole` deadlocks during pipe drain.
   - Cursor-based ring buffer (`CursorRingBuffer`) with monotonic read cursor and head/tail byte slicing.
   - Terminal projection (`TerminalProjection`): ANSI escape code stripping and CR (`\r`) in-place line folding.
