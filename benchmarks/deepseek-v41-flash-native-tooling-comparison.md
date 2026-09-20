@@ -47,9 +47,36 @@ ripgrep was chosen because it is a real, non-trivial Rust workspace (14 crates) 
 genuinely large generated file (`crates/core/flags/defs.rs`, 7,220 lines) alongside
 normal source, which separates tools that scale from tools that merely work on toys.
 
-**Token accounting.** Tokens are approximated as `chars / 4`. This is a documented
-heuristic, **not** a tokenizer. Both sides are measured identically, so only *ratios*
-should be read, never absolute token counts. Byte and character counts are exact.
+**Token accounting — measured, not approximated.** Every artifact is tokenized with three
+independent, current tokenizers:
+
+| Tokenizer | Version | Vocabulary | Role |
+|:---|:---|:---|:---|
+| [`tiktoken`](https://github.com/openai/tiktoken) | 0.14.0 | `o200k_base`, 200,019 | OpenAI BPE; the modern o-series / GPT-4o vocabulary |
+| [`sentencepiece`](https://github.com/google/sentencepiece) | 0.2.2 | Llama-2 SP, 32,000 | Google SentencePiece, a different algorithm and vocab size |
+| [`gigatoken`](https://pypi.org/project/gigatoken/) | 0.10.0 | loaded from both | Rust pretokenizer + BPE; a throughput-oriented reimplementation |
+
+`gigatoken` is loaded from *both* vocabularies as a cross-check: its counts must equal
+`tiktoken`'s and `sentencepiece`'s on the same text. **They do, on all 10 artifacts** —
+so the difference between the two columns is the tokenizer, not the harness.
+
+Every table below reports both vocabularies, because the tokenizer choice moves the
+absolute numbers by 9–37% and, in one case, moves a ratio across 1.0. Where the two
+disagree the more pessimistic figure is called out. Byte and character counts are exact.
+
+**Why this replaced `chars / 4`.** An earlier revision of this document estimated tokens
+as `chars / 4`. Measuring properly showed that heuristic was wrong, and wrong in a
+direction that flattered the analysis:
+
+| Artifact kind | `chars / 4` error vs tiktoken |
+|:---|:---|
+| Rust source | **+2.6%** mean (−3.7% to +8.8%) — roughly right |
+| JSON tool output | **−13.7%** mean — undercounts by ~14% |
+| Shell/CLI text output | **−22.5%** mean — undercounts by ~22% |
+
+It happens to be near-accurate on dense code and materially wrong on structured output,
+which is exactly the comparison this document makes. Every ratio below is therefore
+recomputed from real counts, and one conclusion changed (see §5).
 
 **Isolation.** Mutating tools (§3.5) ran against a disposable copy of the clone, never
 against a pristine corpus or the Transcend repository. The MCP `workspace_root` was
@@ -117,7 +144,7 @@ Each section names the exact invocation on both sides. Paths are relative to the
 clone from §1 (`ripgrep/` at `3fce3b5`); the Transcend side is an MCP `tools/call` with
 the arguments shown.
 
-### 3.1 `search` — 2.33x smaller than `rg` on the same query
+### 3.1 `search` — 2.3–2.6x smaller than `rg` on the same query
 
 ```bash
 rg --no-heading -n --color never 'git_ignore' ripgrep/crates
@@ -129,10 +156,11 @@ rg --no-heading -n --color never 'git_ignore' ripgrep/crates
                  "options": { "file_pattern": "*.rs", "max_matches": 10 } } }
 ```
 
-| | Output |
-|:---|:---|
-| `rg --no-heading -n` | 26 lines, **2,796 chars** (~699 tok) |
-| `search` (max_matches=10) | 26 matches found, 10 with text, clustered by file, **~1,200 chars** |
+| | Output | tiktoken | sentencepiece |
+|:---|:---|---:|---:|
+| `rg --no-heading -n` | 26 lines, 2,797 chars | **894** | **1,103** |
+| `search` (max_matches=10) | 26 matches, 10 with text, clustered, 1,348 chars | **345** | **475** |
+| | | **2.59x smaller** | **2.32x smaller** |
 
 Both reported **26 matches** — no divergence in the count. Transcend returns fewer
 line bodies (budget-capped) plus a `directory_radar` locating density
@@ -144,7 +172,7 @@ must re-query. **Mitigated:** each cluster now carries `matches_truncated`, so a
 exhausted cluster is distinguishable from a file with no matches, and `match_count` stays
 exact for the radar either way. `rg` still returns every line verbatim in one shot.
 
-### 3.2 `outline` — 4.44x reduction on a 7,220-line file
+### 3.2 `outline` — 3.6–4.1x reduction on a 7,220-line file
 
 Target: `ripgrep/crates/core/flags/defs.rs`, 254,514 bytes, 7,220 lines, 1,131 symbols.
 
@@ -158,25 +186,25 @@ wc -c ripgrep/crates/core/flags/defs.rs   # the "cat" baseline
                  "options": { "format": "skeleton", "max_symbols": 40 } } }
 ```
 
-| Approach | Cost |
-|:---|:---|
-| `cat` the file | 254,514 bytes (~63,629 tok) |
-| `outline(format="skeleton")` | 57,273 chars (**~14,318 tok**) |
-| Reduction | **4.44x** |
+| Approach | chars | tiktoken | sentencepiece |
+|:---|---:|---:|---:|
+| `cat` the file | 246,353 | 63,937 | 82,169 |
+| `outline(format="skeleton")` | 57,273 | **17,577** | **20,192** |
+| Reduction | 4.30x | **3.64x** | **4.07x** |
 
 The skeleton preserved all 1,131 symbols as syntax-valid stubs with signatures and doc
 comments. It reported `parse_status: complete` and a kind breakdown
 (`method: 788, function: 123, implementation: 109, struct: 108, module: 2, constant: 1`).
 
-**Caveat, and it matters:** a 4.44x reduction on a *pathological* generated file is the
-best case. On normal files the win is smaller, and on a 1,145-line file the skeleton can
-approach the source size. The real argument for `outline` is not the ratio — it is that
-it answers "what is in this file?" without a full read at all.
+**Caveat, and it matters:** 3.64x on a *pathological* generated file is the best case. On
+normal files the win is smaller, and on a 1,145-line file the skeleton can approach the
+source size. The real argument for `outline` is not the ratio — it is that it answers
+"what is in this file?" without a full read at all.
 
 ### 3.3 `read_symbol` — precise, but not always smaller than a targeted `rg`
 
 Target: `WalkBuilder::git_ignore` in `ripgrep/crates/ignore/src/walk.rs` (96,183 bytes,
-~24,046 tok to read whole).
+21,468 tokens to read whole).
 
 ```bash
 rg --no-heading -n -A2 -B2 'pub fn git_ignore' ripgrep/crates/ignore/src/walk.rs
@@ -189,22 +217,24 @@ rg --no-heading -n -A2 -B2 'pub fn git_ignore' ripgrep/crates/ignore/src/walk.rs
                  "context_before": 2, "context_after": 2 } }
 ```
 
-| Approach | Cost | What you get |
-|:---|:---|:---|
-| `read` whole file | ~24,046 tok | everything |
-| `rg -A2 -B2 'pub fn git_ignore'` | 183 chars (~46 tok) | 8 lines, no doc comment, no span |
-| `read_symbol` | 541 chars (~135 tok) | body + `doc_comment` + exact byte span |
+| Approach | chars | tiktoken | sentencepiece | What you get |
+|:---|---:|---:|---:|:---|
+| `read` whole file | 93,443 | 21,468 | 27,384 | everything |
+| `rg -A2 -B2 'pub fn git_ignore'` | 184 | **52** | **71** | 8 lines, no doc comment, no span |
+| `read_symbol` | 592 | **168** | **209** | body + `doc_comment` + exact byte span |
 
-`read_symbol` is **~3x larger than a bare `rg` context search** — and still worth it,
-because it also returns `span: {start_byte: 31527, end_byte: 31651}` and the doc comment,
-which `rg` does not, and it cannot accidentally match a commented-out or string-literal
-occurrence. Against the *whole-file read* it is a 178x saving.
+`read_symbol` is **3.2x larger than a bare `rg` context search** (168 vs 52 tokens) — and
+still worth it, because it also returns `span: {start_byte: 31527, end_byte: 31651}` and
+the doc comment, which `rg` does not, and it cannot accidentally match a commented-out or
+string-literal occurrence. Against the *whole-file read* it is a **128x** saving
+(21,468 vs 168 tokens).
 
 ### 3.4 `find` — costs more, delivers aggregates instead of a list
 
 ```bash
-# native: the closest analogue, recursive discovery + metadata + sort + top 30
-find ripgrep/crates -name '*.rs' -printf '%s\t%p\n' | sort -rn | head -30
+# native: a fair analogue must cap at the SAME number of entries (Transcend's
+# default max_results is 30), otherwise the comparison is meaningless.
+rg --files ripgrep/crates -g '*.rs' | head -30
 ```
 ```jsonc
 // tools/call
@@ -213,16 +243,23 @@ find ripgrep/crates -name '*.rs' -printf '%s\t%p\n' | sort -rn | head -30
                  "options": { "max_results": 30, "sort_by": "size" } } }
 ```
 
-| | Cost | Content |
-|:---|:---|:---|
-| `Get-ChildItem \| Sort Length \| Select -First 30` | 844 chars | 30 path+size lines |
-| `find(sort_by="size")` | ~2,300 chars | 30 entries + **23-directory radar** + extension census + `total_count: 95` |
+| | chars | tiktoken | sentencepiece | Content |
+|:---|---:|---:|---:|:---|
+| `rg --files \| head -30` | 1,832 | **696** | **761** | 30 paths |
+| `find(sort_by="size")` | 4,071 | **1,309** | **1,891** | 30 entries + **23-directory radar** + extension census + `total_count: 95` |
+| | | 1.88x larger | 2.49x larger | |
 
-**Transcend `find` is 2.7x *more* expensive here.** It is not a compaction win. Its value
-is the directory-density radar and the total census, which the native listing does not
-compute — the agent learns *where* code lives, not just what exists. On a large
-repository this is the difference between a 50,000-line listing and a fixed-size
-summary; on a 237-file repository it is mostly overhead.
+**Transcend `find` is 1.9–2.5x more expensive for the same 30 results.** It is not a
+compaction win. Its value is the directory-density radar and the total census, which a
+plain listing does not compute — the agent learns *where* code lives, not just what
+exists. On a large repository that is the difference between a 50,000-line listing and a
+fixed-size summary; on a 237-file repository it is mostly overhead.
+
+> **Correction.** An earlier revision reported **2.7x larger** here. That number came from
+> comparing Transcend's 30 *capped* entries against a native listing of *every* `.rs`
+> file in the tree (95 files, 5,844 chars) — an unfair pair that inflated the gap in the
+> direction that made Transcend look worse. Capping both sides at 30 gives 1.88x/2.49x.
+> The conclusion (Transcend loses on size here) survives; the magnitude did not.
 
 ### 3.5 `patch` / `batch_patch` — the AST guard actually fires
 
@@ -328,9 +365,14 @@ reports itself cold, so the first query after a fresh clone gets compiler precis
 instead of silently degrading. The `engine` field still reports which engine answered, so
 a genuine heuristic fallback remains visible.
 
-**Cost note for the whole tier:** all 23 tool schemas total **35,161 bytes (~8,790
-tokens)** of context, paid on every model request. That is the price of the verbose,
+**Cost note for the whole tier:** all 23 tool schemas total 35,183 chars =
+**7,712 tokens** (tiktoken `o200k_base`) or **9,403** (sentencepiece), i.e. ~335–408
+tokens per tool, paid on every model request. That is the price of the verbose,
 well-documented schemas — a real cost against my own leaner native tool definitions.
+
+Note the heuristic's sign flips here: `chars / 4` predicted 8,795, a **+14% overestimate**
+on this JSON, while it *under*estimated the JSON search output by 14%. The heuristic is
+not reliably biased in either direction, which is the strongest argument for measuring.
 
 ### 3.8 Safety behaviours confirmed
 
@@ -394,11 +436,17 @@ itself was valid, and the verification commands it encoded remain in `README.md`
 
 **Transcend is not a token-compaction layer, and comparing it as one understates it.**
 
-On raw size it wins on `search` (2.33x) and `outline` (4.44x on a 7,220-line file), ties
-on `read_file`/`write_file`/`git_status`/`exec`, and *loses* on `find` (2.7x larger) and
-`read_symbol` versus a targeted `rg` context search (3x larger). Anyone expecting uniform
-reduction will be disappointed by that spread, and the schema overhead (~8,790 tokens)
-is charged up front.
+On raw size — measured with real tokenizers, both vocabularies — it wins on `search`
+(2.32–2.59x) and `outline` (3.64–4.07x on a 7,220-line file), ties on
+`read_file`/`write_file`/`git_status`/`exec`, and *loses* on `find` (1.88–2.49x larger for
+the same 30 results) and `read_symbol` versus a targeted `rg` context search (3.2x
+larger). Anyone expecting uniform reduction will be disappointed by that spread, and the
+schema overhead (7,712 tokens measured with `o200k_base`) is charged up front.
+
+**The tokenizer choice matters as much as the tool choice in one case.** Every ratio
+moves by 9–37% between `o200k_base` and Llama-2 SP, and `find` crosses from 1.88x larger
+(tiktoken) to 2.49x larger (sentencepiece). Any single-tokenizer claim in this space
+should say which tokenizer produced it.
 
 The real differentiator is **a different class of answer**:
 
