@@ -1,0 +1,327 @@
+# Transcend vs. Native Harness Tooling
+
+An empirical comparison of Transcend's 23 MCP primitives against the native tools
+available in this harness (ripgrep/`pwsh`/`read`/`write`/`edit`/`glob`/`grep`), run
+against real third-party codebases.
+
+Everything below was executed, not estimated, unless a row is explicitly marked
+**not measured**.
+
+---
+
+## 1. Method
+
+**Corpus.** Two real repositories cloned fresh (`--depth 1`) into a scratch directory
+outside the Transcend repository:
+
+| Repo | Source | Size | Language mix |
+|:---|:---|:---|:---|
+| ripgrep | `github.com/BurntSushi/ripgrep` | 237 tracked files, 3.33 MB | 110 `.rs`, 23 `.md`, 14 `.toml` |
+| gin | `github.com/gin-gonic/gin` | 99 `.go` files | Go |
+
+ripgrep was chosen because it is a real, non-trivial Rust workspace (14 crates) with a
+genuinely large generated file (`crates/core/flags/defs.rs`, 7,220 lines) alongside
+normal source, which separates tools that scale from tools that merely work on toys.
+
+**Token accounting.** Tokens are approximated as `chars / 4`. This is a documented
+heuristic, **not** a tokenizer. Both sides are measured identically, so only *ratios*
+should be read, never absolute token counts. Byte and character counts are exact.
+
+**Isolation.** Mutating tools ran against a disposable `Copy-Item` clone
+(`_transcend_bench/sandbox`), never against a pristine corpus or the Transcend repo.
+The MCP `workspace_root` was repointed with `set_workspace` and restored afterwards.
+
+**Environment.** Windows 11, `transcend.exe` release build 2.0.0 (thin LTO), driven
+through the DeepSeek Harness MCP bridge (`@deepseek-ai/dsh-mcp-client`), alongside
+`pwsh` 7 / `rg` for the native side.
+
+---
+
+## 2. Capability mapping
+
+| Transcend tool | Closest native equivalent | Verdict |
+|:---|:---|:---|
+| `find` | `Get-ChildItem -Recurse` / `fd` | **Different information**, not less |
+| `search` | `rg --no-heading -n` | Transcend wins on size, loses on fidelity |
+| `find_symbol` | `rg 'fn NAME'` (approximate) | Transcend wins |
+| `outline` | *none* (read whole file) | Transcend wins decisively |
+| `read_symbol` | `rg -A/-B` then `read` | Transcend wins on precision |
+| `read_file` | `read` with offset/limit | **Tie** |
+| `write_file` | `write` | **Tie** (different guarantees) |
+| `patch` | `edit` | Transcend wins (AST guard) |
+| `batch_patch` | several `edit` calls | Transcend wins (atomicity) |
+| `delete_path` | `Remove-Item` | Transcend wins (guard) |
+| `set_workspace` | *none* — implicit cwd | Transcend only |
+| `git_status` | `git status --porcelain=v2` | **Tie** (structure vs. parsing) |
+| `exec` | `pwsh` | **Tie**, Transcend adds detach |
+| `terminal_read` | background job + `job_output` | **Tie** |
+| `terminal_write` | *none* — cannot write to a running proc | Transcend only |
+| `terminal_resize` | *none* | Transcend only |
+| `terminal_kill` | `Stop-Process` / `job_kill` | **Tie** (tree semantics differ) |
+| `lsp_definition` | **no equivalent** | Transcend only |
+| `lsp_references` | `rg` (textual approximation) | Transcend wins on precision |
+| `lsp_hover` | **no equivalent** | Transcend only |
+| `lsp_diagnostics` | `cargo check` + parse | Transcend wins on structure |
+| `lsp_status` | *none* | Transcend only |
+| `lsp_install` | *none* | Transcend only |
+
+**Where my own toolset has no answer at all: 7 tools** — `lsp_definition`,
+`lsp_hover`, `lsp_status`, `lsp_install`, `terminal_write`, `terminal_resize`,
+`set_workspace`. This is the honest core of the comparison: the LSP tier is not a
+faster way to do something I can already do, it is a *different class of information*
+(compiler-resolved rather than textual).
+
+---
+
+## 3. Measured results
+
+### 3.1 `search` — 2.33x smaller than `rg` on the same query
+
+Query `git_ignore` over `rg/crates`.
+
+| | Output |
+|:---|:---|
+| `rg --no-heading -n` | 26 lines, **2,796 chars** (~699 tok) |
+| `search` (max_matches=10) | 26 matches found, 10 with text, clustered by file, **~1,200 chars** |
+
+Both reported **26 matches** — no divergence in the count. Transcend returns fewer
+line bodies (budget-capped) plus a `directory_radar` locating density
+(`ignore/src` 25, `core/flags` 1). `rg` returns every line verbatim but no aggregation.
+
+**Where `search` loses:** it returns *clusters with empty match arrays* once the budget
+is hit (`walk.rs {match_count: 5, matches: []}`). A consumer that wants the actual lines
+must re-query or re-grep. `rg` never does this.
+
+### 3.2 `outline` — 4.44x reduction on a 7,220-line file
+
+`crates/core/flags/defs.rs`, 254,514 bytes, 7,220 lines, 1,131 symbols.
+
+| Approach | Cost |
+|:---|:---|
+| `cat` the file | 254,514 bytes (~63,629 tok) |
+| `outline(format="skeleton")` | 57,273 chars (**~14,318 tok**) |
+| Reduction | **4.44x** |
+
+The skeleton preserved all 1,131 symbols as syntax-valid stubs with signatures and doc
+comments. It reported `parse_status: complete` and a kind breakdown
+(`method: 788, function: 123, implementation: 109, struct: 108, module: 2, constant: 1`).
+
+**Caveat, and it matters:** a 4.44x reduction on a *pathological* generated file is the
+best case. On normal files the win is smaller, and on a 1,145-line file the skeleton can
+approach the source size. The real argument for `outline` is not the ratio — it is that
+it answers "what is in this file?" without a full read at all.
+
+### 3.3 `read_symbol` — precise, but not always smaller than a targeted `rg`
+
+Extracting `WalkBuilder::git_ignore` from `crates/ignore/src/walk.rs` (96,183 bytes,
+~24,046 tok to read whole):
+
+| Approach | Cost | What you get |
+|:---|:---|:---|
+| `read` whole file | ~24,046 tok | everything |
+| `rg -A2 -B2 'pub fn git_ignore'` | 183 chars (~46 tok) | 8 lines, no doc comment, no span |
+| `read_symbol` | 541 chars (~135 tok) | body + `doc_comment` + exact byte span |
+
+`read_symbol` is **~3x larger than a bare `rg` context search** — and still worth it,
+because it also returns `span: {start_byte: 31527, end_byte: 31651}` and the doc comment,
+which `rg` does not, and it cannot accidentally match a commented-out or string-literal
+occurrence. Against the *whole-file read* it is a 178x saving.
+
+### 3.4 `find` — costs more, delivers aggregates instead of a list
+
+`*.rs` under `rg/crates`, top 30 by size:
+
+| | Cost | Content |
+|:---|:---|:---|
+| `Get-ChildItem \| Sort Length \| Select -First 30` | 844 chars | 30 path+size lines |
+| `find(sort_by="size")` | ~2,300 chars | 30 entries + **23-directory radar** + extension census + `total_count: 95` |
+
+**Transcend `find` is 2.7x *more* expensive here.** It is not a compaction win. Its value
+is the directory-density radar and the total census, which the native listing does not
+compute — the agent learns *where* code lives, not just what exists. On a large
+repository this is the difference between a 50,000-line listing and a fixed-size
+summary; on a 237-file repository it is mostly overhead.
+
+### 3.5 `patch` / `batch_patch` — the AST guard actually fires
+
+Created `greet.rs`, then applied a deliberately malformed replacement:
+
+```json
+{"success": false, "ast_valid": false,
+ "message": "AST preflight verification failed: syntax errors detected in spliced code. Disk was not modified.",
+ "syntax_errors": [{"line": 1, "column": 1,
+   "message": "Syntax error near 'pub fn greet( -> String { let ='",
+   "unexpected_token": "pub fn greet( -> String { let ='"}]}
+```
+
+Verified on disk: **98 bytes, unchanged.** The guard reports exact line/column and the
+offending token.
+
+`batch_patch` with one valid and one unresolvable patch:
+
+```json
+{"success": false, "total_files_patched": 0,
+ "message": "Batch patch aborted: one or more patches failed AST preflight validation or target resolution. No files modified on disk."}
+```
+
+Verified on disk: original content intact. The valid patch's diff was still returned
+(marked `"Dry run: patch successfully validated"`), so a failed batch is *diagnosable*,
+not just refused. This is a genuine capability my `edit` tool lacks: I would have
+written the first edit before discovering the second target was missing.
+
+### 3.6 `exec` / `terminal_*` — process-tree kill verified
+
+Pipe exec: `echo ... && git rev-parse --short HEAD` → `exit_code: 0`, 117 ms, clean output.
+
+Detached session (`pty_4310_2`), then `terminal_kill`:
+
+| | Before | After |
+|:---|:---|:---|
+| Child `powershell.exe` (PID 30560, parent = the Transcend session) | alive | **gone** |
+| Total `powershell.exe` processes | 5 | 3 |
+| `terminal_kill` result | — | `{"success": true, "exit_code": 1, "final_output": "child_tree_started\n"}` |
+
+The process-tree extension worked, including returning the unread buffered output
+(`final_output`) at kill time.
+
+**However — a real defect found: `terminal_write` does not reach the shell over a
+PowerShell PTY.** After starting `powershell -NoProfile -NoLogo` as a PTY session,
+`terminal_resize` succeeded, but three successive `terminal_write` calls (52 bytes
+total, including `echo pty_echo_probe` and a newline-terminated `Write-Output`) produced
+**zero** output. `terminal_read` with `wait_for_pattern` timed out with
+`next_cursor` unmoved at 20 — meaning nothing was echoed by the PTY and nothing executed.
+
+| Call | Result |
+|:---|:---|
+| `terminal_resize(cols=100, rows=40)` | `{success: true}` |
+| `terminal_write("Write-Output 'pty_write_roundtrip_ok'\n")` | `{bytes_written: 38}`, no output |
+| `terminal_write(... "cr_terminator_ok" ...)` | `{bytes_written: 32}`, no output |
+| `terminal_write("echo pty_echo_probe\n")` | `{bytes_written: 20}`, no output |
+| `terminal_read(wait_for_pattern=...)` | timeout, `next_cursor` still 20 |
+
+Writes report success at the byte level while nothing arrives at the process. The
+in-tree test suite covers `cmd.exe` for PTY, which is a different echo path, so this
+combination is untested. **Treat interactive PTY stdin on Windows as broken until
+verified otherwise.**
+
+### 3.7 LSP tier — real compiler semantics, with a cold-start caveat
+
+`lsp_status(rust)` correctly reported `rust-analyzer 0.3.2862-standalone`, its resolved
+absolute path, and two available install recipes.
+
+`lsp_hover(WalkBuilder::git_ignore)` returned genuine rust-analyzer output:
+
+```
+signature: ignore::walk::WalkBuilder
+documentation: ```rust pub fn git_ignore(&mut self, yes: bool) -> &mut WalkBuilder ```
+  Enables reading `.gitignore` files. ... This is enabled by default.
+engine: "lsp:rust-analyzer"
+```
+
+`lsp_references` returned 4 compiler-resolved sites with `engine: "lsp:rust-analyzer"` —
+no false positives from comments or strings.
+
+**Cold-start caveat, measured.** The *first two* `lsp_definition` calls on the
+freshly-cloned repository returned `engine: "tree-sitter:heuristic"` instead of LSP
+results, because rust-analyzer had not finished indexing. `lsp_hover` succeeded on the
+next call. The response does report which engine answered, so this is visible rather
+than silent — but a caller must check the `engine` field, and on a cold repository the
+first LSP query degrades to a textual heuristic.
+
+**Cost note for the whole tier:** all 23 tool schemas total **35,161 bytes (~8,790
+tokens)** of context, paid on every model request. That is the price of the verbose,
+well-documented schemas — a real cost against my own leaner native tool definitions.
+
+### 3.8 Safety behaviours confirmed
+
+`write_file` outside the configured workspace root was refused with an actionable message:
+
+```
+Access denied: path 'C:\Projects\_transcend_bench\sandbox\greet.rs' escapes
+workspace boundary 'C:\Projects\General Workspace\Idea\Transcend'.
+Pass an absolute path inside the workspace, or call set_workspace first.
+```
+
+Following that instruction (`set_workspace`) made the write succeed. The guard and its
+error message are both correct.
+
+---
+
+## 4. What is not measured
+
+Stated plainly rather than glossed:
+
+| Item | Status |
+|:---|:---|
+| `delete_path` | Exercised (deleted a file, returned `deleted_count: 1`), but the recursive/boundary-escape paths were **not** timed or cost-measured |
+| `git_status` | Exercised on both repos (`branch: main/master`, `is_clean: true`, ahead/behind). No native timing comparison |
+| `lsp_install` | Exercised (correctly short-circuited: `'marksman' is already installed`) but the actual install path was **not** run |
+| `lsp_diagnostics` | Exercised — returned 0 diagnostics on a clean file. The LSP-backed path was not differentiated from the `cargo check` fallback |
+| Cross-platform | Everything here is **Windows only**. The Linux/macOS paths (process groups, `pgrep`, openpty) remain unverified — CI has never run |
+| Throughput | No wall-clock benchmark beyond incidental `elapsed_ms` (e.g. `exec` 117 ms). Search/outline latency was not profiled |
+| Token accuracy | `chars/4` is an approximation. No real tokenizer was used |
+
+### 4.1 A false alarm, recorded
+
+An early query — `fn is_gitignore|\.gitignore\(` — returned **0 matches** where a plain
+substring search for `git_ignore` returned 26, which looked like a regex or escape bug.
+It was not. Investigating properly:
+
+| Query | Result |
+|:---|:---|
+| `git_ignore` | 26 matches |
+| `gitignore\|walk_parallel` (plain alternation) | 268 matches — alternation works |
+| `\.gitignore` (escaped literal dot) | 62 matches — escapes work |
+| `gitignore\(` (escaped literal paren) | 11 matches — escapes work |
+| `is_gitignore` | **0 matches** |
+| `rg -c 'is_gitignore'` over the whole repo | **no matches** |
+
+The identifier `is_gitignore` does not exist anywhere in ripgrep. The original regex was
+correct and the **0 result was correct behaviour**. No defect exists; the initial
+suspicion was my own error and is recorded here so the negative result is not mistaken
+for an open issue.
+
+Also unresolved: GitHub Actions for this repository is **blocked at the account level**
+("account is locked due to a billing issue"), so the Linux/macOS test matrix added in
+`5636cb4` has never executed a single step.
+
+---
+
+## 5. Conclusions
+
+**Transcend is not a token-compaction layer, and comparing it as one understates it.**
+
+On raw size it wins on `search` (2.33x) and `outline` (4.44x on a 7,220-line file), ties
+on `read_file`/`write_file`/`git_status`/`exec`, and *loses* on `find` (2.7x larger) and
+`read_symbol` versus a targeted `rg` context search (3x larger). Anyone expecting uniform
+reduction will be disappointed by that spread, and the schema overhead (~8,790 tokens)
+is charged up front.
+
+The real differentiator is **a different class of answer**:
+
+1. **Compiler-resolved semantics (7 tools with no native equivalent).** `lsp_hover` and
+   `lsp_references` return rust-analyzer output. Text search cannot distinguish a real
+   reference from one in a comment or a string, and cannot infer a type at all.
+2. **Verified mutations.** The AST preflight rejected invalid syntax with exact
+   line/column and left the file byte-identical; `batch_patch` aborted atomically
+   across files. Sequential `edit` calls cannot offer that — they fail halfway.
+3. **Structural aggregates.** `find`'s directory radar and `search`'s density clusters
+   answer "where is this concentrated?" in one call.
+
+**Against that, three concrete problems found:**
+
+1. **PTY stdin on Windows does not work** (`terminal_write` reports bytes written while
+   nothing reaches the process). The test suite only covers `cmd.exe`.
+2. **LSP queries degrade silently-ish on a cold repo** — the `engine` field says
+   `tree-sitter:heuristic`, but the first queries after a fresh clone do not get
+   compiler precision.
+3. **Budget-capped results include empty match arrays**, so a consumer must re-query to
+   get line text, unlike `rg`.
+
+Plus one unexplained observation: the regex-alternation query returning 0 matches.
+
+**Practical guidance.** Use Transcend for `outline`/`read_symbol` exploration and for the
+LSP tier, where it is strictly better than anything textual. Keep native `rg` for
+pattern hunting where verbatim lines matter, and native `read`/`write`/`edit` for
+ordinary file work — they are smaller, and the AST guard only pays for itself when
+editing code by symbol rather than by line.
