@@ -55,32 +55,36 @@ while fixing items 3 and 1.
 
 ## Open defect found by the efficiency harness
 
-**`lsp_diagnostics` still reports a broken file as clean in one condition.** Found by
-`benchmarks/efficiency.py`; not yet root-caused.
+**`lsp_diagnostics` reported a broken file as clean.** Found by
+`benchmarks/efficiency.py`; root-caused and fixed.
 
 Reproducer: a standalone crate with two genuine compiler errors
 (`let s: String = 42;` and a call to a missing function). `cargo check` reports both.
 
-| condition | result |
-|---|---|
-| fresh MCP session, `lsp_diagnostics {path: <lib.rs>}` | `total_count: 2` — correct |
-| fresh session, immediate repeat of the same call | `total_count: 2` — correct |
-| same session after `search` / `read_symbol` / `find` / `outline` have run | **`total_count: 0`** |
-| `lsp_diagnostics {path: <directory>}` | `total_count: 0` — known limitation, see below |
+| condition | before | after |
+|---|---|---|
+| fresh MCP session, `lsp_diagnostics {path: <lib.rs>}` | 2 | 2 |
+| session already used by `search`/`read_symbol`/`find`/`outline` | **0** | **2** |
+| `lsp_diagnostics {path: <directory>}` | 0 | 0 (known limitation, below) |
 
-So the answer depends on what the session did earlier, and an agent that has already
-explored the codebase — the normal case — is told the file is clean.
+Three independent causes, found in that order:
 
-Two candidate causes were ruled out or partially addressed already:
-- an empty LSP cache being treated as a verdict (fixed: a cold session now defers to the
-  compiler fallback),
-- substring path matching (fixed: matching is now segment-based).
+1. **An empty LSP cache was treated as a verdict.** Diagnostics arrive as
+   `publishDiagnostics` notifications and nothing sets `warmed` for them, so "not indexed
+   yet" and "genuinely clean" were indistinguishable. Fixed: a cold session reports no
+   verdict and defers to the compiler fallback.
+2. **Substring path matching.** `"src/lib.rs".contains("/abs/proj/src")` is false, so a
+   DIRECTORY filter -- which the request contract documents -- always returned zero. Fixed:
+   matching is segment-based.
+3. **The compiler fallback only looked for `Cargo.toml` at the workspace root.** With the
+   workspace scoped to a checkout and the file in a sibling crate, *no compiler ran at all*
+   and the empty result was returned as "no problems". The filter is applied only after a
+   successful cargo run, so nothing could be surfaced. Fixed: the manifest is now discovered
+   by climbing from the file's own directory, so the file is checked against ITS crate.
 
-The remaining trigger is plausibly a *stale or differently-keyed cache entry for an
-unrelated file* making `has_cached_diagnostics` report true, so `lsp_verdict_usable` stays
-`true` and the compiler fallback is skipped while the cache holds nothing for the file
-asked about. Confirming that needs a trace of the cache keys and `is_warmed()` at the call,
-which is the next step rather than a guess to encode as a fix.
+Cause 1 was a regression introduced earlier in this session by the commit that stopped a
+correct LSP verdict being replaced by another engine's output. Causes 2 and 3 were
+pre-existing. The harness found all three, which is the argument for having built it.
 
 ### Known limitation: directory filters with a relative cache
 rust-analyzer reports paths relative to the session root (`src/lib.rs`) while the engine

@@ -233,6 +233,41 @@ impl HeuristicFallback {
         }
     }
 
+    /// Locate the `Cargo.toml` whose crate contains the file being asked about.
+    ///
+    /// Starts at the file's own directory and climbs, so a file in a nested or sibling crate
+    /// is checked against ITS manifest rather than the workspace root's. Falls back to the
+    /// workspace root when no filter was supplied, and returns `None` when neither yields a
+    /// manifest -- which means no Rust compiler can answer, so the caller must not present an
+    /// empty result as a verdict.
+    fn resolve_cargo_manifest(
+        workspace_root: &Path,
+        file_path_filter: Option<&str>,
+    ) -> Option<std::path::PathBuf> {
+        if let Some(filter) = file_path_filter {
+            let filter_path = Path::new(filter);
+            // A caller may pass a directory or a file; start the climb accordingly.
+            let start = if filter_path.is_dir() {
+                Some(filter_path.to_path_buf())
+            } else {
+                filter_path.parent().map(|p| p.to_path_buf())
+            };
+            if let Some(mut dir) = start.filter(|d| d.exists()) {
+                loop {
+                    let candidate = dir.join("Cargo.toml");
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                    if !dir.pop() {
+                        break;
+                    }
+                }
+            }
+        }
+        let root_manifest = workspace_root.join("Cargo.toml");
+        root_manifest.is_file().then_some(root_manifest)
+    }
+
     /// Attempt to retrieve compiler diagnostics via CLI JSON mode (e.g. cargo check, tsc, ruff/mypy).
     pub fn compiler_diagnostics(
         workspace_root: &Path,
@@ -241,11 +276,16 @@ impl HeuristicFallback {
     ) -> Vec<LspDiagnosticItem> {
         let mut results = Vec::new();
 
-        // 1. Rust Project: Cargo.toml
-        if workspace_root.join("Cargo.toml").exists() {
+        // 1. Rust project. The manifest is discovered by walking up from the FILE being asked
+        //    about, not assumed to sit at the workspace root. When the two differ -- a file in
+        //    a separate crate, or a workspace whose root manifest is not the file's -- checking
+        //    the workspace root either analyses the wrong crate or, worse, runs nothing at all
+        //    and returns an empty set that reads as "no problems".
+        if let Some(manifest) = Self::resolve_cargo_manifest(workspace_root, file_path_filter) {
+            let crate_dir = manifest.parent().unwrap_or(workspace_root);
             let output = std::process::Command::new("cargo")
                 .args(["check", "--message-format=json", "--quiet"])
-                .current_dir(workspace_root)
+                .current_dir(crate_dir)
                 .output();
 
             if let Ok(out) = output {
@@ -362,5 +402,63 @@ impl HeuristicFallback {
         }
 
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the compiler fallback only ever looked for `Cargo.toml` at the workspace
+    /// root. When the file being asked about belonged to a different crate -- a scratch crate
+    /// reported alongside a larger checkout -- no compiler ran at all and the empty result
+    /// was presented as "no problems", while the file had two real errors.
+    ///
+    /// Verified end-to-end against a live server: with the workspace scoped to a checkout and
+    /// the file in a sibling crate, `lsp_diagnostics` answered `total_count: 0` before this
+    /// change and `total_count: 2` after.
+    #[test]
+    fn resolve_cargo_manifest_prefers_the_files_own_crate() {
+        let base = std::env::temp_dir().join(format!(
+            "transcend_manifest_{}_{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+
+        // A workspace root with its own manifest, and a separate nested crate beside it.
+        std::fs::create_dir_all(base.join("other_crate/src")).unwrap();
+        std::fs::write(base.join("Cargo.toml"), "[workspace]\n").unwrap();
+        std::fs::write(base.join("other_crate/Cargo.toml"), "[package]\n").unwrap();
+        let file = base.join("other_crate/src/lib.rs");
+        std::fs::write(&file, "pub fn x() {}\n").unwrap();
+
+        // The file's own crate wins over the workspace root.
+        let found = HeuristicFallback::resolve_cargo_manifest(&base, Some(&file.to_string_lossy()))
+            .expect("should find the nested crate manifest");
+        assert_eq!(
+            found,
+            base.join("other_crate/Cargo.toml"),
+            "must select the crate containing the file"
+        );
+
+        // A directory filter resolves the same way.
+        let as_dir = HeuristicFallback::resolve_cargo_manifest(
+            &base,
+            Some(&base.join("other_crate").to_string_lossy()),
+        );
+        assert_eq!(as_dir, Some(base.join("other_crate/Cargo.toml")));
+
+        // With no filter, the workspace root manifest is used.
+        let no_filter = HeuristicFallback::resolve_cargo_manifest(&base, None);
+        assert_eq!(no_filter, Some(base.join("Cargo.toml")));
+
+        // A workspace with no Rust manifest at all yields nothing, so the caller knows no
+        // compiler can answer rather than reading an empty set as a clean bill of health.
+        let bare = base.join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        assert_eq!(HeuristicFallback::resolve_cargo_manifest(&bare, None), None);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }
