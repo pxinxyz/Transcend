@@ -11,13 +11,29 @@ Everything below was executed, not estimated, unless a row is explicitly marked
 
 ## 1. Method
 
-**Corpus.** Two real repositories cloned fresh (`--depth 1`) into a scratch directory
-outside the Transcend repository:
+**Corpus.** Two real repositories, cloned fresh into a scratch directory outside the
+Transcend repository. Clone them at these exact commits to reproduce the numbers:
 
-| Repo | Source | Size | Language mix |
+| Repository | Commit | Size | Language mix |
 |:---|:---|:---|:---|
-| ripgrep | `github.com/BurntSushi/ripgrep` | 237 tracked files, 3.33 MB | 110 `.rs`, 23 `.md`, 14 `.toml` |
-| gin | `github.com/gin-gonic/gin` | 99 `.go` files | Go |
+| [ripgrep](https://github.com/BurntSushi/ripgrep) | [`3fce3b5`](https://github.com/BurntSushi/ripgrep/commit/3fce3b5bb0236da2df6d99672afb8a719642eca7) | 237 tracked files, 3.33 MB | 110 `.rs`, 23 `.md`, 14 `.toml` |
+| [gin](https://github.com/gin-gonic/gin) | [`3b08cd7`](https://github.com/gin-gonic/gin/commit/3b08cd7235bd5ad2f055aa9e38135f111f6c5926) | 99 tracked files, 0.9 MB | 99 `.go` |
+
+```bash
+# ripgrep — pinned to the exact commit measured below
+git clone https://github.com/BurntSushi/ripgrep.git
+git -C ripgrep checkout 3fce3b5bb0236da2df6d99672afb8a719642eca7
+
+# gin
+git clone https://github.com/gin-gonic/gin.git
+git -C gin checkout 3b08cd7235bd5ad2f055aa9e38135f111f6c5926
+```
+
+**Provenance of the pins, stated honestly.** `3fce3b5` is the commit the run actually
+measured — it was captured during the run by `exec` running `git rev-parse --short HEAD`
+inside the clone. The gin commit was *not* captured during the run; `3b08cd7` is gin's
+default-branch head resolved afterwards, so its numbers should be treated as indicative
+of that snapshot rather than exactly reproducible.
 
 ripgrep was chosen because it is a real, non-trivial Rust workspace (14 crates) with a
 genuinely large generated file (`crates/core/flags/defs.rs`, 7,220 lines) alongside
@@ -27,13 +43,25 @@ normal source, which separates tools that scale from tools that merely work on t
 heuristic, **not** a tokenizer. Both sides are measured identically, so only *ratios*
 should be read, never absolute token counts. Byte and character counts are exact.
 
-**Isolation.** Mutating tools ran against a disposable `Copy-Item` clone
-(`_transcend_bench/sandbox`), never against a pristine corpus or the Transcend repo.
-The MCP `workspace_root` was repointed with `set_workspace` and restored afterwards.
+**Isolation.** Mutating tools (§3.5) ran against a disposable copy of the clone, never
+against a pristine corpus or the Transcend repository. The MCP `workspace_root` was
+repointed with `set_workspace` and restored afterwards. Read-only tools ran directly
+against the clone.
 
-**Environment.** Windows 11, `transcend.exe` release build 2.0.0 (thin LTO), driven
-through the DeepSeek Harness MCP bridge (`@deepseek-ai/dsh-mcp-client`), alongside
-`pwsh` 7 / `rg` for the native side.
+**Environment.** Windows 10 Pro 22H2 (build 19045), `transcend.exe` release build 2.0.0
+(thin LTO), driven through the DeepSeek Harness MCP bridge
+([`@deepseek-ai/dsh-mcp-client`](https://github.com/deepseek-ai/deepseek-harness), part of
+`@deepseek-ai/dsh` 0.1.5-rc.2) over stdio, alongside `pwsh` 7 and `rg` for the native
+side.
+
+The harness is the *client* here, not part of the measurement: it forwards each
+`tools/call` to Transcend over stdio. Any MCP client would produce the same Transcend
+side; the native side is plain shell.
+
+**Reproducing a row.** Start the Transcend MCP server against a clone
+(`transcend export-schemas --out ./schemas` confirms all 23 tools are live), then run the
+native side with the command named in that row's section below. Costs are character
+counts of the raw response on each side.
 
 ---
 
@@ -75,9 +103,21 @@ faster way to do something I can already do, it is a *different class of informa
 
 ## 3. Measured results
 
+Each section names the exact invocation on both sides. Paths are relative to the pinned
+clone from §1 (`ripgrep/` at `3fce3b5`); the Transcend side is an MCP `tools/call` with
+the arguments shown.
+
 ### 3.1 `search` — 2.33x smaller than `rg` on the same query
 
-Query `git_ignore` over `rg/crates`.
+```bash
+rg --no-heading -n --color never 'git_ignore' ripgrep/crates
+```
+```jsonc
+// tools/call
+{ "name": "search",
+  "arguments": { "pattern": "git_ignore", "path": "ripgrep/crates",
+                 "options": { "file_pattern": "*.rs", "max_matches": 10 } } }
+```
 
 | | Output |
 |:---|:---|
@@ -96,7 +136,17 @@ exact for the radar either way. `rg` still returns every line verbatim in one sh
 
 ### 3.2 `outline` — 4.44x reduction on a 7,220-line file
 
-`crates/core/flags/defs.rs`, 254,514 bytes, 7,220 lines, 1,131 symbols.
+Target: `ripgrep/crates/core/flags/defs.rs`, 254,514 bytes, 7,220 lines, 1,131 symbols.
+
+```bash
+wc -c ripgrep/crates/core/flags/defs.rs   # the "cat" baseline
+```
+```jsonc
+// tools/call
+{ "name": "outline",
+  "arguments": { "path": "ripgrep/crates/core/flags/defs.rs",
+                 "options": { "format": "skeleton", "max_symbols": 40 } } }
+```
 
 | Approach | Cost |
 |:---|:---|
@@ -115,8 +165,19 @@ it answers "what is in this file?" without a full read at all.
 
 ### 3.3 `read_symbol` — precise, but not always smaller than a targeted `rg`
 
-Extracting `WalkBuilder::git_ignore` from `crates/ignore/src/walk.rs` (96,183 bytes,
-~24,046 tok to read whole):
+Target: `WalkBuilder::git_ignore` in `ripgrep/crates/ignore/src/walk.rs` (96,183 bytes,
+~24,046 tok to read whole).
+
+```bash
+rg --no-heading -n -A2 -B2 'pub fn git_ignore' ripgrep/crates/ignore/src/walk.rs
+```
+```jsonc
+// tools/call
+{ "name": "read_symbol",
+  "arguments": { "path": "ripgrep/crates/ignore/src/walk.rs",
+                 "symbol": "WalkBuilder::git_ignore",
+                 "context_before": 2, "context_after": 2 } }
+```
 
 | Approach | Cost | What you get |
 |:---|:---|:---|
@@ -131,7 +192,16 @@ occurrence. Against the *whole-file read* it is a 178x saving.
 
 ### 3.4 `find` — costs more, delivers aggregates instead of a list
 
-`*.rs` under `rg/crates`, top 30 by size:
+```bash
+# native: the closest analogue, recursive discovery + metadata + sort + top 30
+find ripgrep/crates -name '*.rs' -printf '%s\t%p\n' | sort -rn | head -30
+```
+```jsonc
+// tools/call
+{ "name": "find",
+  "arguments": { "pattern": "*.rs", "path": "ripgrep/crates",
+                 "options": { "max_results": 30, "sort_by": "size" } } }
+```
 
 | | Cost | Content |
 |:---|:---|:---|
