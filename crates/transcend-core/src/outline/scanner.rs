@@ -164,6 +164,21 @@ impl SupportedLang {
     }
 }
 
+/// Largest char boundary in `s` that is `<= index` (clamped to `s.len()`).
+///
+/// `String::truncate` panics when its index is not a char boundary, so any byte budget used
+/// as a truncation point must be walked back first.
+fn floor_char_boundary(s: &str, index: usize) -> usize {
+    if index >= s.len() {
+        return s.len();
+    }
+    let mut i = index;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 impl OutlineScanner {
     pub fn scan(req: &OutlineRequest) -> CoreResult<OutlineResponse> {
         let options = req.options.clone().unwrap_or_default();
@@ -440,8 +455,15 @@ impl OutlineScanner {
                 } else {
                     truncated = true;
                     if bytes_remaining > 50 {
-                        skel.truncate(bytes_remaining);
-                        skel.push_str("\n// ... [truncated]");
+                        // Reserve room for the marker, then cut on a char boundary. Both
+                        // halves matter: `String::truncate` panics off a char boundary, and
+                        // counting the marker *after* truncating would overflow the caller's
+                        // byte budget by the marker's length.
+                        const MARKER: &str = "\n// ... [truncated]";
+                        let content_budget = bytes_remaining.saturating_sub(MARKER.len());
+                        let cut = floor_char_boundary(&skel, content_budget);
+                        skel.truncate(cut);
+                        skel.push_str(MARKER);
                         budgeted_outlines.push(FileOutline {
                             file: outline.file,
                             language: outline.language,
@@ -501,5 +523,77 @@ impl OutlineScanner {
         }
 
         (budgeted_outlines, truncated)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use transcend_protocol::{OutlineFormat, OutlineOptions, OutlineRequest};
+
+    /// A multi-byte source whose skeleton is long enough that most byte budgets land in
+    /// the middle of a character. `content` is passed in memory, so no fixture file and no
+    /// assumption about the process cwd is needed.
+    fn non_ascii_skeleton_request(budget: usize) -> OutlineRequest {
+        let jp = "日本語".repeat(120);
+        let src = format!(
+            "/// {jp}\npub fn alpha_one() -> u32 {{ 1 }}\n\
+             /// {jp}\npub fn alpha_two() -> u32 {{ 2 }}\n\
+             /// {jp}\npub fn alpha_three() -> u32 {{ 3 }}\n"
+        );
+        OutlineRequest {
+            path: Some("src/lib.rs".to_string()),
+            content: Some(src),
+            options: Some(OutlineOptions {
+                format: Some(OutlineFormat::Skeleton),
+                max_output_bytes: Some(budget),
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// Regression: `skel.truncate(bytes_remaining)` used a byte budget as a `String` index
+    /// and panicked off a char boundary, so on any file with multi-byte text the skeleton
+    /// truncation path failed for the large majority of budgets. It must never panic and
+    /// must always honour the budget.
+    #[test]
+    fn skeleton_truncation_never_panics_on_multibyte_source() {
+        for budget in 51usize..2800 {
+            let req = non_ascii_skeleton_request(budget);
+            let response = OutlineScanner::scan(&req)
+                .unwrap_or_else(|e| panic!("scan failed at budget {budget}: {e}"));
+
+            for file in &response.files {
+                let skel = file.skeleton.as_deref().unwrap_or("");
+                assert!(
+                    skel.len() <= budget,
+                    "budget {budget} exceeded: skeleton was {} bytes",
+                    skel.len()
+                );
+                assert!(
+                    skel.starts_with("///"),
+                    "budget {budget} produced a skeleton cut inside the leading doc comment"
+                );
+            }
+        }
+    }
+
+    /// The truncation point must be walked back to a real char boundary, never beyond the
+    /// budget, and never panic for indices past the end.
+    #[test]
+    fn floor_char_boundary_walks_back_and_clamps() {
+        let s = "ab日本語"; // 2 + 3*3 = 11 bytes
+        assert_eq!(floor_char_boundary(s, 0), 0);
+        assert_eq!(floor_char_boundary(s, 2), 2, "ascii boundary is exact");
+        assert_eq!(floor_char_boundary(s, 3), 2, "inside 日 -> back to 2");
+        assert_eq!(floor_char_boundary(s, 4), 2, "inside 日 -> back to 2");
+        assert_eq!(floor_char_boundary(s, 5), 5, "start of 本 is a boundary");
+        assert_eq!(floor_char_boundary(s, 11), 11);
+        assert_eq!(floor_char_boundary(s, 999), s.len(), "past end clamps");
+        for i in 0..=s.len() {
+            let cut = floor_char_boundary(s, i);
+            assert!(cut <= i, "cut {cut} exceeded index {i}");
+            assert!(s.is_char_boundary(cut), "cut {cut} is not a boundary");
+        }
     }
 }
