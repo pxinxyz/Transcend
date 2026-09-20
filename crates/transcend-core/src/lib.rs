@@ -971,6 +971,108 @@ mod tests {
         assert!(res.files[0].matches[0].line_text.contains("[truncated"));
     }
 
+    /// Regression: when `path` names a single file, the search root *is* that file, so
+    /// `strip_prefix` produced an empty string and every cluster reported `file: ""`.
+    #[test]
+    fn test_search_single_file_reports_its_path() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let hits = sandbox.dir.join("single_file_hits.txt");
+        fs::write(&hits, "target_hit\ntarget_hit\ntarget_hit\n").unwrap();
+
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "target_hit".to_string(),
+                path: Some(hits.to_string_lossy().to_string()),
+                options: None,
+            })
+            .unwrap();
+
+        assert_eq!(res.total_matches, 3);
+        assert_eq!(res.total_files, 1);
+        let cluster = res.files.first().expect("one cluster expected");
+        assert!(
+            !cluster.file.is_empty(),
+            "cluster must name the file it describes, got an empty string"
+        );
+        assert!(
+            cluster.file.ends_with("single_file_hits.txt"),
+            "cluster file should identify the searched file, got {:?}",
+            cluster.file
+        );
+    }
+
+    /// Regression: `truncated` is documented as "matches were capped due to the match
+    /// budget", but it only compared the global total against `max_matches`, so a
+    /// `max_per_file` cap dropped line text while the top-level flag still said false.
+    #[test]
+    fn test_search_truncated_flag_reflects_max_per_file_cap() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        let many = sandbox.dir.join("many_hits.txt");
+        fs::write(
+            &many,
+            "cap_marker\ncap_marker\ncap_marker\ncap_marker\ncap_marker\n",
+        )
+        .unwrap();
+
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "cap_marker".to_string(),
+                path: Some(many.to_string_lossy().to_string()),
+                options: Some(SearchOptions {
+                    // Global budget is generous; only the per-file cap bites.
+                    max_matches: Some(50),
+                    max_per_file: Some(2),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        let cluster = res.files.first().expect("one cluster expected");
+        assert_eq!(cluster.match_count, 5, "all 5 matches were counted");
+        assert_eq!(cluster.matches.len(), 2, "only 2 returned text");
+        assert!(
+            cluster.matches_truncated,
+            "the cluster itself must report the cap"
+        );
+        assert!(
+            res.truncated,
+            "top-level truncated must agree with the cluster: the budget dropped matches"
+        );
+    }
+
+    /// The global budget must still set `truncated` on its own.
+    #[test]
+    fn test_search_truncated_flag_reflects_global_budget() {
+        let sandbox = TestSandbox::create();
+        let engine = NativeEngine::new();
+
+        for i in 0..4 {
+            fs::write(
+                sandbox.dir.join(format!("global_{i}.txt")),
+                "global_marker\nglobal_marker\n",
+            )
+            .unwrap();
+        }
+
+        let res = engine
+            .search(&SearchRequest {
+                pattern: "global_marker".to_string(),
+                path: Some(sandbox.path_str()),
+                options: Some(SearchOptions {
+                    max_matches: Some(3),
+                    ..Default::default()
+                }),
+            })
+            .unwrap();
+
+        assert!(res.total_matches > 3, "budget should have dropped matches");
+        assert!(res.truncated);
+    }
+
     #[test]
     fn test_search_directory_clusters() {
         let sandbox = TestSandbox::create();

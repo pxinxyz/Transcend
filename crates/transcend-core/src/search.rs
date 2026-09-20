@@ -143,6 +143,14 @@ impl SearchScanner {
                     .unwrap_or(path)
                     .to_string_lossy()
                     .replace('\\', "/");
+                // When `path` points at a single file, the search root *is* that file, so
+                // stripping the prefix yields "". Fall back to the full path so the cluster
+                // still names the file it describes.
+                let relative_path = if relative_path.is_empty() {
+                    path.to_string_lossy().replace('\\', "/")
+                } else {
+                    relative_path
+                };
 
                 let mut local_matches: Vec<SearchMatch> = Vec::new();
                 let mut file_match_count: usize = 0;
@@ -250,7 +258,11 @@ impl SearchScanner {
         });
 
         let total_files = files.len();
-        let truncated = total > max_matches;
+        // `truncated` is documented as "individual line matches were capped due to the match
+        // budget". The global count only reflects `max_matches`, so a `max_per_file` cap --
+        // which also drops line text -- was invisible here even though each affected cluster
+        // set `matches_truncated`. Capture the per-cluster truth before pruning reorders it.
+        let truncated = total > max_matches || files.iter().any(|f| f.matches_truncated);
 
         // Prune excess empty file clusters when max_empty_clusters is specified
         if let Some(max_empty_clusters) = opts.max_empty_clusters {
