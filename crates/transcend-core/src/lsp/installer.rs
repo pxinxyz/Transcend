@@ -314,8 +314,23 @@ pub struct LspInstaller;
 
 impl LspInstaller {
     /// Check current installation status and recipes for requested or all language servers.
-    pub async fn check_status(req: &LspStatusRequest) -> LspStatusResponse {
+    pub async fn check_status(req: &LspStatusRequest) -> Result<LspStatusResponse, CoreError> {
         let lang_filter = req.language.as_deref().map(|s| s.to_lowercase());
+
+        // Reject a filter that names no known language instead of returning an empty list.
+        // Otherwise a typo or an unlisted language ("javascript") is indistinguishable from
+        // "this host has no language servers", which is the exact question the tool exists to
+        // answer. lsp_install already errors for the same input, so this makes the siblings
+        // agree.
+        if let Some(ref filter) = lang_filter {
+            LspRegistry::profile_for_language(filter).ok_or_else(|| {
+                CoreError::InvalidInput(format!(
+                    "Unsupported language '{filter}'. Supported: rust, go, typescript, python, \
+                     c, cpp, csharp, java, kotlin, php, ruby, swift, bash, sql, dart, zig, lua, \
+                     markdown"
+                ))
+            })?;
+        }
 
         let mut servers = Vec::new();
         let mut total_installed = 0;
@@ -366,11 +381,11 @@ impl LspInstaller {
         }
 
         let total_servers = servers.len();
-        LspStatusResponse {
+        Ok(LspStatusResponse {
             servers,
             total_servers,
             total_installed,
-        }
+        })
     }
 
     /// Automatically install a language server using host package managers.
@@ -553,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn test_check_status_all() {
         let req = LspStatusRequest::default();
-        let res = LspInstaller::check_status(&req).await;
+        let res = LspInstaller::check_status(&req).await.expect("status");
         assert_eq!(res.total_servers, 18);
         assert_eq!(res.servers.len(), 18);
     }
@@ -563,12 +578,45 @@ mod tests {
         let req = LspStatusRequest {
             language: Some("rust".to_string()),
         };
-        let res = LspInstaller::check_status(&req).await;
+        let res = LspInstaller::check_status(&req).await.expect("status");
         assert_eq!(res.total_servers, 1);
         assert_eq!(res.servers.len(), 1);
         assert_eq!(res.servers[0].language, "rust");
         assert_eq!(res.servers[0].primary_binary, "rust-analyzer");
         assert!(!res.servers[0].install_methods.is_empty());
+    }
+
+    /// Regression: an unknown language returned an empty list, which is indistinguishable
+    /// from "this host has no language servers". lsp_install already rejected the same input,
+    /// so the siblings disagreed on identical arguments.
+    #[tokio::test]
+    async fn test_check_status_unknown_language_is_an_error() {
+        let req = LspStatusRequest {
+            language: Some("javascript".to_string()),
+        };
+        let res = LspInstaller::check_status(&req).await;
+        assert!(
+            res.is_err(),
+            "an unknown language must not look like an empty host: {res:?}"
+        );
+        let msg = res.unwrap_err().to_string();
+        assert!(
+            msg.contains("javascript"),
+            "the error should name the offending language, got: {msg}"
+        );
+        assert!(
+            msg.contains("rust"),
+            "the error should list supported languages so the caller can correct it, got: {msg}"
+        );
+
+        // Case-insensitive, like the install path.
+        let upper = LspStatusRequest {
+            language: Some("RUST".to_string()),
+        };
+        assert!(
+            LspInstaller::check_status(&upper).await.is_ok(),
+            "language matching must stay case-insensitive"
+        );
     }
 
     #[tokio::test]

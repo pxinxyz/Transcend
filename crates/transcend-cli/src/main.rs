@@ -118,7 +118,7 @@ async fn cmd_lsp_status(language: Option<&str>) -> Result<()> {
     let req = transcend_protocol::LspStatusRequest {
         language: language.map(str::to_string),
     };
-    let res = transcend_core::lsp::installer::LspInstaller::check_status(&req).await;
+    let res = transcend_core::lsp::installer::LspInstaller::check_status(&req).await?;
 
     println!("\nTranscend Language Server Protocol (LSP) Status");
     println!("===============================================");

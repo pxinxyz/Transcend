@@ -253,7 +253,7 @@ impl LspEngine {
 
     /// Check current installation status and recipes for language servers.
     pub async fn status(&self, req: &LspStatusRequest) -> Result<LspStatusResponse, CoreError> {
-        Ok(installer::LspInstaller::check_status(req).await)
+        installer::LspInstaller::check_status(req).await
     }
 
     /// Automatically install a language server using host package managers.
