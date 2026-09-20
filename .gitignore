@@ -10,3 +10,6 @@
 # Cargo build artifacts
 /target/
 
+
+# Python bytecode from the benchmark harnesses
+__pycache__/
