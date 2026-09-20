@@ -42,8 +42,28 @@ while fixing items 3 and 1.
   Both change a contract.
 - **15** Shared workspace root is process-global; read-only requests expose no
   `workspace_root` to pin, so concurrent calls can resolve against different roots. The
-  audit reproduced this with a `set_workspace` racing a no-path `find_symbol`. Most
-  invasive of the set and the least likely to be hit by a single-agent session.
+  audit reproduced this with `set_workspace` racing a no-path `find_symbol`. Most invasive
+  of the set and the least likely to be hit by a single-agent session.
+
+  A related layering hazard was found while investigating this and is now documented and
+  tested (`b974f33`): `FileOps::ensure_within` returns `Ok(())` for a `None` boundary instead
+  of failing closed. Enforcement actually happens one layer up, where `NativeEngine`
+  overwrites `workspace_root` on every mutating dispatch with the boundary it resolved from
+  its own active root. That layering is correct today and a test now pins it, but
+  `FileOps::write_file` performs no boundary check at all when called directly with
+  `workspace_root: None`, and nothing previously said so.
+
+## Decisions outstanding
+
+Two items are parked rather than fixed because they change a public contract:
+
+- **13** `ast_valid` is vacuous without a registered grammar. Options and a recommendation
+  are written up in `IDEAS/ast-valid-contract.md` (gitignored, local scratch). The doc and a
+  pinning test landed in `1161274`; making the field *accurate* needs the decision.
+- **15** Adding a per-request root override to read-only tools would let a caller pin the
+  root and close the ordering dependence without removing `set_workspace`. It is additive
+  but touches six request structs across 23 tools, so the schema cost and the naming need
+  agreeing first.
 
 ### Deliberately not fixed
 
