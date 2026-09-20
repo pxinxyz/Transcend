@@ -49,7 +49,7 @@ All commits in this repository must strictly adhere to the [Conventional Commits
 ## 5. Work Guidance
 - Use `cargo test --workspace` and `cargo check --workspace` before every commit.
 - Use release mode (`cargo test --release`) when verifying search and traversal throughput.
-- Clippy and rustfmt are gates, not suggestions: CI runs `cargo clippy --workspace --all-targets` with `RUSTFLAGS=-Dwarnings` and `cargo fmt --all --check`.
+- Clippy and rustfmt are gates, not suggestions: run `cargo clippy --workspace --all-targets` (treat warnings as errors) and `cargo fmt --all --check` before committing. They are not enforced by CI in this repository, so they must be run deliberately.
 
 ## 6. Verification
 ```sh
@@ -61,9 +61,10 @@ cargo fmt --all --check
 ```
 
 ## 7. Cross-Platform Contract
-- CI (`.github/workflows/ci.yml`) runs the full suite on **Linux, macOS, and Windows**. A change that only compiles or passes on one OS is not complete.
+- **There is no hosted CI.** Verification is manual, on the platform you have. Do not claim a change works on an OS you have not run it on.
+- Windows 10 Pro 22H2 (build 19045) is the verified platform. The Unix branches are implemented and unit-tested where testable, but process groups, the `pgrep` descendant sweep and `openpty` have not been exercised on Linux or macOS.
 - Platform-specific code belongs behind `#[cfg(...)]` in as few modules as possible: `transcend-core/src/terminal/platform.rs` (shell resolution, process-tree ownership) and `transcend-core/src/lsp/installer.rs` (package-manager recipes).
-- `.gitattributes` pins `eol=lf` repository-wide. Do not commit CRLF; it makes `cargo fmt --check` pass locally and fail in CI.
+- `.gitattributes` pins `eol=lf` repository-wide. Do not commit CRLF; it makes `cargo fmt --check` disagree between machines and every diff noisy.
 - No test may depend on the process working directory, write outside the build directory, or hardcode a machine-specific absolute path.
 
 ## 8. Child DOX Index

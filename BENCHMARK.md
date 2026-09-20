@@ -277,7 +277,7 @@ Stated plainly rather than glossed:
 | `git_status` | Exercised on both repos (`branch: main/master`, `is_clean: true`, ahead/behind). No native timing comparison |
 | `lsp_install` | Exercised (correctly short-circuited: `'marksman' is already installed`) but the actual install path was **not** run |
 | `lsp_diagnostics` | Exercised — returned 0 diagnostics on a clean file. The LSP-backed path was not differentiated from the `cargo check` fallback |
-| Cross-platform | Everything here is **Windows only**. The Linux/macOS paths (process groups, `pgrep`, openpty) remain unverified — CI has never run |
+| Cross-platform | Everything here is **Windows 10 Pro 22H2 (build 19045)** only. The Linux/macOS paths (process groups, `pgrep`, openpty) remain unverified. |
 | Throughput | No wall-clock benchmark beyond incidental `elapsed_ms` (e.g. `exec` 117 ms). Search/outline latency was not profiled |
 | Token accuracy | `chars/4` is an approximation. No real tokenizer was used |
 
@@ -301,9 +301,12 @@ correct and the **0 result was correct behaviour**. No defect exists; the initia
 suspicion was my own error and is recorded here so the negative result is not mistaken
 for an open issue.
 
-Also unresolved: GitHub Actions for this repository is **blocked at the account level**
-("account is locked due to a billing issue"), so the Linux/macOS test matrix added in
-`5636cb4` has never executed a single step.
+Also resolved: the GitHub Actions workflow added in `5636cb4` has been **removed**
+(`cf4332f`). It was never requested, it consumed the account's Actions quota, and every
+run failed before its first step with "the job was not started because your account is
+locked due to a billing issue". Nothing is lost: `actionlint` confirmed the workflow
+itself was valid, and the verification commands it encoded remain in `README.md` and
+`AGENTS.md`. There is now no hosted CI, so cross-platform verification is manual.
 
 ---
 

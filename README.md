@@ -445,7 +445,7 @@ Transcend/
 │   │   └── terminal/            # Hybrid PTY/Pipe execution, ring buffer, and Job Object process trees
 │   ├── transcend-server/     # High-throughput asynchronous MCP stdio server daemon (23 tools)
 │   └── transcend-cli/        # Binary entry point and CLI runner
-├── .github/workflows/ci.yml  # Linux + macOS + Windows test matrix
+├── .gitattributes            # LF line-ending policy (see Platform Support)
 ├── banner.png                # Transcend visual identity
 └── Cargo.toml                # Workspace definition
 ```
@@ -454,19 +454,26 @@ Transcend/
 
 ## Platform Support
 
-Transcend is developed and tested on Linux, macOS, and Windows. CI runs the full test
-suite on all three, because the execution subsystem is genuinely OS-specific:
+The execution subsystem is genuinely OS-specific, and the code that differs is isolated
+behind `#[cfg(...)]` in `transcend-core/src/terminal/platform.rs` (shell resolution,
+process-tree ownership) and `lsp/installer.rs` (package-manager recipes):
 
 | Concern | Windows | Linux / macOS |
 |:---|:---|:---|
 | Interactive terminals | ConPTY via `portable-pty` | `openpty` via `portable-pty` (`setsid` session leader) |
 | Process-tree ownership | Job Object with `KILL_ON_JOB_CLOSE`, `taskkill /T /F` fallback | Own process group (`setpgid`) signalled, then a descendant sweep (`/proc/<pid>/task/*/children` on Linux, `pgrep -P` elsewhere) |
 | Default shell | PowerShell (`pwsh` if present, else `powershell.exe`), `cmd /C` when `&&`/`\|\|` chaining is detected | `$SHELL`, falling back to `/bin/bash`, invoked with `-c` |
-| Line endings | `* text=auto eol=lf` in `.gitattributes` (see below) | LF |
+| PTY line input | `\n` translated to `\r` (console hosts submit only on carriage return) | `\n` passed through |
 
-`.gitattributes` pins LF repository-wide. Without it a Windows checkout stores CRLF in
-the working tree while the index holds LF, so `cargo fmt --check` passes locally and
-fails on Linux CI (or the reverse) and every diff is noisy.
+**Windows is the platform this project is currently verified on** (Windows 10 Pro 22H2,
+build 19045). The Unix branches are implemented and unit-tested where testable, but their
+integration paths — process groups, the `pgrep` descendant sweep, `openpty` behaviour —
+have not been exercised on a Linux or macOS host. Treat them as unproven until someone
+runs the suite there.
+
+`.gitattributes` pins LF repository-wide. Without it a Windows checkout stores CRLF in the
+working tree while the index holds LF, so `cargo fmt --check` disagrees between machines
+and every diff is noisy.
 
 ---
 
