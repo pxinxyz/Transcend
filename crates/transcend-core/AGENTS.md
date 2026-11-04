@@ -7,7 +7,7 @@ In-process implementation of high-performance codebase search, filesystem discov
 Owns execution algorithms, native traversal, ripgrep/grep-searcher integrations, and Tree-sitter AST parsing.
 
 ## 3. Local Contracts
-- Pure Rust in-process implementation; no shelling out to external Node/CLI subprocesses.
+- Keep search, traversal, and syntax analysis in process. Use the existing Git, compiler, language server, and terminal subprocess integrations.
 - Search engine (V3): in-process `grep-searcher`, `grep-regex`, and multi-threaded `ignore::WalkParallel`.
 - Thread-local `Searcher` instances per worker with lockless atomic match accounting (`AtomicUsize`).
 - Adaptive cross-file diversity sampling: `max_per_file` prevents monster files from starving search results.

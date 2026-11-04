@@ -1,76 +1,82 @@
-# AGENTS.md — Transcend
+# Transcend agent instructions
 
-## 1. Purpose
-High-performance, agent-native computational primitives and Model Context Protocol (MCP) server written in pure Rust. Replaces crude CLI text scraping with typed, token-compact structured data.
+## Scope
 
-## 2. Ownership
-Owns the Transcend Cargo workspace and its four constituent crates:
-- `crates/transcend-protocol`
-- `crates/transcend-core`
-- `crates/transcend-server`
-- `crates/transcend-cli`
+Transcend is a Rust MCP server for code analysis, file operations, language servers, and terminal sessions.
+The workspace uses Rust 2024.
+Read [README.md](README.md) before changing public behavior.
+Read the relevant crate's `AGENTS.md` before editing that crate.
 
-## 3. Local Contracts
-- Governed by root `AGENTS.md` directives.
-- **Conventional Commits**: All git commit messages MUST strictly adhere to the [Conventional Commits v1.0.0](conventionalcommits.md) specification (see §4).
-- `LEGACY/` is gitignored and reserved for untracked legacy reference materials (§14.5 containment).
-- `rust-sdk/` is gitignored and reserved for local SDK reference (official `modelcontextprotocol/rust-sdk` clone).
-- `IDEAS/` is gitignored and reserved for parked design notes and speculative work. Nothing in it is committed, so treat it as local scratch: it is not a contract, not reviewed, and may contradict the code.
-- `benches/` is gitignored and holds local verification work: the audit and findings documents, and the harnesses that produced them (contract probe, efficiency comparison, schema token measurement). `benchmarks/` is reserved for **published model statements only** — a benchmark folder is a public record of how models performed, whereas an audit is a working note about this repository's own state, so the two do not belong together. The `cargo check` gate is unaffected, because the root manifest is a virtual workspace with no `[package]`, so a `benches/` directory is not treated as a target directory.
-- In-process native Rust implementations; zero external script/CLI binary runtime dependencies.
+## Repository map
 
-## 4. Conventional Commits Specification
-All commits in this repository must strictly adhere to the [Conventional Commits 1.0.0](conventionalcommits.md) standard located at [`conventionalcommits.md`](file:///c:/Projects/General%20Workspace/Idea/Transcend/conventionalcommits.md).
+| Crate | Responsibility |
+| --- | --- |
+| [transcend-protocol](crates/transcend-protocol/AGENTS.md) | Requests, responses, validation types, and schemas. |
+| [transcend-core](crates/transcend-core/AGENTS.md) | Search, syntax analysis, file changes, language servers, terminals, and Git. |
+| [transcend-server](crates/transcend-server/AGENTS.md) | MCP routing, schema normalization, and transport integration. |
+| [transcend-cli](crates/transcend-cli/AGENTS.md) | Executable startup, logging, and CLI subcommands. |
 
-- **Format**:
-  ```text
-  <type>[optional scope]: <description>
+## Implementation rules
 
-  [optional body]
+- Keep search, traversal, and syntax analysis in Rust.
+- Use the existing subprocess integrations for Git, compilers, language servers, and terminal commands.
+- Keep protocol definitions in `transcend-protocol` and algorithms in `transcend-core`.
+- Route synchronous engine work through the server's blocking offload mechanism.
+- Keep default server-mode standard output reserved for MCP traffic. Send diagnostics to standard error.
+- Preserve documented CLI subcommand output.
+- Derive served and exported schemas from the live tool router.
+- Preserve schema normalization, required properties, and nested schema compatibility.
+- Preserve independent `include_hidden` and `respect_gitignore` options.
+- Enforce workspace boundaries before every filesystem mutation.
+- Preserve canonical path checks, symlink handling, and checks for targets that do not exist yet.
+- Keep batch patches cumulative and validate them before writing.
+- Preserve terminal process ownership, cancellation, output cursors, and interactive input behavior.
+- Keep Windows and Unix behavior behind the existing platform boundaries.
 
-  [optional footer(s)]
-  ```
-- **Allowed Types**:
-  - `feat`: adds a new user/agent-facing feature (correlates with SemVer `MINOR`).
-  - `fix`: patches a bug in the codebase (correlates with SemVer `PATCH`).
-  - `build`: changes that affect the build system or external dependencies (e.g. Cargo, workspace manifests).
-  - `chore`: maintenance, tooling setup, routine housekeeping with no production code change.
-  - `docs`: documentation changes only (AGENTS.md, markdown files).
-  - `refactor`: code change that neither fixes a bug nor adds a feature.
-  - `perf`: code change that improves performance.
-  - `test`: adding missing tests or correcting existing tests.
-  - `ci`: changes to CI configuration files and scripts.
-- **Breaking Changes**:
-  - Indicated with `!` before the colon (e.g. `feat(protocol)!: ...`) or a footer `BREAKING CHANGE: <description>` (correlates with SemVer `MAJOR`).
-- **Description**:
-  - Short summary in imperative, present tense ("add", not "added" or "adds").
-  - Lowercase, no ending period.
-- **Body & Footers**:
-  - For substantive changes, include a multi-line body separated by a blank line explaining motivation and architecture.
+## Validation
 
-## 5. Work Guidance
-- Use `cargo test --workspace` and `cargo check --workspace` before every commit.
-- Use release mode (`cargo test --release`) when verifying search and traversal throughput.
-- Clippy and rustfmt are gates, not suggestions: run `cargo clippy --workspace --all-targets` (treat warnings as errors) and `cargo fmt --all --check` before committing. They are not enforced by CI in this repository, so they must be run deliberately.
+Run these checks from the repository root before committing:
 
-## 6. Verification
 ```sh
-cargo check --workspace --all-targets
-cargo test --workspace
-cargo test --workspace --release
-cargo clippy --workspace --all-targets
 cargo fmt --all --check
+cargo check --locked --workspace --all-targets
+cargo test --locked --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
 ```
 
-## 7. Cross-Platform Contract
-- **There is no hosted CI.** Verification is manual, on the platform you have. Do not claim a change works on an OS you have not run it on.
-- Windows 10 Pro 22H2 (build 19045) is the verified platform. The Unix branches are implemented and unit-tested where testable, but process groups, the `pgrep` descendant sweep and `openpty` have not been exercised on Linux or macOS.
-- Platform-specific code belongs behind `#[cfg(...)]` in as few modules as possible: `transcend-core/src/terminal/platform.rs` (shell resolution, process-tree ownership) and `transcend-core/src/lsp/installer.rs` (package-manager recipes).
-- `.gitattributes` pins `eol=lf` repository-wide. Do not commit CRLF; it makes `cargo fmt --check` disagree between machines and every diff noisy.
-- No test may depend on the process working directory, write outside the build directory, or hardcode a machine-specific absolute path.
+For search or traversal performance changes:
 
-## 8. Child DOX Index
-- `crates/transcend-protocol/AGENTS.md` — scope: strongly-typed request/response data contracts and JSON schemas
-- `crates/transcend-core/AGENTS.md` — scope: in-process search, traversal, and AST computation engines
-- `crates/transcend-server/AGENTS.md` — scope: Model Context Protocol (rmcp) tool router and server implementation
-- `crates/transcend-cli/AGENTS.md` — scope: CLI binary entrypoint and stdio transport execution
+```sh
+cargo test --locked --workspace --release
+```
+
+For schema or transport changes, run the server tests and inspect exported schemas:
+
+```sh
+cargo test --locked -p transcend-server
+cargo run --locked -p transcend-cli -- export-schemas --out target/schemas
+```
+
+Extend the existing stdio round-trip test when changing wire behavior.
+Test workspace escapes and symlinks when changing filesystem mutations.
+Test interactive sessions and process cleanup when changing terminal behavior.
+Keep test artifacts under the build directory.
+Tests must not depend on their starting directory or machine-specific paths.
+
+## Repository hygiene
+
+- Preserve LF line endings.
+- Keep `LEGACY`, `rust-sdk`, `IDEAS`, `benches`, and `target` untracked.
+- Treat local design notes as proposals, not implementation contracts.
+- Reserve [benchmarks](benchmarks) for published model comparisons.
+- Keep repository audits and verification harnesses in the ignored `benches` directory.
+- Use [Conventional Commits](conventionalcommits.md).
+- Push or publish only when the task authorizes it.
+
+## Reporting
+
+The repository has no hosted CI.
+Record the platform, commands, and results used for verification.
+Windows 10 Pro 22H2 is the recorded integration baseline.
+Do not describe Linux or macOS integration as verified without running it there.
+Keep benchmark claims tied to their recorded workload and build profile.
